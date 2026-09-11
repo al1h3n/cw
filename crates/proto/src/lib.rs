@@ -16,5 +16,6 @@ mod wire;
 
 pub use device_id::{DeviceId, DeviceIdParseError};
 pub use wire::{
-    Capabilities, Control, DecodeError, ProtocolError, Role, decode, encode, version_compatible,
+    Capabilities, Control, DecodeError, Hello, ProtocolError, Role, decode, encode,
+    version_compatible,
 };
