@@ -11,6 +11,7 @@ publish.workspace = true
 iroh = "1.2"
 platform = { path = "../platform" }
 proto = { path = "../proto" }
+rand = "0.10" # pairing-code generation; already in the tree via iroh
 thiserror = "2"
 
 [lints]

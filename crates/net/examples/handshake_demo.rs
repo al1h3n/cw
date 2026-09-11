@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use net::Identity;
 use proto::{Capabilities, Control, DeviceId, Hello, PRODUCT_NAME, PROTOCOL_VERSION, Role};
 
-fn main() -> Result<(), net::IdentityError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== {PRODUCT_NAME} — handshake demo (protocol v{PROTOCOL_VERSION}) ===\n");
 
     // 1. Device identity: created on first run, then reused. Here we use a throwaway temp file.
@@ -117,9 +117,53 @@ fn main() -> Result<(), net::IdentityError> {
         }
     }
 
+    // 7. Pairing: the Console shows a code; a device offers codes; the Console pins the good one.
+    use net::{PairingCode, PairingSession, TrustStore};
+    let now_ms = 1_000_000; // the transport supplies real time; fixed here for a repeatable demo
+    let shown = PairingCode::from_u32(482_915).ok_or("482915 must be a valid 6-digit code")?;
+    let mut session = PairingSession::new(shown, now_ms);
+    let mut trust = TrustStore::new();
+    println!("\n[7] Pairing (Console shows {shown}, code lives 5 min, 5 tries)");
+
+    let wrong: PairingCode = "000000".parse()?;
+    println!(
+        "    wrong 000000    : {}",
+        describe(session.verify(wrong, now_ms))
+    );
+    println!("    attempts left   : {}", session.attempts_left());
+
+    match session.verify(shown, now_ms) {
+        Ok(()) => {
+            trust.pin(agent.public_key().as_bytes());
+            println!("    correct {shown} : accepted -> pinned this device's key");
+        }
+        Err(err) => println!("    correct {shown} : unexpectedly {err}"),
+    }
+    println!(
+        "    device trusted  : {}",
+        trust.is_trusted(agent.public_key().as_bytes())
+    );
+    println!(
+        "    replay {shown}  : {}",
+        describe(session.verify(shown, now_ms))
+    );
+    let expired = now_ms + net::pairing::CODE_TTL_MS;
+    let mut fresh = PairingSession::new(shown, now_ms);
+    println!(
+        "    after 5 min     : {}",
+        describe(fresh.verify(shown, expired))
+    );
+
     let _ = std::fs::remove_file(&key_path);
     println!("\n=== done ===");
     Ok(())
+}
+
+fn describe(result: Result<(), proto::PairRejection>) -> String {
+    match result {
+        Ok(()) => "accepted".to_string(),
+        Err(reason) => format!("rejected: {reason}"),
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

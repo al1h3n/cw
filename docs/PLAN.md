@@ -104,10 +104,24 @@
   (`cargo +nightly fuzz run decode_control`, wired for Linux CI). Version mismatch → typed
   `UnsupportedVersion{ours,theirs}`. `Capabilities` is a forward-compatible bit set. No unbounded
   collections in any message. 21 tests pass.*
-- [ ] **1.3 Pairing.** The Console shows a 6-digit code + QR. The Agent enters it (or the Console types
-  the Agent's Device ID). Keys get pinned on both sides, and LAN discovery works.
+- [~] **1.3 Pairing.** The Console shows a 6-digit code + QR. The Agent enters it (or the Console types
+  the Agent's Device ID). Keys get pinned on both sides, and LAN discovery works. → `proto::pairing`,
+  `net::pairing` (`PairingCode`, `PairingSession`, `TrustStore`).
   **Done when:** tests cover: wrong code rejected, code expires after 5 min, replay rejected, pairing
   survives an IP change.
+  *Protocol logic done 2026-09-11 (11 tests): wrong code → `WrongCode` + attempt consumed; expiry at
+  exactly 5 min (valid 1 ms before); replay → `AlreadyUsed`; lock after 5 tries → `TooManyAttempts`;
+  constant-time code compare; `TrustStore` pins by public key with no address, so it is inherently
+  IP-change-proof (iroh reconnects by key). Security note in `proto::pairing`: no PAKE needed because
+  the iroh transport already gives an encrypted, key-authenticated channel — the code is an
+  authorization token (expiring, single-use, rate-limited), not an interception defence.*
+  **Still to wire (needs the endpoint, below): run this over a real iroh connection + mDNS LAN
+  discovery, and the two-PC "survives IP change" run.**
+- [ ] **1.3b Endpoint + discovery (transport wiring for 1.3).** Build the `net` iroh endpoint
+  (secret key from `Identity`, mDNS address lookup), carry `PairMessage` on a pairing stream, and run
+  pairing Console↔Agent for real.
+  **Done when:** two processes on one LAN pair by code with the internet unplugged; a paired peer is
+  re-recognised after its address changes.
 - [ ] **1.4 Agent service install/uninstall** (the helper from 0.7, made production-grade): auto-start,
   restart on crash.
   **Done when:** VM test — reboot → Agent back within 30 s of login; killing the helper → it respawns.

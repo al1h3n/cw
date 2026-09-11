@@ -12,9 +12,11 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 pub const PROTOCOL_VERSION: u32 = 1;
 
 mod device_id;
+mod pairing;
 mod wire;
 
 pub use device_id::{DeviceId, DeviceIdParseError};
+pub use pairing::{PairMessage, PairRejection};
 pub use wire::{
     Capabilities, Control, DecodeError, Hello, ProtocolError, Role, decode, encode,
     version_compatible,
