@@ -1,0 +1,23 @@
+# Standalone (empty [workspace] detaches it from the main workspace: cargo-fuzz needs nightly).
+# Run on Linux CI:  cargo +nightly fuzz run decode_control -- -max_total_time=600
+[package]
+name = "proto-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+proto = { path = "../crates/proto" }
+
+[[bin]]
+name = "decode_control"
+path = "fuzz_targets/decode_control.rs"
+test = false
+doc = false
+bench = false

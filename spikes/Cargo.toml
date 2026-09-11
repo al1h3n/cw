@@ -1,0 +1,8 @@
+# Throwaway Phase-0 experiments. Separate workspace: not built by CI, never imported by product code.
+[workspace]
+resolver = "3"
+members = ["capture-thumbs", "h264-loop", "iroh-echo", "key-hook", "lock-desktop", "media-iroh"]
+
+[workspace.package]
+edition = "2024"
+publish = false

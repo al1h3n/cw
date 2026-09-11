@@ -1,0 +1,20 @@
+[package]
+name = "net"
+description = "Device identity, iroh endpoint, pairing and stream transport."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+iroh = "1.2"
+platform = { path = "../platform" }
+proto = { path = "../proto" }
+thiserror = "2"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"

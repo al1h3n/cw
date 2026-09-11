@@ -1,0 +1,8 @@
+# Normalize line endings: LF in the repo, checked out native. Keeps a cross-platform team consistent.
+* text=auto eol=lf
+
+# Explicitly binary (never touched by EOL conversion).
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary

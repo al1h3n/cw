@@ -1,0 +1,15 @@
+# Rust build output
+/target/
+/spikes/target/
+/spikes/out/
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/Cargo.lock
+
+# Per-user Claude Code settings (shared settings live in .claude/settings.json)
+.claude/settings.local.json
+
+# Device key files, if a test or run ever writes one into the tree
+*.key
+

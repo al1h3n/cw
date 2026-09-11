@@ -1,0 +1,16 @@
+[package]
+name = "proto"
+description = "Wire protocol types shared by Console, Agent and Hub. No I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[lints]
+workspace = true
