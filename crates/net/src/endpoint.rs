@@ -21,6 +21,9 @@ use crate::{Identity, PairingCode, PairingSession, TrustStore};
 /// ALPN for the pairing protocol. Bumping the trailing number is a breaking change.
 pub const PAIRING_ALPN: &[u8] = b"cowatcher/pair/1";
 
+/// ALPN for the ongoing control session (used after pairing).
+pub const CONTROL_ALPN: &[u8] = b"cowatcher/control/1";
+
 /// Largest control/pairing message we will read from a peer.
 pub const MAX_MESSAGE_BYTES: u32 = 64 * 1024;
 
@@ -60,6 +63,12 @@ pub enum EndpointError {
     /// The Console refused the pairing (also returned to the operator so they see the reason).
     #[error("pairing refused: {0}")]
     Rejected(#[from] PairRejection),
+    /// A control-session request was refused (e.g. an untrusted or version-mismatched peer).
+    #[error("control refused: {0}")]
+    ControlRefused(#[from] proto::ProtocolError),
+    /// Capturing a thumbnail failed on the Agent.
+    #[error("capture failed: {0}")]
+    Capture(String),
     /// No incoming connection was available to accept.
     #[error("no incoming connection")]
     NoConnection,
@@ -87,7 +96,7 @@ pub async fn bind(identity: &Identity) -> Result<Endpoint, EndpointError> {
     let secret_key = SecretKey::from_bytes(&identity.secret_key().to_bytes());
     Endpoint::builder(presets::N0)
         .secret_key(secret_key)
-        .alpns(vec![PAIRING_ALPN.to_vec()])
+        .alpns(vec![PAIRING_ALPN.to_vec(), CONTROL_ALPN.to_vec()])
         .address_lookup(MdnsAddressLookup::builder())
         .bind()
         .await
@@ -194,7 +203,7 @@ pub async fn agent_request_pairing(
 }
 
 /// Writes a length-prefixed postcard message.
-async fn write_message<T: Serialize>(
+pub(crate) async fn write_message<T: Serialize>(
     send: &mut SendStream,
     message: &T,
 ) -> Result<(), EndpointError> {
@@ -207,7 +216,9 @@ async fn write_message<T: Serialize>(
 }
 
 /// Reads one length-prefixed postcard message, refusing anything over [`MAX_MESSAGE_BYTES`].
-async fn read_message<T: DeserializeOwned>(recv: &mut RecvStream) -> Result<T, EndpointError> {
+pub(crate) async fn read_message<T: DeserializeOwned>(
+    recv: &mut RecvStream,
+) -> Result<T, EndpointError> {
     let map = |e: iroh::endpoint::ReadExactError| EndpointError::Stream(e.to_string());
     let mut len_bytes = [0u8; 4];
     recv.read_exact(&mut len_bytes).await.map_err(map)?;

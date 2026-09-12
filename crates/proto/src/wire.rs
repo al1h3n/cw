@@ -97,7 +97,10 @@ pub enum ProtocolError {
 }
 
 /// A control-channel message. This is the top-level type carried over the control stream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Not `Copy`: [`Control::Thumbnail`] carries an owned JPEG. That payload is variable-length but
+/// bounded by the transport's per-message frame cap, so decoding stays safe on hostile input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Control {
     /// The opening handshake.
     Hello(Hello),
@@ -105,6 +108,23 @@ pub enum Control {
     Ping(u64),
     /// Reply to [`Control::Ping`] with the same nonce.
     Pong(u64),
+    /// Console → Agent: capture one thumbnail of `monitor`, no wider than `max_width` pixels.
+    /// The Agent captures only in response to this, so an idle Console means zero capture (D11).
+    RequestThumbnail {
+        /// Which monitor (0-based).
+        monitor: u8,
+        /// Maximum thumbnail width in pixels; the Agent scales down to fit.
+        max_width: u16,
+    },
+    /// Agent → Console: the requested thumbnail as JPEG bytes.
+    Thumbnail {
+        /// Which monitor this is for.
+        monitor: u8,
+        /// A monotonically increasing sequence number, for ordering/staleness.
+        seq: u64,
+        /// JPEG-encoded image.
+        jpeg: Vec<u8>,
+    },
     /// A typed error from the peer.
     Error(ProtocolError),
 }

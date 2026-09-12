@@ -147,9 +147,21 @@
 - [ ] **1.4 (superseded by 1.4a + 1.4b) Agent service install/uninstall** (the helper from 0.7, made production-grade): auto-start,
   restart on crash.
   **Done when:** VM test — reboot → Agent back within 30 s of login; killing the helper → it respawns.
-- [ ] **1.5 Thumbnail grid** in the Console (Tauri + Svelte). The Agent captures only while a Console
+- [~] **1.5 Thumbnail grid** in the Console (Tauri + Svelte). The Agent captures only while a Console
   grid is open.
   **Done when:** budget check (§6) passes, and minimising the Console drops Agent CPU to idle within 3 s.
+  - [x] **1.5a Control session + on-demand thumbnails (transport + logic).** → `net::control`
+    (`ControlSession::connect`/`accept`/`request_thumbnail`/`serve_thumbnails`, `CaptureSource` trait,
+    `LocalHello`/`PeerInfo`), `CONTROL_ALPN`, `Control::RequestThumbnail`/`Thumbnail` in `proto`.
+    *Done 2026-09-12: over real iroh (`tests/control_over_iroh.rs`, `#[ignore]`), a trusted Console
+    opens a session (Hello + version + **mutual trust check**), pulls 3 thumbnails from a fake
+    `CaptureSource`, and capture happens only on request (0 before, 3 after → satisfies "zero capture
+    when idle"). An untrusted Console is refused with `Unauthorized` and gets nothing. Framing capped
+    at 64 KiB (trust boundary).*
+  - [ ] **1.5b Real capture source.** Port spike 0.4's DXGI→JPEG into `crates/media` implementing
+    `CaptureSource`; the Agent wires it into `serve_thumbnails`. Multi-monitor via `monitor` index.
+  - [ ] **1.5c Console grid UI (Tauri 2 + Svelte 5).** Poll each paired Agent at ≤1 fps, show the grid;
+    stop polling when minimised (drives the Agent to idle within 3 s). Native viewer window is Phase 1.6.
 - [ ] **1.6 Full view** in the native viewer (from 0.5/0.6). Wallpaper goes black while streaming (D11).
   **Done when:** latency budget passes; wallpaper restores after disconnect, **including after the
   Console crashes** (test it).

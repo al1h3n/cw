@@ -4,10 +4,12 @@
 //! So far: device identity (Phase 1.1), the pairing protocol logic (Phase 1.3), and the iroh endpoint
 //! that carries pairing over the wire with mDNS LAN discovery (Phase 1.3b).
 
+pub mod control;
 pub mod endpoint;
 pub mod identity;
 pub mod pairing;
 
+pub use control::{CaptureError, CaptureSource, ControlSession, LocalHello, PeerInfo};
 pub use endpoint::{
     EndpointError, PairedPeer, agent_request_pairing, bind, console_accept_pairing,
 };
