@@ -6,3 +6,4 @@
 #![allow(unsafe_code)] // sanctioned here per AGENTS.md §5; FFI only, each block documented
 
 pub mod secret;
+pub mod session;

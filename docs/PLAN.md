@@ -132,7 +132,19 @@
   **User TODO (still real-world):** run the two binaries on two physical PCs on one LAN with the
   internet unplugged (mDNS path), and confirm re-recognition after an IP change. Needs the Console/Agent
   binaries (Phase 1.5+); until then use a small two-subcommand example.
-- [ ] **1.4 Agent service install/uninstall** (the helper from 0.7, made production-grade): auto-start,
+- [~] **1.4a Agent supervisor + session enumeration (no elevation).** → `crates/agent`
+  (`supervisor::RestartPolicy` + `supervise`), `platform::session` (`list_sessions`,
+  `list_active_sessions`), `cowatcher-agent` bin (`sessions`, `supervise`, `version`).
+  **Done 2026-09-12:** backoff policy tested (doubles 1→2→4→8→16→30 cap, resets after a healthy run,
+  no overflow); a real supervised child is restarted ≥3× then stopped via the stop signal;
+  `list_sessions` verified unelevated (sees session 0 + the active Console session). 40 tests pass.
+- [ ] **1.4b Agent service (SCM) + session-helper spawn — VM/elevated.** Register a SYSTEM service
+  (`windows-service`), have it enumerate active sessions and spawn the helper via `WTSQueryUserToken`
+  + `CreateProcessAsUserW` (new `platform::session::spawn_in_session`, SYSTEM-only), driven by the
+  1.4a supervisor.
+  **Done when:** VM test — reboot → Agent back within 30 s of login; killing the helper → it respawns.
+  *Deferred: needs an elevated session + a throwaway VM; not run on the dev machine.*
+- [ ] **1.4 (superseded by 1.4a + 1.4b) Agent service install/uninstall** (the helper from 0.7, made production-grade): auto-start,
   restart on crash.
   **Done when:** VM test — reboot → Agent back within 30 s of login; killing the helper → it respawns.
 - [ ] **1.5 Thumbnail grid** in the Console (Tauri + Svelte). The Agent captures only while a Console

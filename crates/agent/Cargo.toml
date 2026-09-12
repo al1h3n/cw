@@ -1,0 +1,19 @@
+[package]
+name = "agent"
+description = "Student-device agent: the supervising service and its per-session helper."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "cowatcher-agent"
+path = "src/main.rs"
+
+[dependencies]
+platform = { path = "../platform" }
+proto = { path = "../proto" }
+
+[lints]
+workspace = true
