@@ -9,13 +9,17 @@ publish.workspace = true
 
 [dependencies]
 iroh = "1.2"
+iroh-mdns-address-lookup = "0.5" # offline LAN discovery, per AGENTS D6
 platform = { path = "../platform" }
 proto = { path = "../proto" }
 rand = "0.10" # pairing-code generation; already in the tree via iroh
+serde = "1"
 thiserror = "2"
+tokio = { version = "1", features = ["time"] } # bounded graceful-close wait
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

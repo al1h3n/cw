@@ -117,11 +117,21 @@
   authorization token (expiring, single-use, rate-limited), not an interception defence.*
   **Still to wire (needs the endpoint, below): run this over a real iroh connection + mDNS LAN
   discovery, and the two-PC "survives IP change" run.**
-- [ ] **1.3b Endpoint + discovery (transport wiring for 1.3).** Build the `net` iroh endpoint
+- [x] **1.3b Endpoint + discovery (transport wiring for 1.3).** Build the `net` iroh endpoint
   (secret key from `Identity`, mDNS address lookup), carry `PairMessage` on a pairing stream, and run
-  pairing Console↔Agent for real.
+  pairing Console↔Agent for real. → `net::endpoint` (`bind`, `console_accept_pairing`,
+  `agent_request_pairing`, `PairedPeer`, `now_ms`).
   **Done when:** two processes on one LAN pair by code with the internet unplugged; a paired peer is
   re-recognised after its address changes.
+  *Done 2026-09-12: two in-process endpoints pair over a real iroh connection — correct code pins both
+  sides, wrong code refused, nothing pinned (`tests/pairing_over_iroh.rs`, `#[ignore]` = network e2e,
+  stable across repeated runs). Length-prefixed postcard framing capped at 64 KiB (trust boundary).
+  Two bugs found and fixed: (1) the session clock must match the endpoint's — added `endpoint::now_ms`;
+  (2) a QUIC close race dropped the reply — the agent now drives the close and the console waits on
+  `conn.closed()` before returning.*
+  **User TODO (still real-world):** run the two binaries on two physical PCs on one LAN with the
+  internet unplugged (mDNS path), and confirm re-recognition after an IP change. Needs the Console/Agent
+  binaries (Phase 1.5+); until then use a small two-subcommand example.
 - [ ] **1.4 Agent service install/uninstall** (the helper from 0.7, made production-grade): auto-start,
   restart on crash.
   **Done when:** VM test — reboot → Agent back within 30 s of login; killing the helper → it respawns.

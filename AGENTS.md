@@ -5,9 +5,11 @@
 > Original brief: [`ClassWatcher.md`](ClassWatcher.md) · Roadmap: [`docs/PLAN.md`](docs/PLAN.md) ·
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md)
 
-**Status (2026-09-11):** Phase 0 in progress. Workspace + CI + `proto` skeleton built; 6 of the 8
-technical spikes done on the dev PC (see §8). Remaining before Phase 1: the service/session-helper spike
-(0.7, needs an elevated VM) and the real-two-PC / old-PC / physical-keyboard reruns the user must do.
+**Status (2026-09-12):** Phase 0 done (6/8 spikes; 0.7 folded into Phase 1). Phase 1 underway:
+1.1 identity, 1.2 wire proto, 1.3 pairing logic, and 1.3b pairing over a real iroh endpoint with mDNS
+are built and tested (44 offline tests + 2 `#[ignore]` network e2e tests, all green). Next: 1.4 Agent
+service + session helper (needs an elevated VM). Outstanding real-world reruns for the user are listed
+per-step in `docs/PLAN.md` (two-PC pairing, old-PC CPU, physical-keyboard escape).
 
 ---
 
