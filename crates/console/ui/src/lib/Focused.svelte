@@ -2,7 +2,11 @@
   import { t } from './i18n.svelte'
   import type { Device } from './types'
 
-  let { device, onclose }: { device: Device; onclose: () => void } = $props()
+  let {
+    device,
+    onclose,
+    onmonitor,
+  }: { device: Device; onclose: () => void; onmonitor: (index: number) => void } = $props()
 
   function onkey(event: KeyboardEvent) {
     if (event.key === 'Escape') onclose()
@@ -17,6 +21,22 @@
     <header>
       <span class="id">{device.device_id}</span>
       <span class="status"><i class="dot {device.status}"></i>{device.detail ?? device.status}</span>
+
+      {#if device.monitors.length > 1}
+        <span class="monitors" role="group" aria-label={t('monitors')}>
+          {#each device.monitors as monitor (monitor.index)}
+            <button
+              class="chip"
+              class:active={monitor.index === device.monitor}
+              onclick={() => onmonitor(monitor.index)}
+              title={`${monitor.width}×${monitor.height}`}
+            >
+              {monitor.primary ? t('monitorMain') : t('monitorNumber', monitor.index + 1)}
+            </button>
+          {/each}
+        </span>
+      {/if}
+
       <button onclick={onclose}>{t('close')}</button>
     </header>
     <div class="screen">
@@ -71,8 +91,32 @@
     font-size: 12px;
   }
 
-  header button {
+  .monitors {
+    display: inline-flex;
+    gap: 6px;
     margin-left: auto;
+  }
+
+  .chip {
+    padding: 4px 10px;
+    font-size: 11.5px;
+    border-radius: 999px;
+    background: transparent;
+  }
+
+  .chip.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #06101f;
+    font-weight: 600;
+  }
+
+  header > button:last-child {
+    margin-left: auto;
+  }
+
+  .monitors ~ button:last-child {
+    margin-left: 0;
   }
 
   .dot {

@@ -13,6 +13,24 @@
 #[error("capture failed: {0}")]
 pub struct CaptureError(pub String);
 
+/// One attached monitor.
+///
+/// Note on virtual desktops: capture always follows the desktop the student is *currently* on, which
+/// is what a teacher wants. Windows does not render an inactive virtual desktop at all, so no API —
+/// ours or anyone's — can show one that is not on screen. Switching desktops simply changes what the
+/// next captured frame contains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonitorInfo {
+    /// Index to pass to capture calls.
+    pub index: u8,
+    /// Native width in pixels.
+    pub width: u32,
+    /// Native height in pixels.
+    pub height: u32,
+    /// Whether this is the primary monitor.
+    pub primary: bool,
+}
+
 impl CaptureError {
     fn new(what: impl std::fmt::Display) -> Self {
         Self(what.to_string())
@@ -60,6 +78,12 @@ mod stub {
         #[must_use]
         pub fn monitor_count(&self) -> u8 {
             0
+        }
+
+        /// The attached monitors.
+        #[must_use]
+        pub fn monitors(&self) -> Vec<super::MonitorInfo> {
+            Vec::new()
         }
     }
 }

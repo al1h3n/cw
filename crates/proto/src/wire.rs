@@ -61,6 +61,22 @@ impl Capabilities {
     }
 }
 
+/// One monitor attached to a student PC.
+///
+/// Virtual desktops are deliberately absent: Windows does not render an inactive virtual desktop, so
+/// nothing can capture one. Capture always shows the desktop the student is currently on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Monitor {
+    /// Index to use in [`Control::RequestThumbnail`].
+    pub index: u8,
+    /// Native width in pixels.
+    pub width: u32,
+    /// Native height in pixels.
+    pub height: u32,
+    /// Whether this is the PC's primary monitor.
+    pub primary: bool,
+}
+
 /// The handshake a peer sends first, before any other message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
@@ -108,14 +124,20 @@ pub enum Control {
     Ping(u64),
     /// Reply to [`Control::Ping`] with the same nonce.
     Pong(u64),
-    /// Console → Agent: capture one thumbnail of `monitor`, no wider than `max_width` pixels.
+    /// Console → Agent: capture one image of `monitor`, no wider than `max_width` pixels.
     /// The Agent captures only in response to this, so an idle Console means zero capture (D11).
+    /// `max_width` is how the Console picks preview quality: small for the grid, large when a
+    /// teacher opens one screen.
     RequestThumbnail {
         /// Which monitor (0-based).
         monitor: u8,
-        /// Maximum thumbnail width in pixels; the Agent scales down to fit.
+        /// Maximum width in pixels; the Agent scales down to fit and keeps the aspect ratio.
         max_width: u16,
     },
+    /// Console → Agent: what monitors does this PC have?
+    ListMonitors,
+    /// Agent → Console: the attached monitors.
+    Monitors(Vec<Monitor>),
     /// Agent → Console: the requested thumbnail as JPEG bytes.
     Thumbnail {
         /// Which monitor this is for.

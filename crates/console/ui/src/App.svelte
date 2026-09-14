@@ -5,6 +5,7 @@
   import PairDialog from './lib/PairDialog.svelte'
   import Focused from './lib/Focused.svelte'
   import LanguagePicker from './lib/LanguagePicker.svelte'
+  import QualityPicker from './lib/QualityPicker.svelte'
   import { i18n, t } from './lib/i18n.svelte'
   import type { ConsoleInfo, Device } from './lib/types'
 
@@ -24,6 +25,25 @@
     try {
       devices = await invoke<Device[]>('devices')
       loaded = true
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  /** Opening a screen asks the backend to refresh it faster and larger. */
+  async function open(deviceId: string | null) {
+    focused = deviceId
+    try {
+      await invoke('set_focused', { deviceId })
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  async function chooseMonitor(deviceId: string, index: number) {
+    try {
+      await invoke('set_monitor', { deviceId, monitor: index })
+      await refresh()
     } catch (e) {
       error = String(e)
     }
@@ -111,7 +131,12 @@
     {:else}
       <div class="grid">
         {#each devices as device (device.device_id)}
-          <DeviceTile {device} {watching} onopen={() => (focused = device.device_id)} />
+          <DeviceTile
+            {device}
+            {watching}
+            onopen={() => open(device.device_id)}
+            onmonitor={(index) => chooseMonitor(device.device_id, index)}
+          />
         {/each}
       </div>
     {/if}
@@ -122,6 +147,7 @@
       <span>{t('thisConsole')} <code>{info.device_id}</code></span>
     {/if}
     <span class="right">
+      <QualityPicker />
       <span class="dot-label">
         <i class="dot" class:live={watching}></i>
         {watching ? t('capturing') : t('notCapturing')}
@@ -142,7 +168,11 @@
 {/if}
 
 {#if focusedDevice}
-  <Focused device={focusedDevice} onclose={() => (focused = null)} />
+  <Focused
+    device={focusedDevice}
+    onclose={() => open(null)}
+    onmonitor={(index) => chooseMonitor(focusedDevice.device_id, index)}
+  />
 {/if}
 
 <style>

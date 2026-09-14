@@ -144,6 +144,37 @@ fn stop_watching(state: State<'_, AppState>) {
     state.manager.stop_watching();
 }
 
+/// The preview widths in use, so the UI can show the current choice.
+#[derive(serde::Serialize)]
+struct PreviewWidths {
+    grid: u16,
+    focused: u16,
+}
+
+#[tauri::command]
+fn preview_widths(state: State<'_, AppState>) -> PreviewWidths {
+    let (grid, focused) = state.manager.preview_widths();
+    PreviewWidths { grid, focused }
+}
+
+/// Sets how sharp the previews are: the grid tiles and the opened screen separately.
+#[tauri::command]
+fn set_preview_widths(state: State<'_, AppState>, grid: u16, focused: u16) {
+    state.manager.set_preview_widths(grid, focused);
+}
+
+/// Tells the manager which screen is open, so it is refreshed faster and larger.
+#[tauri::command]
+fn set_focused(state: State<'_, AppState>, device_id: Option<String>) {
+    state.manager.set_focused(device_id.as_deref());
+}
+
+/// Chooses which monitor of a multi-monitor student PC to show.
+#[tauri::command]
+fn set_monitor(state: State<'_, AppState>, device_id: String, monitor: u8) -> Result<(), String> {
+    state.manager.set_monitor(&device_id, monitor)
+}
+
 /// Generates the code the teacher reads out, and returns the exact command for the student PC.
 #[derive(serde::Serialize)]
 struct PairingInvite {
@@ -197,6 +228,10 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             devices,
             start_watching,
             stop_watching,
+            preview_widths,
+            set_preview_widths,
+            set_focused,
+            set_monitor,
             translation,
             set_language,
             export_language_template,

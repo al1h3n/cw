@@ -1,32 +1,37 @@
 //! GDI screen grab: the always-available fallback.
 //!
-//! Desktop Duplication only delivers *changes*, so on a completely idle screen it returns nothing —
+//! Desktop Duplication only delivers *changes*, so on a completely idle screen it returns nothing â€”
 //! yet a Console asking for a thumbnail still needs an image. `BitBlt` of the screen DC always
 //! produces the current composited desktop, so it covers the first request and any idle period.
 //! It is slower than the GPU path (a full-screen blit plus a CPU downscale), which is why it is only
 //! used when Duplication has nothing to give.
 //!
-//! ponytail: primary monitor only, and nearest-neighbour downscale. Per-monitor GDI capture needs
-//! monitor rectangles (EnumDisplayMonitors); add it when multi-monitor thumbnails are wired up.
+//! It captures any monitor by its desktop rectangle, so a second screen yields its own pixels.
+//!
+//! ponytail: nearest-neighbour downscale, which is fine for a fallback path; the GPU mip chain does
+//! the proper filtering on the normal path.
 
-use windows::Win32::{
-    Graphics::Gdi::{
-        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
-        DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
-    },
-    UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN},
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
 };
 
 use crate::CaptureError;
 
-/// Captures the primary monitor and returns packed BGRA pixels downscaled to at most `max_width`.
-pub fn capture_primary_bgra(max_width: u16) -> Result<(Vec<u8>, u32, u32), CaptureError> {
+/// Captures one rectangle of the virtual desktop, in virtual-screen coordinates.
+///
+/// `area` is `(left, top, width, height)` â€” the desktop rectangle of a monitor â€” so a second monitor
+/// is captured from its own position instead of the primary screen.
+pub fn capture_area_bgra(
+    area: (i32, i32, i32, i32),
+    max_width: u16,
+) -> Result<(Vec<u8>, u32, u32), CaptureError> {
+    let (left, top, width, height) = area;
     // SAFETY: every GDI object created here is selected back and deleted before returning; the
     // pixel buffer is sized width*height*4, exactly what GetDIBits fills for a 32-bit top-down DIB.
     unsafe {
-        let (width, height) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
         if width <= 0 || height <= 0 {
-            return Err(CaptureError("no primary monitor".into()));
+            return Err(CaptureError("monitor has an empty area".into()));
         }
         let screen = GetDC(None);
         if screen.is_invalid() {
@@ -38,7 +43,17 @@ pub fn capture_primary_bgra(max_width: u16) -> Result<(Vec<u8>, u32, u32), Captu
         let bitmap = CreateCompatibleBitmap(screen, width, height);
         let previous = SelectObject(memory, bitmap.into());
 
-        let blit = BitBlt(memory, 0, 0, width, height, Some(screen), 0, 0, SRCCOPY);
+        let blit = BitBlt(
+            memory,
+            0,
+            0,
+            width,
+            height,
+            Some(screen),
+            left,
+            top,
+            SRCCOPY,
+        );
 
         let mut info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {

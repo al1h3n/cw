@@ -10,7 +10,9 @@ use iroh::{
     Endpoint, EndpointAddr,
     endpoint::{Connection, RecvStream, SendStream},
 };
-use proto::{Capabilities, Control, DeviceId, Hello, PROTOCOL_VERSION, ProtocolError, Role};
+use proto::{
+    Capabilities, Control, DeviceId, Hello, Monitor, PROTOCOL_VERSION, ProtocolError, Role,
+};
 
 use crate::{
     TrustStore,
@@ -51,6 +53,9 @@ pub trait CaptureSource {
     /// # Errors
     /// Returns [`CaptureError`] if the monitor is unavailable or capture fails.
     fn capture_thumbnail(&self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError>;
+
+    /// The monitors this device has, so the Console can offer them.
+    fn monitors(&self) -> Vec<Monitor>;
 }
 
 /// A capture failure, carrying a human-readable reason.
@@ -149,6 +154,19 @@ impl ControlSession {
         }
     }
 
+    /// Console side: ask which monitors the student PC has.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn request_monitors(&mut self) -> Result<Vec<Monitor>, EndpointError> {
+        write_message(&mut self.send, &Control::ListMonitors).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::Monitors(monitors) => Ok(monitors),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Agent side: serve thumbnail requests until the Console closes the session.
     ///
     /// Returns `Ok(())` on a clean close. Capture happens only inside a request, so this loop is idle
@@ -174,6 +192,9 @@ impl ControlSession {
                     seq += 1;
                     write_message(&mut self.send, &Control::Thumbnail { monitor, seq, jpeg })
                         .await?;
+                }
+                Control::ListMonitors => {
+                    write_message(&mut self.send, &Control::Monitors(source.monitors())).await?;
                 }
                 Control::Ping(nonce) => {
                     write_message(&mut self.send, &Control::Pong(nonce)).await?

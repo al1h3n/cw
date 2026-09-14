@@ -18,6 +18,6 @@ mod wire;
 pub use device_id::{DeviceId, DeviceIdParseError};
 pub use pairing::{PairMessage, PairRejection};
 pub use wire::{
-    Capabilities, Control, DecodeError, Hello, ProtocolError, Role, decode, encode,
+    Capabilities, Control, DecodeError, Hello, Monitor, ProtocolError, Role, decode, encode,
     version_compatible,
 };

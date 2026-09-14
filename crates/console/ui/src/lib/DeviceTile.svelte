@@ -2,7 +2,17 @@
   import { t } from './i18n.svelte'
   import type { Device } from './types'
 
-  let { device, watching, onopen }: { device: Device; watching: boolean; onopen: () => void } = $props()
+  let {
+    device,
+    watching,
+    onopen,
+    onmonitor,
+  }: {
+    device: Device
+    watching: boolean
+    onopen: () => void
+    onmonitor: (index: number) => void
+  } = $props()
 
   const label = $derived(
     device.status === 'live'
@@ -15,15 +25,15 @@
   )
 </script>
 
-<!-- The screen is the tile. Everything else sits quietly on top of it. -->
-<button class="tile" onclick={onopen} aria-label={t('screenOf', device.device_id)}>
-  <div class="screen">
+<div class="card">
+  <!-- The screen is the tile. Everything else sits quietly under it. -->
+  <button class="screen" onclick={onopen} aria-label={t('screenOf', device.device_id)}>
     {#if device.screen}
       <img src={device.screen} alt={t('screenOf', device.device_id)} />
     {:else}
       <p class="hint">{watching ? t('waitingFirst') : t('notWatching')}</p>
     {/if}
-  </div>
+  </button>
 
   <div class="bar">
     <span class="id">{device.device_id}</span>
@@ -32,32 +42,51 @@
       {device.detail ?? label}
     </span>
   </div>
-</button>
+
+  {#if device.monitors.length > 1}
+    <!-- Only shown when the PC really has more than one screen, so single-monitor tiles stay clean. -->
+    <div class="monitors" role="group" aria-label={t('monitors')}>
+      {#each device.monitors as monitor (monitor.index)}
+        <button
+          class="chip"
+          class:active={monitor.index === device.monitor}
+          onclick={() => onmonitor(monitor.index)}
+          title={`${monitor.width}×${monitor.height}`}
+        >
+          {monitor.primary ? t('monitorMain') : t('monitorNumber', monitor.index + 1)}
+        </button>
+      {/each}
+    </div>
+  {/if}
+</div>
 
 <style>
-  .tile {
-    display: block;
-    width: 100%;
-    padding: 0;
-    overflow: hidden;
-    text-align: left;
+  .card {
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: var(--radius);
+    overflow: hidden;
   }
 
-  .tile:hover {
+  .card:hover {
     border-color: #42506a;
-    background: var(--panel);
   }
 
   .screen {
-    position: relative;
-    aspect-ratio: 16 / 9;
     display: grid;
     place-items: center;
+    width: 100%;
+    padding: 0;
+    aspect-ratio: 16 / 9;
     background: #0a0d11;
+    border: 0;
     border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    cursor: pointer;
+  }
+
+  .screen:hover {
+    background: #0a0d11;
   }
 
   img {
@@ -84,7 +113,7 @@
   }
 
   .id {
-    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
     font-size: 13px;
     letter-spacing: 0.4px;
   }
@@ -119,5 +148,26 @@
 
   .dot.offline {
     background: var(--danger);
+  }
+
+  .monitors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 10px 10px;
+  }
+
+  .chip {
+    padding: 4px 10px;
+    font-size: 11.5px;
+    border-radius: 999px;
+    background: transparent;
+  }
+
+  .chip.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #06101f;
+    font-weight: 600;
   }
 </style>

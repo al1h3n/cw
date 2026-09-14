@@ -35,6 +35,23 @@ impl ScreenCapture {
 }
 
 impl CaptureSource for ScreenCapture {
+    fn monitors(&self) -> Vec<proto::Monitor> {
+        self.capturer.lock().map_or_else(
+            |_| Vec::new(),
+            |c| {
+                c.monitors()
+                    .into_iter()
+                    .map(|m| proto::Monitor {
+                        index: m.index,
+                        width: m.width,
+                        height: m.height,
+                        primary: m.primary,
+                    })
+                    .collect()
+            },
+        )
+    }
+
     fn capture_thumbnail(&self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
         let mut capturer = self
             .capturer

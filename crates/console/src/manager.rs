@@ -17,12 +17,16 @@ use net::{ControlSession, Identity, LocalHello, TrustStore};
 use proto::{Capabilities, DeviceId, Role};
 use tokio::task::JoinHandle;
 
-/// How often a watched device is asked for a fresh screen.
+/// How often a watched device is asked for a fresh screen in the grid.
 const REFRESH: Duration = Duration::from_secs(1);
+/// How often the screen a teacher has opened is refreshed: smooth enough to follow what is happening.
+const FOCUSED_REFRESH: Duration = Duration::from_millis(250);
 /// How long to wait before retrying a device that failed to connect.
 const RETRY: Duration = Duration::from_secs(5);
-/// Thumbnail width requested from agents, in pixels.
-const THUMB_WIDTH: u16 = 480;
+/// Preview width used until the teacher picks one, in pixels.
+pub const DEFAULT_GRID_WIDTH: u16 = 480;
+/// Preview width for the screen a teacher has opened.
+pub const DEFAULT_FOCUSED_WIDTH: u16 = 1280;
 
 /// What the UI shows for one student PC.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -37,6 +41,10 @@ pub struct DeviceView {
     pub screen: Option<String>,
     /// Why the device is not usable, when `status` says something is wrong.
     pub detail: Option<String>,
+    /// The monitors this PC has, once it has told us.
+    pub monitors: Vec<proto::Monitor>,
+    /// Which monitor is being shown.
+    pub monitor: u8,
 }
 
 /// Connection state of one device, in the order the UI colours them.
@@ -60,6 +68,43 @@ struct DeviceState {
     status: DeviceStatus,
     screen: Option<String>,
     detail: Option<String>,
+    monitors: Vec<proto::Monitor>,
+    monitor: u8,
+}
+
+impl DeviceState {
+    /// A freshly paired or freshly loaded device: known, but not being watched.
+    fn new(key: [u8; 32]) -> Self {
+        Self {
+            key,
+            status: DeviceStatus::Idle,
+            screen: None,
+            detail: None,
+            monitors: Vec::new(),
+            monitor: 0,
+        }
+    }
+}
+
+/// What the teacher has chosen about how screens are shown.
+#[derive(Debug, Clone, Copy)]
+struct Preview {
+    /// Width requested for the tiles in the grid.
+    grid_width: u16,
+    /// Width requested for the one screen a teacher has opened.
+    focused_width: u16,
+    /// The device currently opened full-size, which is refreshed faster and larger.
+    focused: Option<[u8; 32]>,
+}
+
+impl Default for Preview {
+    fn default() -> Self {
+        Self {
+            grid_width: DEFAULT_GRID_WIDTH,
+            focused_width: DEFAULT_FOCUSED_WIDTH,
+            focused: None,
+        }
+    }
 }
 
 /// Owns the console identity, the trust store, and the per-device tasks.
@@ -70,6 +115,7 @@ pub struct DeviceManager {
     devices: Arc<Mutex<BTreeMap<String, DeviceState>>>,
     tasks: Mutex<BTreeMap<String, JoinHandle<()>>>,
     endpoint: Mutex<Option<iroh::Endpoint>>,
+    preview: Arc<Mutex<Preview>>,
 }
 
 impl DeviceManager {
@@ -88,15 +134,7 @@ impl DeviceManager {
             .keys()
             .map(|key| {
                 let id = DeviceId::from_public_key(key).to_string();
-                (
-                    id,
-                    DeviceState {
-                        key: *key,
-                        status: DeviceStatus::Idle,
-                        screen: None,
-                        detail: None,
-                    },
-                )
+                (id, DeviceState::new(*key))
             })
             .collect();
 
@@ -107,6 +145,7 @@ impl DeviceManager {
             devices: Arc::new(Mutex::new(devices)),
             tasks: Mutex::new(BTreeMap::new()),
             endpoint: Mutex::new(None),
+            preview: Arc::new(Mutex::new(Preview::default())),
         })
     }
 
@@ -134,8 +173,57 @@ impl DeviceManager {
                 status: state.status,
                 screen: state.screen.clone(),
                 detail: state.detail.clone(),
+                monitors: state.monitors.clone(),
+                monitor: state.monitor,
             })
             .collect()
+    }
+
+    /// The preview widths currently in use, as `(grid, focused)`.
+    #[must_use]
+    pub fn preview_widths(&self) -> (u16, u16) {
+        let preview = self.preview.lock().unwrap_or_else(|e| e.into_inner());
+        (preview.grid_width, preview.focused_width)
+    }
+
+    /// Sets how wide the captured images should be. Bigger is sharper and costs more bandwidth.
+    ///
+    /// Values are clamped to something sane so a typo cannot ask for a 1-pixel or 20000-pixel image.
+    pub fn set_preview_widths(&self, grid: u16, focused: u16) {
+        let mut preview = self.preview.lock().unwrap_or_else(|e| e.into_inner());
+        preview.grid_width = grid.clamp(160, 3840);
+        preview.focused_width = focused.clamp(320, 3840);
+    }
+
+    /// Marks one device as the opened screen, which refreshes faster and at the focused width.
+    /// Passing `None` returns every device to grid pace.
+    pub fn set_focused(&self, device_id: Option<&str>) {
+        let key = device_id.and_then(|id| {
+            let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+            devices.get(id).map(|state| state.key)
+        });
+        self.preview
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .focused = key;
+    }
+
+    /// Chooses which monitor of a multi-monitor PC to show.
+    ///
+    /// # Errors
+    /// Returns a message if the device is unknown or does not have that monitor.
+    pub fn set_monitor(&self, device_id: &str, monitor: u8) -> Result<(), String> {
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        let state = devices
+            .get_mut(device_id)
+            .ok_or_else(|| "unknown device".to_string())?;
+        if !state.monitors.is_empty() && !state.monitors.iter().any(|m| m.index == monitor) {
+            return Err(format!("that PC has no monitor {monitor}"));
+        }
+        state.monitor = monitor;
+        // Drop the old screen so the tile does not show the previous monitor while the new one loads.
+        state.screen = None;
+        Ok(())
     }
 
     /// Binds the shared endpoint once, reusing it for every device.
@@ -223,13 +311,51 @@ impl DeviceManager {
                 .await
                 .map_err(|e| e.to_string())?;
 
+        // Ask once per connection which monitors this PC has, so the teacher can pick one.
+        let monitors = session
+            .request_monitors()
+            .await
+            .map_err(|e| e.to_string())?;
+        self.set_monitors(id, monitors);
+
         loop {
+            let (monitor, width, focused) = self.request_shape(id, key);
             let jpeg = session
-                .request_thumbnail(0, THUMB_WIDTH)
+                .request_thumbnail(monitor, width)
                 .await
                 .map_err(|e| e.to_string())?;
             self.set_screen(id, &jpeg);
-            tokio::time::sleep(REFRESH).await;
+            tokio::time::sleep(if focused { FOCUSED_REFRESH } else { REFRESH }).await;
+        }
+    }
+
+    /// What to ask for next: which monitor, how wide, and whether this is the opened screen.
+    fn request_shape(&self, id: &str, key: [u8; 32]) -> (u8, u16, bool) {
+        let preview = *self.preview.lock().unwrap_or_else(|e| e.into_inner());
+        let focused = preview.focused == Some(key);
+        let monitor = self
+            .devices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .map_or(0, |state| state.monitor);
+        let width = if focused {
+            preview.focused_width
+        } else {
+            preview.grid_width
+        };
+        (monitor, width, focused)
+    }
+
+    /// Records the monitors a PC reported, keeping the teacher's choice if it still exists.
+    fn set_monitors(&self, id: &str, monitors: Vec<proto::Monitor>) {
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(state) = devices.get_mut(id) {
+            // If the chosen monitor was unplugged, fall back to the first one that remains.
+            if !monitors.iter().any(|m| m.index == state.monitor) {
+                state.monitor = monitors.first().map_or(0, |m| m.index);
+            }
+            state.monitors = monitors;
         }
     }
 
@@ -270,15 +396,7 @@ impl DeviceManager {
         self.devices
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(
-                id.clone(),
-                DeviceState {
-                    key: peer.public_key,
-                    status: DeviceStatus::Idle,
-                    screen: None,
-                    detail: None,
-                },
-            );
+            .insert(id.clone(), DeviceState::new(peer.public_key));
         Ok(id)
     }
 }

@@ -20,7 +20,7 @@ use windows::{
     core::Interface,
 };
 
-use crate::CaptureError;
+use crate::{CaptureError, MonitorInfo};
 
 /// How long a capture waits for a changed frame before falling back to the cached thumbnail.
 const FRAME_WAIT: Duration = Duration::from_millis(400);
@@ -31,7 +31,7 @@ const QUALITY: u8 = 60;
 pub struct ThumbnailCapturer {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
-    monitors: u8,
+    monitors: Vec<MonitorInfo>,
     /// The live duplication, rebuilt when the monitor or scale changes or access is lost.
     active: Option<Duplication>,
     /// Last successfully encoded thumbnail, reused when the screen has not changed.
@@ -75,7 +75,7 @@ impl ThumbnailCapturer {
         }
         let device = device.ok_or_else(|| CaptureError("no D3D11 device".into()))?;
         let context = context.ok_or_else(|| CaptureError("no D3D11 context".into()))?;
-        let monitors = count_outputs(&device)?;
+        let monitors = enumerate_outputs(&device)?;
         Ok(Self {
             device,
             context,
@@ -88,7 +88,13 @@ impl ThumbnailCapturer {
     /// How many monitors are attached.
     #[must_use]
     pub fn monitor_count(&self) -> u8 {
-        self.monitors
+        u8::try_from(self.monitors.len()).unwrap_or(u8::MAX)
+    }
+
+    /// Every attached monitor, with its native size.
+    #[must_use]
+    pub fn monitors(&self) -> Vec<MonitorInfo> {
+        self.monitors.clone()
     }
 
     /// Captures `monitor`, downscaled to at most `max_width` pixels wide, as JPEG bytes.
@@ -99,7 +105,7 @@ impl ThumbnailCapturer {
     /// # Errors
     /// Returns [`CaptureError`] if the monitor is missing or capture fails with no cached frame.
     pub fn capture_jpeg(&mut self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
-        if monitor >= self.monitors {
+        if usize::from(monitor) >= self.monitors.len() {
             return Err(CaptureError(format!("monitor {monitor} not attached")));
         }
         // Rebuild the duplication when the target or scale changes.
@@ -135,9 +141,14 @@ impl ThumbnailCapturer {
         }
     }
 
-    /// Grabs the current desktop with GDI and encodes it, caching the result like a normal capture.
+    /// Grabs this monitor's area with GDI and encodes it, caching it like a normal capture.
+    ///
+    /// The rectangle comes from the output description, so a second monitor gets *its own* pixels
+    /// rather than the primary screen's.
     fn gdi_fallback(&mut self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
-        let (pixels, w, h) = crate::gdi::capture_primary_bgra(max_width)?;
+        let area = output_area(&self.device, monitor)
+            .ok_or_else(|| CaptureError(format!("monitor {monitor} has no desktop area")))?;
+        let (pixels, w, h) = crate::gdi::capture_area_bgra(area, max_width)?;
         let jpeg = encode_bgra(&pixels, w, h)?;
         self.last = Some((monitor, max_width, jpeg.clone()));
         Ok(jpeg)
@@ -190,20 +201,47 @@ fn encode_bgra(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Captur
     Ok(jpeg)
 }
 
-/// Counts attached outputs on the device's adapter.
-fn count_outputs(device: &ID3D11Device) -> Result<u8, CaptureError> {
-    // SAFETY: COM queries on a live device; EnumOutputs returns an error once outputs run out.
+/// Describes every attached output on the device's adapter.
+fn enumerate_outputs(device: &ID3D11Device) -> Result<Vec<MonitorInfo>, CaptureError> {
+    // SAFETY: COM queries on a live device; EnumOutputs errors once the outputs run out.
     unsafe {
         let adapter = device
             .cast::<IDXGIDevice>()
             .map_err(CaptureError::new)?
             .GetAdapter()
             .map_err(CaptureError::new)?;
-        let mut count = 0u8;
-        while adapter.EnumOutputs(u32::from(count)).is_ok() && count < u8::MAX {
-            count += 1;
+        let mut monitors = Vec::new();
+        for index in 0..u32::from(u8::MAX) {
+            let Ok(output) = adapter.EnumOutputs(index) else {
+                break;
+            };
+            let Ok(desc) = output.GetDesc() else { continue };
+            let area = desc.DesktopCoordinates;
+            monitors.push(MonitorInfo {
+                index: index as u8,
+                width: (area.right - area.left).unsigned_abs(),
+                height: (area.bottom - area.top).unsigned_abs(),
+                // The primary monitor is the one whose top-left is the desktop origin.
+                primary: area.left == 0 && area.top == 0,
+            });
         }
-        Ok(count)
+        Ok(monitors)
+    }
+}
+
+/// The desktop rectangle of one output, in virtual-screen coordinates (for the GDI fallback).
+fn output_area(device: &ID3D11Device, monitor: u8) -> Option<(i32, i32, i32, i32)> {
+    // SAFETY: COM queries on a live device.
+    unsafe {
+        let adapter = device.cast::<IDXGIDevice>().ok()?.GetAdapter().ok()?;
+        let output = adapter.EnumOutputs(u32::from(monitor)).ok()?;
+        let area = output.GetDesc().ok()?.DesktopCoordinates;
+        Some((
+            area.left,
+            area.top,
+            area.right - area.left,
+            area.bottom - area.top,
+        ))
     }
 }
 

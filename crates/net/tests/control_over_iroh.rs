@@ -19,7 +19,7 @@ use net::{
     CaptureError, CaptureSource, ControlSession, Identity, LocalHello, TrustStore, bind,
     endpoint::EndpointError,
 };
-use proto::{Capabilities, DeviceId, ProtocolError, Role};
+use proto::{Capabilities, DeviceId, Monitor, ProtocolError, Role};
 
 fn run<F: Future>(fut: F) -> F::Output {
     tokio::runtime::Builder::new_multi_thread()
@@ -68,12 +68,35 @@ impl Drop for TempIdentity {
 #[derive(Clone, Default)]
 struct FakeCapture {
     calls: Arc<AtomicU32>,
+    /// The last (monitor, max_width) asked for, packed so a test can check both.
+    last_request: Arc<AtomicU32>,
 }
 
 impl CaptureSource for FakeCapture {
-    fn capture_thumbnail(&self, _monitor: u8, _max_width: u16) -> Result<Vec<u8>, CaptureError> {
+    fn capture_thumbnail(&self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.last_request.store(
+            u32::from(monitor) << 16 | u32::from(max_width),
+            Ordering::SeqCst,
+        );
         Ok(vec![0xFF, 0xD8, 0xFF, 0xD9])
+    }
+
+    fn monitors(&self) -> Vec<Monitor> {
+        vec![
+            Monitor {
+                index: 0,
+                width: 1920,
+                height: 1080,
+                primary: true,
+            },
+            Monitor {
+                index: 1,
+                width: 2560,
+                height: 1440,
+                primary: false,
+            },
+        ]
     }
 }
 
@@ -96,6 +119,7 @@ fn trusted_console_gets_thumbnails_only_on_request() {
 
         let capture = FakeCapture::default();
         let calls = capture.calls.clone();
+        let last_request = capture.last_request.clone();
         let agent_hello = agent_id.hello(Role::Agent, Capabilities::SCREEN_CAPTURE);
         let agent_task = tokio::spawn(async move {
             let session = ControlSession::accept(&agent_ep, &agent_trust, agent_hello).await?;
@@ -127,6 +151,28 @@ fn trusted_console_gets_thumbnails_only_on_request() {
             calls.load(Ordering::SeqCst),
             3,
             "one capture per request, no background capture"
+        );
+
+        // The agent reports its monitors, and the console can ask for a specific one at a chosen size.
+        let monitors = session.request_monitors().await.expect("monitors");
+        assert_eq!(monitors.len(), 2);
+        assert!(monitors[0].primary && !monitors[1].primary);
+        assert_eq!(monitors[1].width, 2560);
+
+        session
+            .request_thumbnail(1, 1280)
+            .await
+            .expect("second monitor");
+        let packed = last_request.load(Ordering::SeqCst);
+        assert_eq!(
+            packed >> 16,
+            1,
+            "the requested monitor reached the capture source"
+        );
+        assert_eq!(
+            packed & 0xFFFF,
+            1280,
+            "the requested width reached the capture source"
         );
 
         session.close();

@@ -24,8 +24,12 @@ pub const PAIRING_ALPN: &[u8] = b"cowatcher/pair/1";
 /// ALPN for the ongoing control session (used after pairing).
 pub const CONTROL_ALPN: &[u8] = b"cowatcher/control/1";
 
-/// Largest control/pairing message we will read from a peer.
-pub const MAX_MESSAGE_BYTES: u32 = 64 * 1024;
+/// Largest message we will read from a peer.
+///
+/// Sized for one full-resolution JPEG frame (a 4K screen compresses to well under this), not for
+/// control messages, which are tiny. It is still a hard bound, so a hostile peer cannot make us
+/// allocate without limit.
+pub const MAX_MESSAGE_BYTES: u32 = 8 * 1024 * 1024;
 
 /// How long the Console keeps a finished connection alive so its reply is delivered before drop.
 const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
