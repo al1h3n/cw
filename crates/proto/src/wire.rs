@@ -86,6 +86,86 @@ pub struct AudioFormat {
     pub channels: u8,
 }
 
+/// Something a Console can make a student PC do.
+///
+/// This is a **closed list on purpose**: there is no "run this command" variant in any tier, so a
+/// stolen Console key can only do these named things, never execute arbitrary code (AGENTS.md §5).
+/// Adding a member is a deliberate, reviewable protocol change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Action {
+    /// Power the PC off after `delay_seconds`, showing the student a countdown.
+    Shutdown {
+        /// Grace period before it happens, so a student can save work. Clamped by the Agent.
+        delay_seconds: u16,
+    },
+    /// Restart the PC after `delay_seconds`.
+    Reboot {
+        /// Grace period before it happens. Clamped by the Agent.
+        delay_seconds: u16,
+    },
+    /// Sign the student out, closing their programs.
+    LogOff,
+    /// Lock the session, exactly as Win+L does. The student's programs keep running.
+    LockScreen,
+    /// Call off a shutdown or reboot that is still counting down.
+    CancelShutdown,
+}
+
+impl Action {
+    /// A short, stable identifier for logs and the audit trail. Never translated.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Shutdown { .. } => "shutdown",
+            Self::Reboot { .. } => "reboot",
+            Self::LogOff => "log-off",
+            Self::LockScreen => "lock-screen",
+            Self::CancelShutdown => "cancel-shutdown",
+        }
+    }
+
+    /// Whether this action needs the "power" capability (the rest need "lock").
+    #[must_use]
+    pub const fn needs_power(self) -> bool {
+        matches!(
+            self,
+            Self::Shutdown { .. } | Self::Reboot { .. } | Self::LogOff | Self::CancelShutdown
+        )
+    }
+}
+
+/// Why a device could not carry out an [`Action`].
+///
+/// A fixed set rather than a message string: the reason is shown to a teacher in their own language,
+/// and a remote peer must never be able to put arbitrary text on someone's screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+pub enum ActionFailure {
+    /// The device does not support this action (wrong OS, no such feature).
+    #[error("this device cannot do that")]
+    NotSupported,
+    /// The Agent lacks the rights — typically the shutdown privilege was denied.
+    #[error("the device refused: not permitted")]
+    NotPermitted,
+    /// `CancelShutdown` arrived when nothing was counting down.
+    #[error("nothing was scheduled to cancel")]
+    NothingScheduled,
+    /// The OS rejected the request for another reason.
+    #[error("the device could not do it")]
+    Failed,
+}
+
+/// What happened to a requested [`Action`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActionOutcome {
+    /// Accepted and under way. For a delayed shutdown this means the countdown started.
+    Started {
+        /// Seconds until it actually happens; 0 for immediate actions.
+        delay_seconds: u16,
+    },
+    /// Not done, with the reason.
+    Failed(ActionFailure),
+}
+
 /// The handshake a peer sends first, before any other message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
@@ -168,6 +248,15 @@ pub enum Control {
         seq: u64,
         /// Signed 16-bit mono samples at the rate given in [`Control::AudioState`].
         samples: Vec<i16>,
+    },
+    /// Console → Agent: do this one named thing (power, lock). See [`Action`].
+    Perform(Action),
+    /// Agent → Console: what happened to the [`Control::Perform`] request.
+    ActionDone {
+        /// Echoed back, so a reply is never mistaken for another action's.
+        action: Action,
+        /// Started, or refused with a reason.
+        outcome: ActionOutcome,
     },
     /// Agent → Console: the requested thumbnail as JPEG bytes.
     Thumbnail {
@@ -256,11 +345,44 @@ mod tests {
             sample_hello(),
             Control::Ping(7),
             Control::Pong(7),
+            Control::Perform(Action::Shutdown { delay_seconds: 60 }),
+            Control::ActionDone {
+                action: Action::LockScreen,
+                outcome: ActionOutcome::Started { delay_seconds: 0 },
+            },
+            Control::ActionDone {
+                action: Action::CancelShutdown,
+                outcome: ActionOutcome::Failed(ActionFailure::NothingScheduled),
+            },
             Control::Error(ProtocolError::Unauthorized),
         ] {
             let bytes = encode(&message);
             assert_eq!(decode::<Control>(&bytes).unwrap(), message);
         }
+    }
+
+    #[test]
+    fn every_action_has_a_distinct_log_name() {
+        let actions = [
+            Action::Shutdown { delay_seconds: 0 },
+            Action::Reboot { delay_seconds: 0 },
+            Action::LogOff,
+            Action::LockScreen,
+            Action::CancelShutdown,
+        ];
+        let mut names: Vec<&str> = actions.iter().map(|a| a.name()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), actions.len(), "audit names must be unique");
+    }
+
+    #[test]
+    fn only_locking_needs_no_power_right() {
+        assert!(!Action::LockScreen.needs_power());
+        assert!(Action::Shutdown { delay_seconds: 0 }.needs_power());
+        assert!(Action::Reboot { delay_seconds: 0 }.needs_power());
+        assert!(Action::LogOff.needs_power());
+        assert!(Action::CancelShutdown.needs_power());
     }
 
     #[test]

@@ -6,6 +6,8 @@
 //! cowatcher-console devices                  list paired devices
 //! cowatcher-console watch <agent-key> [n] [dir]
 //!                                            pull n thumbnails from a paired agent into dir
+//! cowatcher-console act <agent-key> <action> [delay]
+//!                                            lock-screen, shutdown, reboot, log-off, cancel-shutdown
 //! cowatcher-console version
 //! ```
 //!
@@ -57,8 +59,9 @@ fn main() -> ExitCode {
         Some("pair") => block_on(cmd_pair()),
         Some("watch") => block_on(cmd_watch(rest)),
         Some("listen") => block_on(cmd_listen(rest)),
+        Some("act") => block_on(cmd_act(rest)),
         _ => Err(
-            "usage: cowatcher-console [id|pair|devices|watch|listen|version]  (no arguments opens the window)"
+            "usage: cowatcher-console [id|pair|devices|watch|listen|act|version]  (no arguments opens the window)"
                 .into(),
         ),
     };
@@ -167,22 +170,9 @@ async fn cmd_watch(args: Vec<String>) -> Result<(), String> {
         .get(2)
         .map_or_else(|| PathBuf::from("thumbnails"), PathBuf::from);
 
-    let identity = load_identity()?;
-    let trust = TrustStore::load(&trust_path()).map_err(|e| e.to_string())?;
-    if !trust.is_trusted(agent_key.as_bytes()) {
-        return Err("that device is not paired with this console — run `pair` first".into());
-    }
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;
 
-    let endpoint = net::bind(&identity).await.map_err(|e| e.to_string())?;
-    let mut session = ControlSession::connect(
-        &endpoint,
-        iroh::EndpointAddr::new(agent_key),
-        &trust,
-        local_hello(&identity),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let (endpoint, mut session) = connect_paired(agent_key).await?;
     let peer = session.peer();
     println!(
         "connected to device {} (role {:?})",
@@ -224,21 +214,7 @@ async fn cmd_listen(args: Vec<String>) -> Result<(), String> {
         .map_err(|_| "invalid agent endpoint key".to_string())?;
     let seconds: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5);
 
-    let identity = load_identity()?;
-    let trust = TrustStore::load(&trust_path()).map_err(|e| e.to_string())?;
-    if !trust.is_trusted(agent_key.as_bytes()) {
-        return Err("that device is not paired with this console — run `pair` first".into());
-    }
-
-    let endpoint = net::bind(&identity).await.map_err(|e| e.to_string())?;
-    let mut session = ControlSession::connect(
-        &endpoint,
-        iroh::EndpointAddr::new(agent_key),
-        &trust,
-        local_hello(&identity),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let (endpoint, mut session) = connect_paired(agent_key).await?;
 
     let Some(format) = session.set_audio(true).await.map_err(|e| e.to_string())? else {
         return Err("that PC cannot share audio (no sound card, or capture was refused)".into());
@@ -285,6 +261,55 @@ async fn cmd_listen(args: Vec<String>) -> Result<(), String> {
         println!("all silence — nothing was playing on that PC, or its output is muted");
     }
     Ok(())
+}
+
+/// Opens a control session to a PC this console has already paired with.
+async fn connect_paired(
+    agent_key: iroh::EndpointId,
+) -> Result<(iroh::Endpoint, ControlSession), String> {
+    let identity = load_identity()?;
+    let trust = TrustStore::load(&trust_path()).map_err(|e| e.to_string())?;
+    if !trust.is_trusted(agent_key.as_bytes()) {
+        return Err("that device is not paired with this console — run `pair` first".into());
+    }
+    let endpoint = net::bind(&identity).await.map_err(|e| e.to_string())?;
+    let session = ControlSession::connect(
+        &endpoint,
+        iroh::EndpointAddr::new(agent_key),
+        &trust,
+        local_hello(&identity),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok((endpoint, session))
+}
+
+/// Makes a paired PC do one thing: lock it, power it off, restart it, sign out, or cancel.
+async fn cmd_act(args: Vec<String>) -> Result<(), String> {
+    const USAGE: &str = "usage: cowatcher-console act <agent-endpoint-key> \
+        <lock-screen|shutdown|reboot|log-off|cancel-shutdown> [delay-seconds]";
+    let (Some(agent), Some(name)) = (args.first(), args.get(1)) else {
+        return Err(USAGE.into());
+    };
+    let agent_key: iroh::EndpointId = agent
+        .parse()
+        .map_err(|_| "invalid agent endpoint key".to_string())?;
+    let delay: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(60);
+    let action = manager::parse_action(name, delay).ok_or(USAGE)?;
+
+    let (endpoint, mut session) = connect_paired(agent_key).await?;
+    let outcome = session.perform(action).await.map_err(|e| e.to_string())?;
+    println!(
+        "{} → {}: {outcome:?}",
+        session.peer().device_id,
+        action.name()
+    );
+    session.close();
+    endpoint.close().await;
+    match outcome {
+        proto::ActionOutcome::Started { .. } => Ok(()),
+        proto::ActionOutcome::Failed(reason) => Err(reason.to_string()),
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

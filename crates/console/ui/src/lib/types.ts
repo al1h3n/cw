@@ -18,6 +18,16 @@ export interface Device {
   monitors: Monitor[]
   /** Which monitor is currently shown. */
   monitor: number
+  /** The answer to the last lock/power action sent to this PC. */
+  last_action: ActionReport | null
+}
+
+export interface ActionReport {
+  action: string
+  /** 'started' or a failure code; translated with the `result_*` strings. */
+  result: string
+  delay_seconds: number
+  at_ms: number
 }
 
 export interface PreviewWidths {

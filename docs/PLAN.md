@@ -189,6 +189,12 @@ Order = what a teacher needs first in a real lesson.
 - [ ] **2.2 Power.** Shutdown/reboot/log-off for all or selected PCs, with an optional countdown
   message. Wake-on-LAN: an online Agent in the same room sends the magic packet.
   **Done when:** VM test for each action; WoL is verified on one real PC.
+  *Done 2026-09-14 except WoL: `proto::Action` (closed enum, PROTOCOL_VERSION 2), `platform::power`
+  (InitiateSystemShutdownExW / AbortSystemShutdownW / ExitWindowsEx / LockWorkStation, privilege
+  enabled at start-up), agent `audit.log` (tab-separated, one line per action including refusals),
+  console room-wide and per-PC menu with a confirm step. Live on the dev PC: shutdown 300 s started,
+  cancelled, and a second cancel reported "nothing scheduled". **User TODO:** log-off and an actual
+  power-off on a VM or spare PC (not run on the dev machine for obvious reasons).*
 - [ ] **2.3 Lock screen on demand** (lock desktop from 0.8) with the teacher's message.
   **Done when:** the escape checklist from 0.8 passes on a real PC; the lock survives Agent helper restarts.
 - [ ] **2.4 Unlock codes + break-glass** (D10). Terminal command `unlock` → per-device offline OTP or

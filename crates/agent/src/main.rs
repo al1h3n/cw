@@ -4,7 +4,7 @@
 //! cowatcher-agent id                       show this device's id and endpoint key
 //! cowatcher-agent capture <file> [mon] [w] capture one thumbnail to a JPEG file
 //! cowatcher-agent pair <console-id> <code> enrol with a Console that is showing a code
-//! cowatcher-agent serve                    serve paired Consoles (thumbnails on request)
+//! cowatcher-agent serve                    serve paired Consoles (screens, audio, power, lock)
 //! cowatcher-agent sessions                 list the machine's login sessions
 //! cowatcher-agent supervise <prog> [args]  run a program and keep it alive
 //! cowatcher-agent version
@@ -13,6 +13,7 @@
 //! State (device key, trust store) lives in `%LOCALAPPDATA%\co-watcher\agent`, or the directory in
 //! `COWATCHER_DIR`. The SYSTEM service and per-session helper arrive in Phase 1.4b.
 
+mod audit;
 mod capture_source;
 mod supervisor;
 
@@ -96,6 +97,10 @@ fn load_identity() -> Result<Identity, String> {
     Identity::load_or_create(&dir.join("device.key")).map_err(|e| e.to_string())
 }
 
+fn audit_path() -> PathBuf {
+    data_dir().join("audit.log")
+}
+
 fn trust_path() -> PathBuf {
     data_dir().join("trust.bin")
 }
@@ -117,10 +122,10 @@ fn cmd_capture(args: &[String]) -> Result<(), String> {
     let monitor = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0u8);
     let max_width = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(320u16);
 
-    let capture = ScreenCapture::new().map_err(|e| e.to_string())?;
+    let capture = ScreenCapture::new(&audit_path()).map_err(|e| e.to_string())?;
     println!("monitors: {}", capture.monitor_count());
     let started = std::time::Instant::now();
-    let jpeg = net::CaptureSource::capture_thumbnail(&capture, monitor, max_width)
+    let jpeg = net::AgentDevice::capture_thumbnail(&capture, monitor, max_width)
         .map_err(|e| e.to_string())?;
     let elapsed = started.elapsed();
     std::fs::write(Path::new(file), &jpeg).map_err(|e| format!("write {file}: {e}"))?;
@@ -166,7 +171,11 @@ async fn cmd_serve() -> Result<(), String> {
             "no paired console yet — run `cowatcher-agent pair <console-key> <code>` first".into(),
         );
     }
-    let capture = ScreenCapture::new().map_err(|e| e.to_string())?;
+    let capture = ScreenCapture::new(&audit_path()).map_err(|e| e.to_string())?;
+    // Fail loudly at start-up rather than on the teacher's first click.
+    if let Err(err) = platform::power::enable_shutdown_privilege() {
+        eprintln!("warning: power actions will be refused: {err}");
+    }
     let endpoint = net::bind(&identity).await.map_err(|e| e.to_string())?;
     endpoint.online().await;
 
@@ -179,7 +188,10 @@ async fn cmd_serve() -> Result<(), String> {
     let local = net::LocalHello {
         role: Role::Agent,
         device_id: identity.device_id(),
-        capabilities: Capabilities::SCREEN_CAPTURE,
+        capabilities: Capabilities::SCREEN_CAPTURE
+            .union(Capabilities::AUDIO)
+            .union(Capabilities::LOCK)
+            .union(Capabilities::POWER),
     };
     loop {
         tokio::select! {
@@ -187,7 +199,7 @@ async fn cmd_serve() -> Result<(), String> {
             session = net::ControlSession::accept(&endpoint, &trust, local) => match session {
                 Ok(session) => {
                     println!("console {} connected", session.peer().device_id);
-                    if let Err(err) = session.serve_thumbnails(&capture).await {
+                    if let Err(err) = session.serve(&capture).await {
                         eprintln!("session ended: {err}");
                     } else {
                         println!("console disconnected");

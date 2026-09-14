@@ -9,7 +9,10 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 ///
 /// Bump it on every breaking change to message layout or meaning. Peers with different
 /// versions must refuse the session with a clear error instead of guessing.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Version 2 added remote actions (`Perform`/`ActionDone`), which shifted the later `Control`
+/// discriminants — a version-1 peer would decode them as the wrong message, so the handshake must
+/// refuse it.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 mod device_id;
 mod pairing;
@@ -18,6 +21,6 @@ mod wire;
 pub use device_id::{DeviceId, DeviceIdParseError};
 pub use pairing::{PairMessage, PairRejection};
 pub use wire::{
-    AudioFormat, Capabilities, Control, DecodeError, Hello, Monitor, ProtocolError, Role, decode,
-    encode, version_compatible,
+    Action, ActionFailure, ActionOutcome, AudioFormat, Capabilities, Control, DecodeError, Hello,
+    Monitor, ProtocolError, Role, decode, encode, version_compatible,
 };

@@ -45,6 +45,55 @@ pub struct DeviceView {
     pub monitors: Vec<proto::Monitor>,
     /// Which monitor is being shown.
     pub monitor: u8,
+    /// What happened to the last action sent to this PC, for the UI to show.
+    pub last_action: Option<ActionReport>,
+}
+
+/// The answer to one action, in codes the UI translates (D17: Rust sends codes, not text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct ActionReport {
+    /// The stable action name, e.g. `shutdown` (see [`proto::Action::name`]).
+    pub action: &'static str,
+    /// `started`, or why not: `notSupported`, `notPermitted`, `nothingScheduled`, `failed`.
+    pub result: &'static str,
+    /// Countdown the PC actually started, after its own clamping.
+    pub delay_seconds: u16,
+    /// When the answer arrived, so the UI can fade old reports.
+    pub at_ms: u64,
+}
+
+impl ActionReport {
+    fn new(action: proto::Action, outcome: proto::ActionOutcome) -> Self {
+        use proto::{ActionFailure, ActionOutcome};
+        let (result, delay_seconds) = match outcome {
+            ActionOutcome::Started { delay_seconds } => ("started", delay_seconds),
+            ActionOutcome::Failed(ActionFailure::NotSupported) => ("notSupported", 0),
+            ActionOutcome::Failed(ActionFailure::NotPermitted) => ("notPermitted", 0),
+            ActionOutcome::Failed(ActionFailure::NothingScheduled) => ("nothingScheduled", 0),
+            ActionOutcome::Failed(ActionFailure::Failed) => ("failed", 0),
+        };
+        Self {
+            action: action.name(),
+            result,
+            delay_seconds,
+            at_ms: net::endpoint::now_ms(),
+        }
+    }
+}
+
+/// Turns the UI's action name back into a typed action. Unknown names are refused, never guessed.
+#[must_use]
+pub fn parse_action(name: &str, delay_seconds: u16) -> Option<proto::Action> {
+    use proto::Action;
+    [
+        Action::Shutdown { delay_seconds },
+        Action::Reboot { delay_seconds },
+        Action::LogOff,
+        Action::LockScreen,
+        Action::CancelShutdown,
+    ]
+    .into_iter()
+    .find(|action| action.name() == name)
 }
 
 /// Connection state of one device, in the order the UI colours them.
@@ -70,6 +119,9 @@ struct DeviceState {
     detail: Option<String>,
     monitors: Vec<proto::Monitor>,
     monitor: u8,
+    /// Actions the teacher asked for that the device's task has not sent yet.
+    pending: Vec<proto::Action>,
+    last_action: Option<ActionReport>,
 }
 
 impl DeviceState {
@@ -82,6 +134,8 @@ impl DeviceState {
             detail: None,
             monitors: Vec::new(),
             monitor: 0,
+            pending: Vec::new(),
+            last_action: None,
         }
     }
 }
@@ -188,6 +242,7 @@ impl DeviceManager {
                 detail: state.detail.clone(),
                 monitors: state.monitors.clone(),
                 monitor: state.monitor,
+                last_action: state.last_action,
             })
             .collect()
     }
@@ -276,6 +331,51 @@ impl DeviceManager {
         // Drop the old screen so the tile does not show the previous monitor while the new one loads.
         state.screen = None;
         Ok(())
+    }
+
+    /// Queues an action for PCs: one by id, or every connected PC when `device_id` is `None`.
+    ///
+    /// Only connected PCs are acted on. Queuing a shutdown for an offline PC would fire it the next
+    /// morning when someone switches that PC on, which nobody wants. Returns how many PCs it went to.
+    ///
+    /// # Errors
+    /// Returns a message if the named PC is unknown or not connected.
+    pub fn perform(&self, device_id: Option<&str>, action: proto::Action) -> Result<usize, String> {
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(id) = device_id {
+            let state = devices
+                .get_mut(id)
+                .ok_or_else(|| "unknown device".to_string())?;
+            if state.status != DeviceStatus::Live {
+                return Err("that PC is not connected".into());
+            }
+            state.pending.push(action);
+            return Ok(1);
+        }
+        let mut sent = 0;
+        for state in devices.values_mut() {
+            if state.status == DeviceStatus::Live {
+                state.pending.push(action);
+                sent += 1;
+            }
+        }
+        Ok(sent)
+    }
+
+    /// Takes the queued actions for one device, leaving its queue empty.
+    fn take_pending(&self, id: &str) -> Vec<proto::Action> {
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        devices
+            .get_mut(id)
+            .map(|state| std::mem::take(&mut state.pending))
+            .unwrap_or_default()
+    }
+
+    fn set_last_action(&self, id: &str, report: ActionReport) {
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(state) = devices.get_mut(id) {
+            state.last_action = Some(report);
+        }
     }
 
     /// Binds the shared endpoint once, reusing it for every device.
@@ -374,6 +474,14 @@ impl DeviceManager {
         let mut audio_on: Option<proto::AudioFormat> = None;
 
         loop {
+            // Actions first: a teacher's click should not wait behind a screen refresh.
+            // ponytail: picked up on the next loop turn, so up to one refresh interval (1 s) late;
+            // wake the loop with a Notify if teachers find that sluggish.
+            for action in self.take_pending(id) {
+                let outcome = session.perform(action).await.map_err(|e| e.to_string())?;
+                self.set_last_action(id, ActionReport::new(action, outcome));
+            }
+
             let (monitor, width, focused) = self.request_shape(id, key);
             let jpeg = session
                 .request_thumbnail(monitor, width)
@@ -478,6 +586,10 @@ impl DeviceManager {
     fn set_status(&self, id: &str, status: DeviceStatus, detail: Option<String>) {
         let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(state) = devices.get_mut(id) {
+            if status != DeviceStatus::Live {
+                // Anything still queued was for a connection that no longer exists; see `perform`.
+                state.pending.clear();
+            }
             state.status = status;
             state.detail = detail;
         }
@@ -564,6 +676,32 @@ mod tests {
     fn base64_handles_high_bytes() {
         // JPEG starts with 0xFF 0xD8 0xFF: make sure the non-ASCII path is right.
         assert_eq!(base64(&[0xFF, 0xD8, 0xFF]), "/9j/");
+    }
+
+    #[test]
+    fn every_action_name_parses_back_to_itself() {
+        for name in [
+            "shutdown",
+            "reboot",
+            "log-off",
+            "lock-screen",
+            "cancel-shutdown",
+        ] {
+            assert_eq!(parse_action(name, 30).map(proto::Action::name), Some(name));
+        }
+    }
+
+    #[test]
+    fn an_unknown_action_name_is_refused() {
+        assert_eq!(parse_action("format-c", 0), None);
+    }
+
+    #[test]
+    fn the_delay_reaches_power_actions() {
+        assert_eq!(
+            parse_action("reboot", 45),
+            Some(proto::Action::Reboot { delay_seconds: 45 })
+        );
     }
 
     #[test]

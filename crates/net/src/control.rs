@@ -43,11 +43,21 @@ pub struct PeerInfo {
     pub capabilities: Capabilities,
 }
 
-/// Produces screen thumbnails on demand. The Agent supplies one; tests supply a fake.
+/// Everything a Console can ask of a student PC: screens, sound, and the fixed list of actions.
+/// The Agent supplies the real one; tests supply a fake.
 ///
-/// Capture happens only when [`capture_thumbnail`](CaptureSource::capture_thumbnail) is called, which
+/// Capture happens only when [`capture_thumbnail`](AgentDevice::capture_thumbnail) is called, which
 /// is only when a Console asks — there is no background capture loop to leave running.
-pub trait CaptureSource {
+pub trait AgentDevice {
+    /// Carries out one [`proto::Action`] and reports what happened.
+    ///
+    /// The default refuses everything, so a device that only shares its screen is still valid.
+    /// `from` is the Console asking, so the device can write it into its audit log (D3).
+    fn perform(&self, from: &PeerInfo, action: proto::Action) -> proto::ActionOutcome {
+        let _ = (from, action);
+        proto::ActionOutcome::Failed(proto::ActionFailure::NotSupported)
+    }
+
     /// Returns a JPEG of `monitor`, scaled to at most `max_width` pixels wide.
     ///
     /// # Errors
@@ -216,17 +226,33 @@ impl ControlSession {
         }
     }
 
-    /// Agent side: serve thumbnail requests until the Console closes the session.
+    /// Console side: ask the Agent to do one [`proto::Action`] and wait for its answer.
+    ///
+    /// # Errors
+    /// Stream failure, or a reply that does not match the requested action.
+    pub async fn perform(
+        &mut self,
+        action: proto::Action,
+    ) -> Result<proto::ActionOutcome, EndpointError> {
+        write_message(&mut self.send, &Control::Perform(action)).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::ActionDone {
+                action: done,
+                outcome,
+            } if done == action => Ok(outcome),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Agent side: serve Console requests until the Console closes the session.
     ///
     /// Returns `Ok(())` on a clean close. Capture happens only inside a request, so this loop is idle
     /// (no CPU, no capture) whenever the Console is not asking.
     ///
     /// # Errors
     /// A capture error ends the session with [`EndpointError::Capture`].
-    pub async fn serve_thumbnails(
-        mut self,
-        source: &impl CaptureSource,
-    ) -> Result<(), EndpointError> {
+    pub async fn serve(mut self, source: &impl AgentDevice) -> Result<(), EndpointError> {
         let mut seq = 0u64;
         let mut audio_seq = 0u64;
         loop {
@@ -265,6 +291,10 @@ impl ControlSession {
                         },
                     )
                     .await?;
+                }
+                Control::Perform(action) => {
+                    let outcome = source.perform(&self.peer, action);
+                    write_message(&mut self.send, &Control::ActionDone { action, outcome }).await?;
                 }
                 Control::Ping(nonce) => {
                     write_message(&mut self.send, &Control::Pong(nonce)).await?

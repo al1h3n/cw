@@ -16,7 +16,7 @@ use std::{
 };
 
 use net::{
-    CaptureError, CaptureSource, ControlSession, Identity, LocalHello, TrustStore, bind,
+    AgentDevice, CaptureError, ControlSession, Identity, LocalHello, TrustStore, bind,
     endpoint::EndpointError,
 };
 use proto::{Capabilities, DeviceId, Monitor, ProtocolError, Role};
@@ -72,7 +72,17 @@ struct FakeCapture {
     last_request: Arc<AtomicU32>,
 }
 
-impl CaptureSource for FakeCapture {
+impl AgentDevice for FakeCapture {
+    fn perform(&self, from: &net::PeerInfo, action: proto::Action) -> proto::ActionOutcome {
+        // Refuse anything but locking, and only from a Console, so both paths cross the wire.
+        match action {
+            proto::Action::LockScreen if from.role == Role::Console => {
+                proto::ActionOutcome::Started { delay_seconds: 0 }
+            }
+            _ => proto::ActionOutcome::Failed(proto::ActionFailure::NotPermitted),
+        }
+    }
+
     fn capture_thumbnail(&self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.last_request.store(
@@ -123,7 +133,7 @@ fn trusted_console_gets_thumbnails_only_on_request() {
         let agent_hello = agent_id.hello(Role::Agent, Capabilities::SCREEN_CAPTURE);
         let agent_task = tokio::spawn(async move {
             let session = ControlSession::accept(&agent_ep, &agent_trust, agent_hello).await?;
-            session.serve_thumbnails(&capture).await
+            session.serve(&capture).await
         });
 
         let console_hello = console_id.hello(Role::Console, Capabilities::EMPTY);
@@ -175,6 +185,22 @@ fn trusted_console_gets_thumbnails_only_on_request() {
             "the requested width reached the capture source"
         );
 
+        // Actions travel as typed values and the device sees who asked.
+        assert_eq!(
+            session
+                .perform(proto::Action::LockScreen)
+                .await
+                .expect("lock"),
+            proto::ActionOutcome::Started { delay_seconds: 0 }
+        );
+        assert_eq!(
+            session
+                .perform(proto::Action::Shutdown { delay_seconds: 60 })
+                .await
+                .expect("shutdown reply"),
+            proto::ActionOutcome::Failed(proto::ActionFailure::NotPermitted)
+        );
+
         session.close();
         agent_task
             .await
@@ -204,7 +230,7 @@ fn untrusted_console_is_refused() {
         let agent_task = tokio::spawn(async move {
             let capture = FakeCapture::default();
             match ControlSession::accept(&agent_ep, &agent_trust, agent_hello).await {
-                Ok(session) => session.serve_thumbnails(&capture).await,
+                Ok(session) => session.serve(&capture).await,
                 Err(err) => Err(err),
             }
         });

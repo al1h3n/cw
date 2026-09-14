@@ -4,6 +4,7 @@
   import DeviceTile from './lib/DeviceTile.svelte'
   import PairDialog from './lib/PairDialog.svelte'
   import Focused from './lib/Focused.svelte'
+  import ActionMenu from './lib/ActionMenu.svelte'
   import LanguagePicker from './lib/LanguagePicker.svelte'
   import QualityPicker from './lib/QualityPicker.svelte'
   import { i18n, t } from './lib/i18n.svelte'
@@ -122,6 +123,9 @@
         {watching ? t('stopWatching') : t('startWatching')}
       </button>
       <button onclick={() => (pairing = true)}>{t('addPc')}</button>
+      {#if watching}
+        <ActionMenu deviceId={null} liveCount={live} onerror={(m) => (error = m)} />
+      {/if}
     </div>
   </header>
 
@@ -187,6 +191,7 @@
     onmonitor={(index) => chooseMonitor(focusedDevice.device_id, index)}
     listening={listeningTo === focusedDevice.device_id}
     onlisten={(on) => listen(on ? focusedDevice.device_id : null)}
+    onerror={(m) => (error = m)}
   />
 {/if}
 

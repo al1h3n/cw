@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from './i18n.svelte'
   import type { Device } from './types'
+  import ActionResult from './ActionResult.svelte'
 
   let {
     device,
@@ -38,6 +39,7 @@
   <div class="bar">
     <span class="id">{device.device_id}</span>
     <span class="status">
+      <ActionResult report={device.last_action} />
       <i class="dot {device.status}"></i>
       {device.detail ?? label}
     </span>

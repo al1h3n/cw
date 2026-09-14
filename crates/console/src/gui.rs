@@ -187,6 +187,20 @@ fn set_monitor(state: State<'_, AppState>, device_id: String, monitor: u8) -> Re
     state.manager.set_monitor(&device_id, monitor)
 }
 
+/// Sends one action to one PC, or to every connected PC when `device_id` is absent.
+/// Returns how many PCs it was sent to; answers appear on each device's `last_action`.
+#[tauri::command]
+fn perform(
+    state: State<'_, AppState>,
+    device_id: Option<String>,
+    action: String,
+    delay_seconds: Option<u16>,
+) -> Result<usize, String> {
+    let action = crate::manager::parse_action(&action, delay_seconds.unwrap_or(0))
+        .ok_or_else(|| format!("unknown action '{action}'"))?;
+    state.manager.perform(device_id.as_deref(), action)
+}
+
 /// Generates the code the teacher reads out, and returns the exact command for the student PC.
 #[derive(serde::Serialize)]
 struct PairingInvite {
@@ -244,6 +258,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             set_preview_widths,
             set_focused,
             set_monitor,
+            perform,
             set_listening,
             listening,
             translation,

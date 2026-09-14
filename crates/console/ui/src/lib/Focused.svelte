@@ -1,6 +1,8 @@
 <script lang="ts">
   import { t } from './i18n.svelte'
   import type { Device } from './types'
+  import ActionMenu from './ActionMenu.svelte'
+  import ActionResult from './ActionResult.svelte'
 
   let {
     device,
@@ -8,12 +10,14 @@
     onmonitor,
     listening,
     onlisten,
+    onerror,
   }: {
     device: Device
     onclose: () => void
     onmonitor: (index: number) => void
     listening: boolean
     onlisten: (on: boolean) => void
+    onerror: (message: string) => void
   } = $props()
 
   function onkey(event: KeyboardEvent) {
@@ -53,6 +57,8 @@
       >
         {listening ? t('listenStop') : t('listenStart')}
       </button>
+      <ActionResult report={device.last_action} />
+      <ActionMenu deviceId={device.device_id} liveCount={device.status === 'live' ? 1 : 0} {onerror} />
       <button onclick={onclose}>{t('close')}</button>
     </header>
     <div class="screen">
