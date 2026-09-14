@@ -64,8 +64,9 @@ fn main() -> ExitCode {
         Some("block") => block_on(cmd_block(rest)),
         Some("control") => block_on(cmd_control(rest)),
         Some("apps") => block_on(cmd_apps(rest)),
+        Some("record") => block_on(cmd_record(rest)),
         _ => Err(
-            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|apps|version]  (no arguments opens the window)"
+            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|apps|record|version]  (no arguments opens the window)"
                 .into(),
         ),
     };
@@ -317,6 +318,63 @@ async fn cmd_act(args: Vec<String>) -> Result<(), String> {
         proto::ActionOutcome::Started { .. } => Ok(()),
         proto::ActionOutcome::Failed(reason) => Err(reason.to_string()),
     }
+}
+
+/// Records a paired PC's screen for a few seconds at a chosen size and frame rate.
+async fn cmd_record(args: Vec<String>) -> Result<(), String> {
+    let Some(agent) = args.first() else {
+        return Err(
+            "usage: cowatcher-console record <agent-endpoint-key> [seconds] [width] [height] [fps]"
+                .into(),
+        );
+    };
+    let agent_key: iroh::EndpointId = agent
+        .parse()
+        .map_err(|_| "invalid agent endpoint key".to_string())?;
+    let seconds: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5);
+    let width: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1920);
+    let height: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1080);
+    let fps: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(30);
+
+    let (endpoint, mut session) = connect_paired(agent_key).await?;
+    let started = session
+        .start_recording(0, width, height, fps)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !started.active {
+        session.close();
+        endpoint.close().await;
+        return Err(format!("recording did not start: {}", started.problem));
+    }
+    println!(
+        "asked for {width}x{height} @ {fps} fps; recording {}x{} @ {} fps into {}",
+        started.width, started.height, started.fps, started.file
+    );
+
+    tokio::time::sleep(Duration::from_secs(seconds)).await;
+    let mid = session
+        .recording_status()
+        .await
+        .map_err(|e| e.to_string())?;
+    println!("after {seconds}s: {} frames written", mid.frames);
+
+    let done = session.stop_recording().await.map_err(|e| e.to_string())?;
+    println!(
+        "stopped: {} frames ({:.1} s of video at {} fps)",
+        done.frames,
+        done.frames as f32 / done.fps.max(1) as f32,
+        done.fps
+    );
+    if !done.problem.is_empty() {
+        println!("note: {}", done.problem);
+    }
+
+    for recording in session.list_recordings().await.map_err(|e| e.to_string())? {
+        println!("  {}  {} KB", recording.file, recording.bytes / 1024);
+    }
+    session.close();
+    endpoint.close().await;
+    Ok(())
 }
 
 /// Lists what a paired PC can start and what is running, and optionally starts or closes one.

@@ -152,6 +152,35 @@ pub enum InputEvent {
     ReleaseAll,
 }
 
+/// How a recording is going, as the Agent reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingInfo {
+    /// Whether a recording is running right now.
+    pub active: bool,
+    /// The file being written, by name only — a Console has no business knowing a student's disk
+    /// layout, and a name is all it needs to ask for the file later.
+    pub file: String,
+    /// Frames written so far.
+    pub frames: u32,
+    /// The size actually being recorded, after clamping and keeping the aspect ratio.
+    pub width: u32,
+    /// The height actually being recorded.
+    pub height: u32,
+    /// The frame rate actually in use, after clamping.
+    pub fps: u32,
+    /// Empty unless something went wrong, so a teacher learns why a recording stopped.
+    pub problem: String,
+}
+
+/// One recording stored on a student PC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredRecording {
+    /// File name, which begins with a time-ordered [`crate::RecordId`] so the list sorts by age.
+    pub file: String,
+    /// Size on disk, so a teacher can see what collecting it would cost.
+    pub bytes: u64,
+}
+
 /// One program a PC offers to start, as published by the Agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppEntry {
@@ -356,6 +385,30 @@ pub enum Control {
         /// Names closed since the previous state message, capped so the reply stays small.
         closed: Vec<String>,
     },
+    /// Console → Agent: start recording this PC's screen to a file on that PC.
+    ///
+    /// The Agent clamps every value and reports back what it is *actually* recording, so a teacher
+    /// who asks for 144 fps sees that they are getting 30 rather than being silently ignored.
+    StartRecording {
+        /// Which monitor to record.
+        monitor: u8,
+        /// Widest the saved video may be; the real size keeps the screen's aspect ratio.
+        max_width: u32,
+        /// Tallest the saved video may be.
+        max_height: u32,
+        /// Frames per second to capture.
+        fps: u32,
+    },
+    /// Console → Agent: stop recording and close the file.
+    StopRecording,
+    /// Console → Agent: how is the recording going?
+    RecordingStatus,
+    /// Agent → Console: the state of the recording on that PC.
+    RecordingState(RecordingInfo),
+    /// Console → Agent: what recordings are stored on this PC?
+    ListRecordings,
+    /// Agent → Console: the recordings it has kept.
+    Recordings(Vec<StoredRecording>),
     /// Console → Agent: what programs can this PC start?
     ListApps,
     /// Agent → Console: the programs it offers, as `(id, name)` pairs.

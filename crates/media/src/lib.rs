@@ -38,6 +38,8 @@ impl CaptureError {
 }
 
 pub mod audio;
+pub mod recorder;
+pub mod resize;
 
 #[cfg(windows)]
 mod gdi;
@@ -45,7 +47,7 @@ mod gdi;
 mod windows_capture;
 
 #[cfg(windows)]
-pub use windows_capture::ThumbnailCapturer;
+pub use windows_capture::{ThumbnailCapturer, encode_bgra};
 
 #[cfg(not(windows))]
 mod stub {

@@ -141,6 +141,29 @@ impl ThumbnailCapturer {
         }
     }
 
+    /// Captures `monitor` as raw BGRA pixels at (close to) its native size.
+    ///
+    /// Recording needs the *unscaled* frame, because the exact output size is reached afterwards by
+    /// [`crate::resize::area_average`] — resizing twice, once by the GPU's whole-number mip step and
+    /// once properly, would throw away detail for nothing.
+    ///
+    /// `ponytail:` this takes the GDI path, which is a straightforward BitBlt of the monitor's
+    /// rectangle and costs a few milliseconds at 1440p — fine at the 1–30 fps a lesson recording
+    /// uses. Wiring it into the Desktop Duplication path is the upgrade if a higher rate is ever
+    /// wanted; the recorder above would not change.
+    ///
+    /// # Errors
+    /// Returns [`CaptureError`] if the monitor is missing or the grab fails.
+    pub fn capture_bgra(&mut self, monitor: u8) -> Result<(Vec<u8>, u32, u32), CaptureError> {
+        if usize::from(monitor) >= self.monitors.len() {
+            return Err(CaptureError(format!("monitor {monitor} not attached")));
+        }
+        let area = output_area(&self.device, monitor)
+            .ok_or_else(|| CaptureError(format!("monitor {monitor} has no desktop area")))?;
+        // u16::MAX as the cap means "do not downscale": the caller resizes properly.
+        crate::gdi::capture_area_bgra(area, u16::MAX)
+    }
+
     /// Grabs this monitor's area with GDI and encodes it, caching it like a normal capture.
     ///
     /// The rectangle comes from the output description, so a second monitor gets *its own* pixels
@@ -193,7 +216,8 @@ impl ThumbnailCapturer {
 }
 
 /// Encodes packed BGRA pixels as JPEG.
-fn encode_bgra(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, CaptureError> {
+/// Encodes packed BGRA pixels as JPEG. Public so the recorder can encode a resized frame.
+pub fn encode_bgra(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, CaptureError> {
     let mut jpeg = Vec::new();
     Encoder::new(&mut jpeg, QUALITY)
         .encode(pixels, width as u16, height as u16, ColorType::Bgra)

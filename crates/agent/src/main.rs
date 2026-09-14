@@ -19,6 +19,8 @@ mod audit;
 mod blocker;
 mod capture_source;
 mod membership;
+mod record_id;
+mod recording;
 mod supervisor;
 
 use std::{
@@ -138,8 +140,12 @@ fn cmd_capture(args: &[String]) -> Result<(), String> {
     let monitor = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0u8);
     let max_width = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(320u16);
 
-    let capture =
-        ScreenCapture::new(&audit_path(), &blocklist_path()).map_err(|e| e.to_string())?;
+    let capture = ScreenCapture::new(
+        &audit_path(),
+        &blocklist_path(),
+        &recording::directory(&data_dir()),
+    )
+    .map_err(|e| e.to_string())?;
     println!("monitors: {}", capture.monitor_count());
     let started = std::time::Instant::now();
     let jpeg = net::AgentDevice::capture_thumbnail(&capture, monitor, max_width)
@@ -193,8 +199,12 @@ async fn cmd_serve() -> Result<(), String> {
             "no paired console yet — run `cowatcher-agent pair <console-key> <code>` first".into(),
         );
     }
-    let capture =
-        ScreenCapture::new(&audit_path(), &blocklist_path()).map_err(|e| e.to_string())?;
+    let capture = ScreenCapture::new(
+        &audit_path(),
+        &blocklist_path(),
+        &recording::directory(&data_dir()),
+    )
+    .map_err(|e| e.to_string())?;
     // Fail loudly at start-up rather than on the teacher's first click.
     if let Err(err) = platform::power::enable_shutdown_privilege() {
         eprintln!("warning: power actions will be refused: {err}");

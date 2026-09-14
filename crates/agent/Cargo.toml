@@ -17,6 +17,7 @@ media = { path = "../media" }
 net = { path = "../net" }
 platform = { path = "../platform" }
 proto = { path = "../proto" }
+rand = "0.10" # UUIDv7 random half; already in the tree via iroh
 thiserror = "2" # typed leave/membership errors, as the workspace does elsewhere
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 

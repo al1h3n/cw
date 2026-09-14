@@ -25,6 +25,23 @@ pub struct ScreenCapture {
     /// True only while a Console has explicitly taken control of the mouse and keyboard.
     /// Input is dropped unless this is set, so a stray message can never move a student's pointer.
     controlled: Mutex<bool>,
+    /// The screen recording in progress, if any. Dropping it closes the file.
+    recording: Mutex<Option<crate::recording::Recording>>,
+    /// Where recordings are written.
+    recordings_dir: std::path::PathBuf,
+}
+
+/// Converts the agent's own recording status into the wire shape.
+fn to_wire_recording(status: &crate::recording::RecordingStatus) -> proto::RecordingInfo {
+    proto::RecordingInfo {
+        active: status.active,
+        file: status.file.clone(),
+        frames: status.frames,
+        width: status.width,
+        height: status.height,
+        fps: status.fps,
+        problem: status.problem.clone(),
+    }
 }
 
 impl ScreenCapture {
@@ -32,7 +49,11 @@ impl ScreenCapture {
     ///
     /// # Errors
     /// Returns [`CaptureError`] if the graphics device is unavailable (e.g. a headless session).
-    pub fn new(audit_path: &Path, blocklist_path: &Path) -> Result<Self, CaptureError> {
+    pub fn new(
+        audit_path: &Path,
+        blocklist_path: &Path,
+        recordings_dir: &Path,
+    ) -> Result<Self, CaptureError> {
         let capturer = media::ThumbnailCapturer::new().map_err(|e| CaptureError(e.to_string()))?;
         Ok(Self {
             capturer: Mutex::new(capturer),
@@ -40,6 +61,8 @@ impl ScreenCapture {
             audit: AuditLog::new(audit_path),
             blocker: crate::blocker::Blocker::start(blocklist_path),
             controlled: Mutex::new(false),
+            recording: Mutex::new(None),
+            recordings_dir: recordings_dir.to_path_buf(),
         })
     }
 
@@ -217,6 +240,78 @@ impl AgentDevice for ScreenCapture {
                     .map_or_else(Vec::new, |c| c.take(max_samples))
             },
         )
+    }
+
+    fn start_recording(
+        &self,
+        from: &PeerInfo,
+        monitor: u8,
+        max_width: u32,
+        max_height: u32,
+        fps: u32,
+    ) -> proto::RecordingInfo {
+        let settings = media::recorder::RecordingSettings {
+            max_width,
+            max_height,
+            fps,
+        };
+        let mut slot = self.recording.lock().unwrap_or_else(|e| e.into_inner());
+        // Dropping the old recording closes its file tidily before a new one starts.
+        *slot = None;
+        let recording = crate::recording::Recording::start(&self.recordings_dir, monitor, settings);
+        let info = to_wire_recording(&recording.status());
+        println!("console {} started recording", from.device_id);
+        let _ = self
+            .audit
+            .note(net::endpoint::now_ms(), from.device_id, "record-start");
+        *slot = Some(recording);
+        info
+    }
+
+    fn stop_recording(&self, from: &PeerInfo) -> proto::RecordingInfo {
+        let mut slot = self.recording.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(recording) = slot.take() else {
+            return to_wire_recording(&crate::recording::RecordingStatus::default());
+        };
+        // finish() joins the worker, so the status it returns already carries the frame rate the
+        // PC actually achieved and the final frame count.
+        let status = recording.finish();
+        println!("console {} stopped recording", from.device_id);
+        let _ = self
+            .audit
+            .note(net::endpoint::now_ms(), from.device_id, "record-stop");
+        let mut info = to_wire_recording(&status);
+        info.active = false;
+        info
+    }
+
+    fn recording_status(&self) -> proto::RecordingInfo {
+        let slot = self.recording.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.as_ref() {
+            Some(recording) => to_wire_recording(&recording.status()),
+            None => to_wire_recording(&crate::recording::RecordingStatus::default()),
+        }
+    }
+
+    fn list_recordings(&self) -> Vec<proto::StoredRecording> {
+        let Ok(entries) = std::fs::read_dir(&self.recordings_dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<proto::StoredRecording> = entries
+            .flatten()
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("avi"))
+            })
+            .map(|e| proto::StoredRecording {
+                file: e.file_name().to_string_lossy().to_string(),
+                bytes: e.metadata().map(|m| m.len()).unwrap_or(0),
+            })
+            .collect();
+        // File names start with a UUIDv7, so sorting by name sorts by when it was recorded.
+        out.sort_by(|a, b| a.file.cmp(&b.file));
+        out
     }
 
     fn list_apps(&self) -> Vec<proto::AppEntry> {

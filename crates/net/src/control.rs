@@ -97,6 +97,53 @@ pub trait AgentDevice {
         Vec::new()
     }
 
+    /// Starts recording this PC's screen, returning what it is actually recording.
+    ///
+    /// The default refuses by reporting an inactive recording, so a device that cannot record simply
+    /// shows as not recording.
+    fn start_recording(
+        &self,
+        from: &PeerInfo,
+        monitor: u8,
+        max_width: u32,
+        max_height: u32,
+        fps: u32,
+    ) -> proto::RecordingInfo {
+        let _ = (from, monitor, max_width, max_height, fps);
+        proto::RecordingInfo {
+            active: false,
+            file: String::new(),
+            frames: 0,
+            width: 0,
+            height: 0,
+            fps: 0,
+            problem: "this device cannot record its screen".into(),
+        }
+    }
+
+    /// Stops any recording and reports the final state.
+    fn stop_recording(&self, from: &PeerInfo) -> proto::RecordingInfo {
+        self.start_recording(from, 0, 0, 0, 0)
+    }
+
+    /// How the current recording is going.
+    fn recording_status(&self) -> proto::RecordingInfo {
+        proto::RecordingInfo {
+            active: false,
+            file: String::new(),
+            frames: 0,
+            width: 0,
+            height: 0,
+            fps: 0,
+            problem: String::new(),
+        }
+    }
+
+    /// The recordings stored on this PC.
+    fn list_recordings(&self) -> Vec<proto::StoredRecording> {
+        Vec::new()
+    }
+
     /// The programs this PC offers to start.
     ///
     /// The Agent publishes its own catalogue; a Console can only pick from it. The default offers
@@ -302,6 +349,72 @@ impl ControlSession {
         }
     }
 
+    /// Console side: start recording this PC's screen.
+    ///
+    /// Returns what the PC is *actually* recording after clamping.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn start_recording(
+        &mut self,
+        monitor: u8,
+        max_width: u32,
+        max_height: u32,
+        fps: u32,
+    ) -> Result<proto::RecordingInfo, EndpointError> {
+        write_message(
+            &mut self.send,
+            &Control::StartRecording {
+                monitor,
+                max_width,
+                max_height,
+                fps,
+            },
+        )
+        .await?;
+        self.read_recording_state().await
+    }
+
+    /// Console side: stop the recording on this PC.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn stop_recording(&mut self) -> Result<proto::RecordingInfo, EndpointError> {
+        write_message(&mut self.send, &Control::StopRecording).await?;
+        self.read_recording_state().await
+    }
+
+    /// Console side: ask how the recording is going.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn recording_status(&mut self) -> Result<proto::RecordingInfo, EndpointError> {
+        write_message(&mut self.send, &Control::RecordingStatus).await?;
+        self.read_recording_state().await
+    }
+
+    /// Console side: list the recordings kept on this PC.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn list_recordings(&mut self) -> Result<Vec<proto::StoredRecording>, EndpointError> {
+        write_message(&mut self.send, &Control::ListRecordings).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::Recordings(list) => Ok(list),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Reads the one reply every recording request produces.
+    async fn read_recording_state(&mut self) -> Result<proto::RecordingInfo, EndpointError> {
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::RecordingState(info) => Ok(info),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Console side: ask what programs this PC can start.
     ///
     /// # Errors
@@ -455,6 +568,28 @@ impl ControlSession {
                         },
                     )
                     .await?;
+                }
+                Control::StartRecording {
+                    monitor,
+                    max_width,
+                    max_height,
+                    fps,
+                } => {
+                    let info =
+                        source.start_recording(&self.peer, monitor, max_width, max_height, fps);
+                    write_message(&mut self.send, &Control::RecordingState(info)).await?;
+                }
+                Control::StopRecording => {
+                    let info = source.stop_recording(&self.peer);
+                    write_message(&mut self.send, &Control::RecordingState(info)).await?;
+                }
+                Control::RecordingStatus => {
+                    let info = source.recording_status();
+                    write_message(&mut self.send, &Control::RecordingState(info)).await?;
+                }
+                Control::ListRecordings => {
+                    let list = source.list_recordings();
+                    write_message(&mut self.send, &Control::Recordings(list)).await?;
                 }
                 Control::ListApps => {
                     write_message(&mut self.send, &Control::Apps(source.list_apps())).await?;
