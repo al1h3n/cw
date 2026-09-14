@@ -88,7 +88,7 @@
 
 ## Phase 1 — Walking skeleton: 1 Console ↔ 1 Agent, Windows, LAN (≈4–6 weeks)
 
-- [x] **1.1 Identity.** Device keypair on first run, stored with DPAPI. Device ID = 9 digits derived
+- [x] **1.1 Identity.** Device keypair on first run, stored with DPAPI. Device ID = 6 characters derived
   from the key (the Hub resolves collisions later). → `proto::DeviceId`, `net::Identity`,
   `platform::secret`.
   **Done when:** unit tests — the key persists across restarts, and the ID is stable and the right format.

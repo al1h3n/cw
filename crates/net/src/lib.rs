@@ -8,6 +8,7 @@ pub mod control;
 pub mod endpoint;
 pub mod identity;
 pub mod pairing;
+pub mod room;
 
 pub use control::{AgentDevice, CaptureError, ControlSession, LocalHello, PeerInfo};
 pub use endpoint::{
@@ -17,3 +18,4 @@ pub use identity::{Identity, IdentityError};
 pub use pairing::{
     PairingCode, PairingCodeParseError, PairingSession, TrustStore, TrustStoreError,
 };
+pub use room::{RoomError, RoomPassword, RoomSecret};

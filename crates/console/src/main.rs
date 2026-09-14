@@ -19,6 +19,7 @@
 mod gui;
 mod i18n;
 mod manager;
+mod room;
 
 use std::{
     path::PathBuf,
@@ -149,7 +150,10 @@ async fn cmd_pair() -> Result<(), String> {
     );
     println!("code {code} is valid for 5 minutes; waiting...");
 
-    let peer = net::console_accept_pairing(&endpoint, &mut session, &mut trust)
+    let room = room::load_or_create(&data_dir())?;
+    let welcome = room.welcome()?;
+    println!("room        : {}", room.name);
+    let peer = net::console_accept_pairing(&endpoint, &mut session, &mut trust, &welcome)
         .await
         .map_err(|e| e.to_string())?;
     trust.save(&trust_path()).map_err(|e| e.to_string())?;

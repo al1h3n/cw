@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+argon2 = { version = "0.5", features = ["std"] } # room-password hashing; never hand-roll a password hash (AGENTS D10)
 iroh = "1.2"
 iroh-mdns-address-lookup = "0.5" # offline LAN discovery, per AGENTS D6
 platform = { path = "../platform" }

@@ -16,10 +16,12 @@ pub const PROTOCOL_VERSION: u32 = 2;
 
 mod device_id;
 mod pairing;
+mod record_id;
 mod wire;
 
 pub use device_id::{DeviceId, DeviceIdParseError};
-pub use pairing::{PairMessage, PairRejection};
+pub use pairing::{MAX_ROOM_NAME, MAX_ROOM_SECRET, PairMessage, PairRejection, Welcome};
+pub use record_id::{RecordId, RecordIdParseError};
 pub use wire::{
     Action, ActionFailure, ActionOutcome, AudioFormat, Capabilities, Control, DecodeError, Hello,
     MAX_BLOCKLIST, Monitor, ProtocolError, Role, decode, encode, version_compatible,

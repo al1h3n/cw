@@ -6,4 +6,12 @@
 # little size. The Console still needs the WebView2 runtime at run time, but that ships with Windows
 # 10 21H2+ and Windows 11, so we deliberately do not bundle it (see dist/DEPENDENCIES.txt).
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = [
+    "-C",
+    "target-feature=+crt-static",
+    # The static CRT ships no PDB, so the linker warns LNK4099 once per object it pulls in. It is
+    # pure noise about debug info for Microsoft's own library, and it would otherwise trip CI's
+    # `-D warnings`.
+    "-C",
+    "link-arg=/ignore:4099",
+]

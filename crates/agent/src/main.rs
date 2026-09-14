@@ -5,6 +5,8 @@
 //! cowatcher-agent capture <file> [mon] [w] capture one thumbnail to a JPEG file
 //! cowatcher-agent pair <console-id> <code> enrol with a Console that is showing a code
 //! cowatcher-agent serve                    serve paired Consoles (screens, audio, power, lock)
+//! cowatcher-agent room                     show which room this PC is in
+//! cowatcher-agent leave <room-password>    take this PC out of its room
 //! cowatcher-agent sessions                 list the machine's login sessions
 //! cowatcher-agent supervise <prog> [args]  run a program and keep it alive
 //! cowatcher-agent version
@@ -16,6 +18,7 @@
 mod audit;
 mod blocker;
 mod capture_source;
+mod membership;
 mod supervisor;
 
 use std::{
@@ -46,6 +49,8 @@ fn main() -> ExitCode {
         Some("pair") => report(block_on(cmd_pair(rest.to_vec()))),
         Some("serve") => report(block_on(cmd_serve())),
         Some("sessions") => report(cmd_sessions()),
+        Some("room") => report(cmd_room()),
+        Some("leave") => report(cmd_leave(rest)),
         Some("supervise") => report(cmd_supervise(rest)),
         Some("install" | "uninstall" | "run" | "helper") => {
             eprintln!(
@@ -55,7 +60,9 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
         _ => {
-            eprintln!("usage: cowatcher-agent <id|capture|pair|serve|sessions|supervise|version>");
+            eprintln!(
+                "usage: cowatcher-agent <id|capture|pair|serve|sessions|room|leave|supervise|version>"
+            );
             ExitCode::FAILURE
         }
     }
@@ -117,6 +124,10 @@ fn cmd_id() -> Result<(), String> {
     println!("state dir   : {}", data_dir().display());
     let trust = TrustStore::load(&trust_path()).map_err(|e| e.to_string())?;
     println!("paired with : {} console(s)", trust.len());
+    println!(
+        "room        : {}",
+        membership::load(&data_dir()).map_or_else(|| "(none)".to_string(), |m| m.room)
+    );
     Ok(())
 }
 
@@ -164,6 +175,11 @@ async fn cmd_pair(args: Vec<String>) -> Result<(), String> {
     .await
     .map_err(|e| e.to_string())?;
     trust.save(&trust_path()).map_err(|e| e.to_string())?;
+    if let Some(welcome) = &peer.welcome {
+        membership::save(&data_dir(), welcome).map_err(|e| format!("save room: {e}"))?;
+        println!("joined room \"{}\"", welcome.room);
+        println!("this PC can only be removed with the room password.");
+    }
     println!("paired with console {} — trusted and saved", peer.device_id);
     endpoint.close().await;
     Ok(())
@@ -220,6 +236,37 @@ async fn cmd_serve() -> Result<(), String> {
     }
     endpoint.close().await;
     Ok(())
+}
+
+/// Shows which room this PC is in.
+fn cmd_room() -> Result<(), String> {
+    match membership::load(&data_dir()) {
+        Some(m) => {
+            println!("room: {}", m.room);
+            println!("This PC can only be removed with the room password:");
+            println!("    cowatcher-agent leave <room-password>");
+        }
+        None => println!("this PC is not in a room"),
+    }
+    Ok(())
+}
+
+/// Takes this PC out of its room. Needs the room password the teacher holds.
+fn cmd_leave(args: &[String]) -> Result<(), String> {
+    let Some(password) = args.first() else {
+        return Err("usage: cowatcher-agent leave <room-password>".into());
+    };
+    let now_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    match membership::leave(&data_dir(), password, now_s) {
+        Ok(room) => {
+            println!("left room \"{room}\" — this PC is no longer managed");
+            Ok(())
+        }
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 fn cmd_sessions() -> Result<(), String> {

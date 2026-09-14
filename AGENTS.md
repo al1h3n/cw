@@ -42,7 +42,7 @@ the internet by device ID. When offline, each PC keeps enforcing the last policy
 | **Org** | A school or company. It owns the signing key that every Agent trusts. |
 | **Room** | A group of devices, e.g. one computer lab (the brief says "cabinet"). |
 | **Policy** | Signed, versioned desired state for a device or room: blocklists, wallpaper, lock mode, schedules. |
-| **Device ID** | A 9-digit human-typable ID mapped to the device's public key. The public key is the real identity. |
+| **Device ID** | A 6-character human-typable handle (Crockford base32, e.g. `K7M2Q9`) **derived by hashing** the device's public key. The public key is the real identity. Derived, not allocated, so no central table and no lock is ever needed — see `crates/proto/src/device_id.rs`. |
 
 ## 3. Decisions (ADR-lite — change only with the user's approval, then log it here)
 

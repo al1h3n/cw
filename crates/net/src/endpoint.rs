@@ -35,12 +35,16 @@ pub const MAX_MESSAGE_BYTES: u32 = 8 * 1024 * 1024;
 const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A peer we just paired with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Not `Copy`: it carries the owned room name and secret from the welcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairedPeer {
     /// The peer's transport public key (the pinned identity).
     pub public_key: [u8; 32],
     /// The short handle derived from it.
     pub device_id: DeviceId,
+    /// Agent side only: the room this device just joined, and the hash it must match to leave.
+    /// `None` on the Console side, which is not a member of anything.
+    pub welcome: Option<proto::Welcome>,
 }
 
 /// Errors from the endpoint and the pairing handshake.
@@ -118,6 +122,7 @@ pub async fn console_accept_pairing(
     endpoint: &Endpoint,
     session: &mut PairingSession,
     trust: &mut TrustStore,
+    welcome: &proto::Welcome,
 ) -> Result<PairedPeer, EndpointError> {
     let incoming = endpoint.accept().await.ok_or(EndpointError::NoConnection)?;
     let conn = incoming
@@ -138,7 +143,7 @@ pub async fn console_accept_pairing(
     };
 
     let reply = match outcome {
-        Ok(()) => PairMessage::Accepted,
+        Ok(()) => PairMessage::Accepted(welcome.clone()),
         Err(rejection) => PairMessage::Rejected(rejection),
     };
     write_message(&mut send, &reply).await?;
@@ -153,6 +158,7 @@ pub async fn console_accept_pairing(
             Ok(PairedPeer {
                 public_key: peer_key,
                 device_id: DeviceId::from_public_key(&peer_key),
+                welcome: None, // the Console hands one out; it is not in a room itself
             })
         }
         Err(rejection) => Err(EndpointError::Rejected(rejection)),
@@ -190,11 +196,17 @@ pub async fn agent_request_pairing(
     let _ = send.finish();
 
     let result = match read_message::<PairMessage>(&mut recv).await? {
-        PairMessage::Accepted => {
+        PairMessage::Accepted(welcome) => {
+            // Validate at the trust boundary before anything reaches our disk (AGENTS.md 5).
+            if !welcome.is_well_formed() {
+                conn.close(0u32.into(), b"bad welcome");
+                return Err(EndpointError::Protocol);
+            }
             trust.pin(&console_key);
             Ok(PairedPeer {
                 public_key: console_key,
                 device_id: DeviceId::from_public_key(&console_key),
+                welcome: Some(welcome),
             })
         }
         PairMessage::Rejected(rejection) => Err(EndpointError::Rejected(rejection)),

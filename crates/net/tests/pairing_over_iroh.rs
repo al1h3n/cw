@@ -60,6 +60,18 @@ impl Drop for TempIdentity {
     }
 }
 
+/// A welcome for the tests: a real Argon2id hash of a known password.
+fn test_welcome() -> proto::Welcome {
+    proto::Welcome {
+        room: "Test Lab".to_string(),
+        room_secret: net::RoomPassword::from_text("TESTPASSWORD")
+            .hash()
+            .expect("hash")
+            .as_str()
+            .to_string(),
+    }
+}
+
 #[test]
 #[ignore = "network end-to-end; run with --ignored"]
 fn correct_code_pairs_and_both_sides_pin_each_other() {
@@ -77,8 +89,13 @@ fn correct_code_pairs_and_both_sides_pin_each_other() {
 
         let mut console_trust = TrustStore::new();
         let console_task = tokio::spawn(async move {
-            let result =
-                console_accept_pairing(&console_ep, &mut session, &mut console_trust).await;
+            let result = console_accept_pairing(
+                &console_ep,
+                &mut session,
+                &mut console_trust,
+                &test_welcome(),
+            )
+            .await;
             (result, console_trust)
         });
 
@@ -123,8 +140,13 @@ fn wrong_code_is_refused_over_the_wire() {
         let mut session = PairingSession::new(shown, net::endpoint::now_ms());
         let mut console_trust = TrustStore::new();
         let console_task = tokio::spawn(async move {
-            let result =
-                console_accept_pairing(&console_ep, &mut session, &mut console_trust).await;
+            let result = console_accept_pairing(
+                &console_ep,
+                &mut session,
+                &mut console_trust,
+                &test_welcome(),
+            )
+            .await;
             (result, console_trust)
         });
 

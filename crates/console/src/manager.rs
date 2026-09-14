@@ -31,7 +31,7 @@ pub const DEFAULT_FOCUSED_WIDTH: u16 = 1280;
 /// What the UI shows for one student PC.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DeviceView {
-    /// The nine-digit handle a teacher sees.
+    /// The six-character handle a teacher sees.
     pub device_id: String,
     /// The endpoint public key, hex encoded (used to dial).
     pub key: String,
@@ -188,6 +188,10 @@ pub struct DeviceManager {
     /// to re-send it. Kept here (not per device) because "no games" applies to the whole class.
     blocklist: Arc<Mutex<Blocklist>>,
     blocklist_path: std::path::PathBuf,
+    /// The room every invited device joins, and whose password they need to leave.
+    room: Arc<Mutex<crate::room::Room>>,
+    /// Where the room file lives, for renames and password changes.
+    data_dir: std::path::PathBuf,
 }
 
 /// The list of blocked programs plus a version counter.
@@ -208,6 +212,7 @@ impl DeviceManager {
             Identity::load_or_create(&dir.join("device.key")).map_err(|e| e.to_string())?;
         let trust_path = dir.join("trust.bin");
         let trust = TrustStore::load(&trust_path).map_err(|e| e.to_string())?;
+        let room = crate::room::load_or_create(dir)?;
         let blocklist_path = dir.join("blocklist.txt");
         let programs = std::fs::read_to_string(&blocklist_path)
             .map(|t| {
@@ -240,10 +245,12 @@ impl DeviceManager {
                 version: 1,
             })),
             blocklist_path,
+            room: Arc::new(Mutex::new(room)),
+            data_dir: dir.to_path_buf(),
         })
     }
 
-    /// This console's own nine-digit id.
+    /// This console's own six-character id.
     #[must_use]
     pub fn device_id(&self) -> String {
         self.identity.device_id().to_string()
@@ -403,6 +410,42 @@ impl DeviceManager {
         if let Some(state) = devices.get_mut(id) {
             state.last_action = Some(report);
         }
+    }
+
+    /// The room's name and its password, for the teacher to see and write down.
+    #[must_use]
+    pub fn room(&self) -> (String, String) {
+        let room = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        (room.name.clone(), room.password_grouped())
+    }
+
+    /// The welcome handed to a device as it joins: room name plus the password hash.
+    ///
+    /// # Errors
+    /// Returns a message if the password cannot be hashed.
+    pub fn welcome(&self) -> Result<proto::Welcome, String> {
+        let room = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        room.welcome()
+    }
+
+    /// Renames the room. Devices already in it keep working; they learn the new name when re-invited.
+    ///
+    /// # Errors
+    /// Returns a message if the name is unusable or cannot be saved.
+    pub fn rename_room(&self, name: &str) -> Result<(), String> {
+        let mut room = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        *room = crate::room::rename(&self.data_dir, &room, name)?;
+        Ok(())
+    }
+
+    /// Issues a brand-new room password.
+    ///
+    /// # Errors
+    /// Returns a message if it cannot be saved.
+    pub fn new_room_password(&self) -> Result<(), String> {
+        let mut room = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        *room = crate::room::regenerate_password(&self.data_dir, &room)?;
+        Ok(())
     }
 
     /// The room-wide blocklist as the teacher sees it.
@@ -683,7 +726,8 @@ impl DeviceManager {
         let mut session = net::PairingSession::new(code, net::endpoint::now_ms());
         let mut trust = self.trust.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
-        let peer = net::console_accept_pairing(&endpoint, &mut session, &mut trust)
+        let welcome = self.welcome()?;
+        let peer = net::console_accept_pairing(&endpoint, &mut session, &mut trust, &welcome)
             .await
             .map_err(|e| e.to_string())?;
         trust.save(&self.trust_path).map_err(|e| e.to_string())?;
