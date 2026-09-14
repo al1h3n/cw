@@ -16,3 +16,6 @@
 # Frontend build output and dependencies
 /crates/console/ui/node_modules/
 /crates/console/ui/dist/
+
+# Built AIO binaries staged for packaging (the .exe are large; docs are kept)
+/dist/*.exe

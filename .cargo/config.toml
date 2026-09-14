@@ -1,0 +1,9 @@
+# Statically link the MSVC C runtime into the Windows binaries.
+#
+# Without this the release .exe imports VCRUNTIME140.dll and VCRUNTIME140_1.dll — the Visual C++
+# Redistributable, which is not guaranteed to be present on a fresh Windows install. Linking it in
+# makes both binaries genuinely double-click-and-run with no runtime to download, at the cost of a
+# little size. The Console still needs the WebView2 runtime at run time, but that ships with Windows
+# 10 21H2+ and Windows 11, so we deliberately do not bundle it (see dist/DEPENDENCIES.txt).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

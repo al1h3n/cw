@@ -1,0 +1,48 @@
+Dependencies
+============
+
+Goal: keep both .exe files small and standalone, and only ask you to download
+the things Windows expects you to configure yourself (never libraries we can
+just bundle or link in).
+
+What is ALREADY inside the .exe files (nothing to download)
+-----------------------------------------------------------
+Everything the programs are built from is compiled straight into the two .exe
+files: the whole network stack, screen capture, JPEG encoding, audio, the
+random-number and crypto code, and — for the teacher app — the entire web
+interface (HTML/CSS/JS). The Visual C++ runtime is statically linked in too, so
+you do NOT need the "Visual C++ Redistributable" that most Windows programs ask
+for.
+
+The only Windows pieces they call are ones that are part of Windows itself and
+are always present (kernel32, user32, gdi32, ws2_32, crypt32, bcrypt, d3d11 for
+screen capture, mmdevapi for audio, wtsapi32 for sessions, and so on). Nothing
+to install for those.
+
+What you may need to configure yourself (NOT bundled, on purpose)
+----------------------------------------------------------------
+1. Microsoft Edge WebView2 Runtime  —  teacher app only (cowatcher-console.exe)
+
+   The teacher window is drawn with WebView2, the same engine Edge uses. We do
+   NOT ship it, because Windows already ships it:
+
+     * Windows 11 .......................... always present
+     * Windows 10, version 21H2 or newer ... present (came with a Windows update)
+     * Older Windows 10 .................... may be missing
+
+   If the teacher app opens to a blank/white window on an older Windows 10,
+   install the free "Evergreen" runtime once:
+
+     https://developer.microsoft.com/microsoft-edge/webview2/
+
+   The student program (cowatcher-agent.exe) does NOT use WebView2 and needs
+   nothing here.
+
+Summary
+-------
+                          cowatcher-agent.exe   cowatcher-console.exe
+  Visual C++ runtime      built in              built in
+  WebView2 runtime        not used              needs it (ships with Win 10 21H2+/11)
+  Any other download      none                  none
+
+64-bit Windows 10 (1809+) or Windows 11 is assumed. There is no 32-bit build.
