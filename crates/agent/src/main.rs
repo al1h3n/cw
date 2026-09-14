@@ -14,6 +14,7 @@
 //! `COWATCHER_DIR`. The SYSTEM service and per-session helper arrive in Phase 1.4b.
 
 mod audit;
+mod blocker;
 mod capture_source;
 mod supervisor;
 
@@ -101,6 +102,10 @@ fn audit_path() -> PathBuf {
     data_dir().join("audit.log")
 }
 
+fn blocklist_path() -> PathBuf {
+    data_dir().join("blocklist.txt")
+}
+
 fn trust_path() -> PathBuf {
     data_dir().join("trust.bin")
 }
@@ -122,7 +127,8 @@ fn cmd_capture(args: &[String]) -> Result<(), String> {
     let monitor = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0u8);
     let max_width = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(320u16);
 
-    let capture = ScreenCapture::new(&audit_path()).map_err(|e| e.to_string())?;
+    let capture =
+        ScreenCapture::new(&audit_path(), &blocklist_path()).map_err(|e| e.to_string())?;
     println!("monitors: {}", capture.monitor_count());
     let started = std::time::Instant::now();
     let jpeg = net::AgentDevice::capture_thumbnail(&capture, monitor, max_width)
@@ -171,7 +177,8 @@ async fn cmd_serve() -> Result<(), String> {
             "no paired console yet — run `cowatcher-agent pair <console-key> <code>` first".into(),
         );
     }
-    let capture = ScreenCapture::new(&audit_path()).map_err(|e| e.to_string())?;
+    let capture =
+        ScreenCapture::new(&audit_path(), &blocklist_path()).map_err(|e| e.to_string())?;
     // Fail loudly at start-up rather than on the teacher's first click.
     if let Err(err) = platform::power::enable_shutdown_privilege() {
         eprintln!("warning: power actions will be refused: {err}");
@@ -183,6 +190,7 @@ async fn cmd_serve() -> Result<(), String> {
     println!("device id   : {}", identity.device_id());
     println!("endpoint key: {}", identity.public_key());
     println!("monitors    : {}", capture.monitor_count());
+    println!("blocklist   : {} rule(s) loaded", capture.blocked_count());
     println!("trusted     : {} console(s). Ctrl+C to stop.", trust.len());
 
     let local = net::LocalHello {
@@ -191,7 +199,8 @@ async fn cmd_serve() -> Result<(), String> {
         capabilities: Capabilities::SCREEN_CAPTURE
             .union(Capabilities::AUDIO)
             .union(Capabilities::LOCK)
-            .union(Capabilities::POWER),
+            .union(Capabilities::POWER)
+            .union(Capabilities::BLOCK),
     };
     loop {
         tokio::select! {

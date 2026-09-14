@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{DeviceId, PROTOCOL_VERSION};
 
+/// The most blocklist rules an Agent keeps. A classroom "no games" list is a few dozen names; a
+/// bound this size keeps the watch loop cheap and stops a malformed message asking for millions.
+pub const MAX_BLOCKLIST: usize = 256;
+
 /// What role a peer plays. Sent in [`Control::Hello`] so each side knows who it is talking to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
@@ -41,6 +45,8 @@ impl Capabilities {
     pub const LOCK: Self = Self(1 << 3);
     /// The device can shut down, reboot or log off on command.
     pub const POWER: Self = Self(1 << 4);
+    /// The device can block programs from running.
+    pub const BLOCK: Self = Self(1 << 5);
 
     /// Combines two capability sets.
     #[must_use]
@@ -249,6 +255,23 @@ pub enum Control {
         /// Signed 16-bit mono samples at the rate given in [`Control::AudioState`].
         samples: Vec<i16>,
     },
+    /// Console → Agent: block these programs from running. An empty list clears blocking.
+    ///
+    /// Each entry is an executable name such as `steam.exe` (the `.exe` is optional). The Agent caps
+    /// the list to [`MAX_BLOCKLIST`] entries and ignores blanks; matching is by exact file name, so
+    /// a rule never kills an unrelated program that merely contains the word.
+    SetBlocklist {
+        /// Programs to end on sight. Bounded by the Agent, not trusted as sent.
+        programs: Vec<String>,
+    },
+    /// Agent → Console: blocking is now in force with this many rules, and this is what it has
+    /// closed most recently (newest last), so a teacher sees blocking actually working.
+    BlocklistState {
+        /// How many rules the Agent accepted after capping and dropping blanks.
+        rules: u16,
+        /// Names closed since the previous state message, capped so the reply stays small.
+        closed: Vec<String>,
+    },
     /// Console → Agent: do this one named thing (power, lock). See [`Action`].
     Perform(Action),
     /// Agent → Console: what happened to the [`Control::Perform`] request.
@@ -345,6 +368,13 @@ mod tests {
             sample_hello(),
             Control::Ping(7),
             Control::Pong(7),
+            Control::SetBlocklist {
+                programs: vec!["steam.exe".into(), "roblox".into()],
+            },
+            Control::BlocklistState {
+                rules: 2,
+                closed: vec!["steam.exe".into()],
+            },
             Control::Perform(Action::Shutdown { delay_seconds: 60 }),
             Control::ActionDone {
                 action: Action::LockScreen,

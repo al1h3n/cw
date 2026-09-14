@@ -201,13 +201,20 @@ Order = what a teacher needs first in a real lesson.
   the Org code. `admin` → break-glass pauses all enforcement for N minutes and notifies the Console.
   **Done when:** tests cover: correct code works offline; clock skew of ±2 min is accepted; 5 wrong
   attempts → exponential lockout; every attempt is audit-logged.
-- [ ] **2.5 App blocking.** A process watcher (poll 1 s; ETW later) + rules: exe name, path, publisher
+- [~] **2.5 App blocking.** A process watcher (poll 1 s; ETW later) + rules: exe name, path, publisher
   signature, path heuristics (`steamapps\common`, `Epic Games`, `Riot Games`, Roblox, Minecraft).
   The default "games" list is editable. Website blocking uses **browser policies** (Chrome/Edge
   `URLBlocklist` in the registry, Firefox `policies.json`), so no extension is needed.
   **Done when:** unit tests with fixture process lists; snapshot tests (`insta`) of the generated
   browser policy files; manual check — a blocked game dies in < 2 s and a blocked site shows the
   browser's block page.
+  *Apps done 2026-09-14: `platform::process` (Toolhelp snapshot + exact-name match, protected-process
+  guard, unit-tested), agent `blocker` thread (1 s sweep, rules saved to disk so blocking survives a
+  reboot offline per D9), `proto::SetBlocklist`/`BlocklistState` (bounded to MAX_BLOCKLIST=256),
+  room-wide list in the Console pushed to every connected PC and a Svelte editor with a starter list.
+  Live: Notepad closed within 1 s, re-closed on relaunch, survived after the rule was cleared.
+  **Still planned:** website blocking via browser policy files; publisher-signature and path rules;
+  the snapshot format tests (`insta`).*
 - [ ] **2.6 Wallpaper lock** via Windows policy keys (`Policies\System\Wallpaper` + NoChangingWallPaper).
   **Done when:** the user changes the wallpaper in Settings → it is reverted or greyed out; the policy is
   removed cleanly when disabled.

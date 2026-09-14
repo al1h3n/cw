@@ -5,6 +5,7 @@
   import PairDialog from './lib/PairDialog.svelte'
   import Focused from './lib/Focused.svelte'
   import ActionMenu from './lib/ActionMenu.svelte'
+  import BlocklistDialog from './lib/BlocklistDialog.svelte'
   import LanguagePicker from './lib/LanguagePicker.svelte'
   import QualityPicker from './lib/QualityPicker.svelte'
   import { i18n, t } from './lib/i18n.svelte'
@@ -14,6 +15,7 @@
   let devices = $state<Device[]>([])
   let watching = $state(false)
   let pairing = $state(false)
+  let editingBlocklist = $state(false)
   let focused = $state<string | null>(null)
   let listeningTo = $state<string | null>(null)
   let error = $state<string | null>(null)
@@ -123,6 +125,7 @@
         {watching ? t('stopWatching') : t('startWatching')}
       </button>
       <button onclick={() => (pairing = true)}>{t('addPc')}</button>
+      <button onclick={() => (editingBlocklist = true)}>{t('blockButton')}</button>
       {#if watching}
         <ActionMenu deviceId={null} liveCount={live} onerror={(m) => (error = m)} />
       {/if}
@@ -182,6 +185,10 @@
       refresh()
     }}
   />
+{/if}
+
+{#if editingBlocklist}
+  <BlocklistDialog onclose={() => (editingBlocklist = false)} />
 {/if}
 
 {#if focusedDevice}

@@ -182,6 +182,17 @@ pub struct DeviceManager {
     preview: Arc<Mutex<Preview>>,
     /// Open only while listening to some PC; recreated when the agent's sample rate is known.
     playback: Arc<Mutex<Option<media::audio::AudioPlayback>>>,
+    /// The room-wide blocklist and a version that bumps on every edit, so each device's task knows
+    /// to re-send it. Kept here (not per device) because "no games" applies to the whole class.
+    blocklist: Arc<Mutex<Blocklist>>,
+    blocklist_path: std::path::PathBuf,
+}
+
+/// The list of blocked programs plus a version counter.
+#[derive(Default)]
+struct Blocklist {
+    programs: Vec<String>,
+    version: u64,
 }
 
 impl DeviceManager {
@@ -195,6 +206,15 @@ impl DeviceManager {
             Identity::load_or_create(&dir.join("device.key")).map_err(|e| e.to_string())?;
         let trust_path = dir.join("trust.bin");
         let trust = TrustStore::load(&trust_path).map_err(|e| e.to_string())?;
+        let blocklist_path = dir.join("blocklist.txt");
+        let programs = std::fs::read_to_string(&blocklist_path)
+            .map(|t| {
+                t.lines()
+                    .map(str::to_string)
+                    .filter(|l| !l.trim().is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let devices = trust
             .keys()
@@ -213,6 +233,11 @@ impl DeviceManager {
             endpoint: Mutex::new(None),
             preview: Arc::new(Mutex::new(Preview::default())),
             playback: Arc::new(Mutex::new(None)),
+            blocklist: Arc::new(Mutex::new(Blocklist {
+                programs,
+                version: 1,
+            })),
+            blocklist_path,
         })
     }
 
@@ -378,6 +403,34 @@ impl DeviceManager {
         }
     }
 
+    /// The room-wide blocklist as the teacher sees it.
+    #[must_use]
+    pub fn blocklist(&self) -> Vec<String> {
+        self.blocklist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .programs
+            .clone()
+    }
+
+    /// Replaces the room-wide blocklist and saves it. Connected PCs pick it up within a second or
+    /// two; a PC that connects later gets it on its first handshake.
+    ///
+    /// # Errors
+    /// Returns a message if the list cannot be saved to disk.
+    pub fn set_blocklist(&self, programs: Vec<String>) -> Result<(), String> {
+        let programs: Vec<String> = programs
+            .into_iter()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        std::fs::write(&self.blocklist_path, programs.join("\n")).map_err(|e| e.to_string())?;
+        let mut list = self.blocklist.lock().unwrap_or_else(|e| e.into_inner());
+        list.programs = programs;
+        list.version += 1;
+        Ok(())
+    }
+
     /// Binds the shared endpoint once, reusing it for every device.
     async fn endpoint(&self) -> Result<iroh::Endpoint, String> {
         if let Some(endpoint) = self
@@ -472,8 +525,22 @@ impl DeviceManager {
 
         // Audio is per-connection state on the agent, so this tracks what we have switched on here.
         let mut audio_on: Option<proto::AudioFormat> = None;
+        // Send the blocklist whenever its version moves; 0 forces a send on the first pass.
+        let mut sent_blocklist: u64 = 0;
 
         loop {
+            let (programs, version) = {
+                let list = self.blocklist.lock().unwrap_or_else(|e| e.into_inner());
+                (list.programs.clone(), list.version)
+            };
+            if version != sent_blocklist {
+                session
+                    .set_blocklist(programs)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                sent_blocklist = version;
+            }
+
             // Actions first: a teacher's click should not wait behind a screen refresh.
             // ponytail: picked up on the next loop turn, so up to one refresh interval (1 s) late;
             // wake the loop with a Notify if teachers find that sluggish.

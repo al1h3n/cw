@@ -22,5 +22,5 @@ pub use device_id::{DeviceId, DeviceIdParseError};
 pub use pairing::{PairMessage, PairRejection};
 pub use wire::{
     Action, ActionFailure, ActionOutcome, AudioFormat, Capabilities, Control, DecodeError, Hello,
-    Monitor, ProtocolError, Role, decode, encode, version_compatible,
+    MAX_BLOCKLIST, Monitor, ProtocolError, Role, decode, encode, version_compatible,
 };

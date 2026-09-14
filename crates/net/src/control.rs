@@ -84,6 +84,18 @@ pub trait AgentDevice {
         let _ = max_samples;
         Vec::new()
     }
+
+    /// Replaces the set of programs this device blocks, returning how many rules it kept after
+    /// capping to [`proto::MAX_BLOCKLIST`] and dropping blanks. The default keeps none.
+    fn set_blocklist(&self, programs: Vec<String>) -> u16 {
+        let _ = programs;
+        0
+    }
+
+    /// Names of programs blocked since the previous call (newest last), for reporting to a teacher.
+    fn take_blocked(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// A capture failure, carrying a human-readable reason.
@@ -226,6 +238,24 @@ impl ControlSession {
         }
     }
 
+    /// Console side: set (or clear, with an empty list) which programs the PC blocks.
+    ///
+    /// Returns the rule count the Agent kept and any programs it has closed since the last call.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn set_blocklist(
+        &mut self,
+        programs: Vec<String>,
+    ) -> Result<(u16, Vec<String>), EndpointError> {
+        write_message(&mut self.send, &Control::SetBlocklist { programs }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::BlocklistState { rules, closed } => Ok((rules, closed)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Console side: ask the Agent to do one [`proto::Action`] and wait for its answer.
     ///
     /// # Errors
@@ -291,6 +321,12 @@ impl ControlSession {
                         },
                     )
                     .await?;
+                }
+                Control::SetBlocklist { programs } => {
+                    let rules = source.set_blocklist(programs);
+                    let closed = source.take_blocked();
+                    write_message(&mut self.send, &Control::BlocklistState { rules, closed })
+                        .await?;
                 }
                 Control::Perform(action) => {
                     let outcome = source.perform(&self.peer, action);

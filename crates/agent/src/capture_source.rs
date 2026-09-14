@@ -20,6 +20,8 @@ pub struct ScreenCapture {
     audio: Mutex<Option<media::audio::AudioCapture>>,
     /// Every remote action is written here, whatever its outcome (D3).
     audit: AuditLog,
+    /// Enforces the blocklist on its own thread, independent of any Console (D9: offline too).
+    blocker: crate::blocker::Blocker,
 }
 
 impl ScreenCapture {
@@ -27,13 +29,20 @@ impl ScreenCapture {
     ///
     /// # Errors
     /// Returns [`CaptureError`] if the graphics device is unavailable (e.g. a headless session).
-    pub fn new(audit_path: &Path) -> Result<Self, CaptureError> {
+    pub fn new(audit_path: &Path, blocklist_path: &Path) -> Result<Self, CaptureError> {
         let capturer = media::ThumbnailCapturer::new().map_err(|e| CaptureError(e.to_string()))?;
         Ok(Self {
             capturer: Mutex::new(capturer),
             audio: Mutex::new(None),
             audit: AuditLog::new(audit_path),
+            blocker: crate::blocker::Blocker::start(blocklist_path),
         })
+    }
+
+    /// How many blocklist rules are in force (for the `serve` banner).
+    #[must_use]
+    pub fn blocked_count(&self) -> u16 {
+        self.blocker.rule_count()
     }
 
     /// How many monitors this device has.
@@ -149,6 +158,14 @@ impl AgentDevice for ScreenCapture {
                     .map_or_else(Vec::new, |c| c.take(max_samples))
             },
         )
+    }
+
+    fn set_blocklist(&self, programs: Vec<String>) -> u16 {
+        self.blocker.set_rules(programs)
+    }
+
+    fn take_blocked(&self) -> Vec<String> {
+        self.blocker.take_closed()
     }
 
     fn capture_thumbnail(&self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {

@@ -4,9 +4,9 @@ Every capability named in [`../ClassWatcher.md`](../ClassWatcher.md), with an ho
 2026-09-14. Legend: **done** = built and tested · **partial** = some of it works · **planned** = designed
 but no code.
 
-**Summary: 6 of 27 done, 3 partial, 18 planned.** The product can currently *watch* screens and *listen*
-to a PC. It cannot yet *act* on a student PC (no lock, no blocking, no power, no remote control) — that
-is the next slab of work and is what makes it worth a teacher's time.
+**Summary: 8 of 27 done, 4 partial, 15 planned.** The product can now *watch* screens, *listen* to a PC, *lock* and *power off* one PC or a whole room,
+and *block* apps and games. What it cannot yet do is take live *remote control* of a mouse and keyboard,
+and it has no signed offline policy engine yet (blocking persists on the Agent, but power/lock do not).
 
 There is also a list of things that **cannot** be built at all, and things we **will not** build:
 see [Impossible, and deliberately refused](#impossible-and-deliberately-refused) at the end.
@@ -23,7 +23,7 @@ see [Impossible, and deliberately refused](#impossible-and-deliberately-refused)
 | 6 | Constant wallpaper nobody can change | planned | Via Windows policy keys, not by fighting the OS. |
 | 7 | Keep student files temporarily, wipe with one button, host can browse | planned | Baseline + diff design; wipe must be scope-proven by tests. |
 | 8 | Add computers by ID or LAN; changes apply when back online | **done** (ID/LAN) / planned (offline queue) | Pairing by key with a 6-digit code, mDNS on LAN, reconnect by key after an IP change. The offline mailbox (D9) is not built. |
-| 9 | Enable/disable programs, editable games list | planned | Process watcher + browser policy files. |
+| 9 | Enable/disable programs, editable games list | **done** (apps) / planned (websites) | A room-wide, editable list of program names (`steam.exe`, `roblox.exe`, …) closes those programs on every connected PC within a second and closes them again if a student reopens them. Matching is by exact file name so a rule never kills an unrelated app, system-critical processes are protected, and the list is saved on the Agent so it keeps enforcing after a reboot with no network (D9). Verified live: Notepad closed within 1 s and stayed closed until the rule was cleared. Website blocking via browser policy files is still planned. |
 | 10 | Custom lock screen: background, per-PC shortcuts, terminal with `unlock` and power commands | planned | Depends on #4. |
 | 11 | Black background while the host watches | planned | Cheap win once streaming lands. |
 | 12 | Screen recordings, all or one, scheduled | planned | Agent-side, low fps, crash-safe segments. |

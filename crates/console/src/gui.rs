@@ -187,6 +187,18 @@ fn set_monitor(state: State<'_, AppState>, device_id: String, monitor: u8) -> Re
     state.manager.set_monitor(&device_id, monitor)
 }
 
+/// The room-wide blocklist, one program name per entry.
+#[tauri::command]
+fn blocklist(state: State<'_, AppState>) -> Vec<String> {
+    state.manager.blocklist()
+}
+
+/// Replaces the room-wide blocklist; connected PCs enforce it within a second or two.
+#[tauri::command]
+fn set_blocklist(state: State<'_, AppState>, programs: Vec<String>) -> Result<(), String> {
+    state.manager.set_blocklist(programs)
+}
+
 /// Sends one action to one PC, or to every connected PC when `device_id` is absent.
 /// Returns how many PCs it was sent to; answers appear on each device's `last_action`.
 #[tauri::command]
@@ -259,6 +271,8 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             set_focused,
             set_monitor,
             perform,
+            blocklist,
+            set_blocklist,
             set_listening,
             listening,
             translation,

@@ -60,8 +60,9 @@ fn main() -> ExitCode {
         Some("watch") => block_on(cmd_watch(rest)),
         Some("listen") => block_on(cmd_listen(rest)),
         Some("act") => block_on(cmd_act(rest)),
+        Some("block") => block_on(cmd_block(rest)),
         _ => Err(
-            "usage: cowatcher-console [id|pair|devices|watch|listen|act|version]  (no arguments opens the window)"
+            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|version]  (no arguments opens the window)"
                 .into(),
         ),
     };
@@ -310,6 +311,33 @@ async fn cmd_act(args: Vec<String>) -> Result<(), String> {
         proto::ActionOutcome::Started { .. } => Ok(()),
         proto::ActionOutcome::Failed(reason) => Err(reason.to_string()),
     }
+}
+
+/// Sets the blocklist on one paired PC directly (an empty list clears it), for testing without the
+/// window. The window pushes the room-wide list to every PC instead.
+async fn cmd_block(args: Vec<String>) -> Result<(), String> {
+    let Some(agent) = args.first() else {
+        return Err("usage: cowatcher-console block <agent-endpoint-key> [prog1 prog2 ...]".into());
+    };
+    let agent_key: iroh::EndpointId = agent
+        .parse()
+        .map_err(|_| "invalid agent endpoint key".to_string())?;
+    let programs: Vec<String> = args.get(1..).unwrap_or_default().to_vec();
+
+    let (endpoint, mut session) = connect_paired(agent_key).await?;
+    let (rules, closed) = session
+        .set_blocklist(programs)
+        .await
+        .map_err(|e| e.to_string())?;
+    session.close();
+    endpoint.close().await;
+    println!("blocklist set: {rules} rule(s) in force");
+    if closed.is_empty() {
+        println!("nothing was running that had to be closed");
+    } else {
+        println!("closed on the spot: {}", closed.join(", "));
+    }
+    Ok(())
 }
 
 fn hex(bytes: &[u8]) -> String {
