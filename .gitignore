@@ -13,3 +13,6 @@
 # Device key files, if a test or run ever writes one into the tree
 *.key
 
+# Frontend build output and dependencies
+/crates/console/ui/node_modules/
+/crates/console/ui/dist/

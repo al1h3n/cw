@@ -12,6 +12,11 @@
 //! State lives in `%LOCALAPPDATA%\co-watcher\console`, or the directory in `COWATCHER_DIR`.
 //! The Tauri/Svelte grid UI replaces this CLI in a later step; the protocol underneath is the same.
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // no console window in release
+
+mod gui;
+mod manager;
+
 use std::{
     path::PathBuf,
     process::ExitCode,
@@ -24,6 +29,16 @@ use proto::{Capabilities, Role};
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default().to_vec();
+    // No arguments: this is a teacher double-clicking the app, so open the window.
+    if args.is_empty() {
+        return match gui::run(data_dir()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let result = match args.first().map(String::as_str) {
         Some("version") => {
             println!(
@@ -37,7 +52,7 @@ fn main() -> ExitCode {
         Some("devices") => cmd_devices(),
         Some("pair") => block_on(cmd_pair()),
         Some("watch") => block_on(cmd_watch(rest)),
-        _ => Err("usage: cowatcher-console <id|pair|devices|watch|version>".into()),
+        _ => Err("usage: cowatcher-console [id|pair|devices|watch|version]  (no arguments opens the window)".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
