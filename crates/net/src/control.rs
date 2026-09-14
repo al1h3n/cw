@@ -97,6 +97,21 @@ pub trait AgentDevice {
         Vec::new()
     }
 
+    /// Shows one frame of the teacher's screen full-screen on this PC.
+    ///
+    /// Returns whether the broadcast is on screen, and a reason when it is not. The default refuses,
+    /// so a device that cannot present simply reports that.
+    fn show_broadcast(&self, from: &PeerInfo, jpeg: &[u8]) -> (bool, String) {
+        let _ = (from, jpeg);
+        (false, "this device cannot show a broadcast".to_string())
+    }
+
+    /// Takes the broadcast off the screen.
+    fn stop_broadcast(&self, from: &PeerInfo) -> (bool, String) {
+        let _ = from;
+        (false, String::new())
+    }
+
     /// Starts recording this PC's screen, returning what it is actually recording.
     ///
     /// The default refuses by reporting an inactive recording, so a device that cannot record simply
@@ -349,6 +364,35 @@ impl ControlSession {
         }
     }
 
+    /// Console side: put one frame of this console's screen on the student PC.
+    ///
+    /// Returns whether it is showing, plus a reason when it is not.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn show_broadcast(&mut self, jpeg: Vec<u8>) -> Result<(bool, String), EndpointError> {
+        write_message(&mut self.send, &Control::ShowBroadcast { jpeg }).await?;
+        self.read_broadcast_state().await
+    }
+
+    /// Console side: take the broadcast off the student's screen.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn stop_broadcast(&mut self) -> Result<(bool, String), EndpointError> {
+        write_message(&mut self.send, &Control::StopBroadcast).await?;
+        self.read_broadcast_state().await
+    }
+
+    /// Reads the reply both broadcast requests produce.
+    async fn read_broadcast_state(&mut self) -> Result<(bool, String), EndpointError> {
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::BroadcastState { showing, problem } => Ok((showing, problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Console side: start recording this PC's screen.
     ///
     /// Returns what the PC is *actually* recording after clamping.
@@ -566,6 +610,22 @@ impl ControlSession {
                             seq: audio_seq,
                             samples,
                         },
+                    )
+                    .await?;
+                }
+                Control::ShowBroadcast { jpeg } => {
+                    let (showing, problem) = source.show_broadcast(&self.peer, &jpeg);
+                    write_message(
+                        &mut self.send,
+                        &Control::BroadcastState { showing, problem },
+                    )
+                    .await?;
+                }
+                Control::StopBroadcast => {
+                    let (showing, problem) = source.stop_broadcast(&self.peer);
+                    write_message(
+                        &mut self.send,
+                        &Control::BroadcastState { showing, problem },
                     )
                     .await?;
                 }

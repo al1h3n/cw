@@ -27,6 +27,8 @@ pub struct ScreenCapture {
     controlled: Mutex<bool>,
     /// The screen recording in progress, if any. Dropping it closes the file.
     recording: Mutex<Option<crate::recording::Recording>>,
+    /// The full-screen broadcast window, while a teacher is presenting. Dropping it closes it.
+    broadcast: Mutex<Option<platform::present::Presenter>>,
     /// Where recordings are written.
     recordings_dir: std::path::PathBuf,
 }
@@ -62,6 +64,7 @@ impl ScreenCapture {
             blocker: crate::blocker::Blocker::start(blocklist_path),
             controlled: Mutex::new(false),
             recording: Mutex::new(None),
+            broadcast: Mutex::new(None),
             recordings_dir: recordings_dir.to_path_buf(),
         })
     }
@@ -240,6 +243,42 @@ impl AgentDevice for ScreenCapture {
                     .map_or_else(Vec::new, |c| c.take(max_samples))
             },
         )
+    }
+
+    fn show_broadcast(&self, from: &PeerInfo, jpeg: &[u8]) -> (bool, String) {
+        let (pixels, width, height) = match media::jpeg::decode_to_bgra(jpeg) {
+            Ok(frame) => frame,
+            Err(err) => return (false, format!("unreadable broadcast frame: {err}")),
+        };
+        let mut slot = self.broadcast.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_none() {
+            match platform::present::Presenter::open() {
+                Ok(presenter) => {
+                    println!("console {} started broadcasting", from.device_id);
+                    let _ =
+                        self.audit
+                            .note(net::endpoint::now_ms(), from.device_id, "broadcast-start");
+                    *slot = Some(presenter);
+                }
+                Err(err) => return (false, err.to_string()),
+            }
+        }
+        if let Some(presenter) = slot.as_ref() {
+            presenter.show(pixels, width, height);
+        }
+        (true, String::new())
+    }
+
+    fn stop_broadcast(&self, from: &PeerInfo) -> (bool, String) {
+        let mut slot = self.broadcast.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.take().is_some() {
+            // Dropping the presenter destroys the window and gives the desktop back.
+            println!("console {} stopped broadcasting", from.device_id);
+            let _ = self
+                .audit
+                .note(net::endpoint::now_ms(), from.device_id, "broadcast-stop");
+        }
+        (false, String::new())
     }
 
     fn start_recording(

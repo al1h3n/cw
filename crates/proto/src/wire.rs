@@ -385,6 +385,23 @@ pub enum Control {
         /// Names closed since the previous state message, capped so the reply stays small.
         closed: Vec<String>,
     },
+    /// Console → Agent: show this frame of the teacher's screen, full-screen, on the student PC.
+    ///
+    /// Each message carries one complete JPEG, so a student who joins late or misses a frame sees
+    /// the right picture on the very next one — there is no stream to resynchronise with.
+    ShowBroadcast {
+        /// One frame of the teacher's screen, JPEG encoded.
+        jpeg: Vec<u8>,
+    },
+    /// Console → Agent: take the broadcast off the screen and give the student their desktop back.
+    StopBroadcast,
+    /// Agent → Console: whether the broadcast window is on screen, and why not if it is not.
+    BroadcastState {
+        /// True while the student is seeing the teacher's screen.
+        showing: bool,
+        /// Empty unless something went wrong.
+        problem: String,
+    },
     /// Console → Agent: start recording this PC's screen to a file on that PC.
     ///
     /// The Agent clamps every value and reports back what it is *actually* recording, so a teacher

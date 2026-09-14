@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 cpal = "0.18"
 jpeg-encoder = "0.7"
+zune-jpeg = "0.4" # decode the teacher's screen for broadcast; pure Rust, no C in the static build
 thiserror = "2"
 
 [target.'cfg(windows)'.dependencies]

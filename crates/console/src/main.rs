@@ -65,8 +65,9 @@ fn main() -> ExitCode {
         Some("control") => block_on(cmd_control(rest)),
         Some("apps") => block_on(cmd_apps(rest)),
         Some("record") => block_on(cmd_record(rest)),
+        Some("broadcast") => block_on(cmd_broadcast(rest)),
         _ => Err(
-            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|apps|record|version]  (no arguments opens the window)"
+            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|apps|record|broadcast|version]  (no arguments opens the window)"
                 .into(),
         ),
     };
@@ -318,6 +319,55 @@ async fn cmd_act(args: Vec<String>) -> Result<(), String> {
         proto::ActionOutcome::Started { .. } => Ok(()),
         proto::ActionOutcome::Failed(reason) => Err(reason.to_string()),
     }
+}
+
+/// Broadcasts this console's screen to a paired PC for a few seconds.
+async fn cmd_broadcast(args: Vec<String>) -> Result<(), String> {
+    let Some(agent) = args.first() else {
+        return Err(
+            "usage: cowatcher-console broadcast <agent-endpoint-key> [seconds] [width]".into(),
+        );
+    };
+    let agent_key: iroh::EndpointId = agent
+        .parse()
+        .map_err(|_| "invalid agent endpoint key".to_string())?;
+    let seconds: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5);
+    let width: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1280);
+
+    // Capture this console's own screen. Sending a downscaled frame is deliberate: a student's
+    // screen is rarely bigger than the teacher's, and the window stretches whatever it is given.
+    let mut capturer = media::ThumbnailCapturer::new().map_err(|e| e.to_string())?;
+
+    let (endpoint, mut session) = connect_paired(agent_key).await?;
+    println!(
+        "broadcasting this screen to {} for {seconds}s",
+        session.peer().device_id
+    );
+
+    // Roughly 5 frames a second is enough for slides and a demonstration, and it is what the
+    // per-frame JPEG approach comfortably sustains.
+    let frames = seconds * 5;
+    let mut sent = 0u32;
+    for _ in 0..frames {
+        let jpeg = capturer.capture_jpeg(0, width).map_err(|e| e.to_string())?;
+        let (showing, problem) = session
+            .show_broadcast(jpeg)
+            .await
+            .map_err(|e| e.to_string())?;
+        if !showing {
+            session.close();
+            endpoint.close().await;
+            return Err(format!("that PC did not show the broadcast: {problem}"));
+        }
+        sent += 1;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    let (showing, _) = session.stop_broadcast().await.map_err(|e| e.to_string())?;
+    println!("sent {sent} frame(s); still showing: {showing}");
+    session.close();
+    endpoint.close().await;
+    Ok(())
 }
 
 /// Records a paired PC's screen for a few seconds at a chosen size and frame rate.
