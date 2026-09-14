@@ -3,6 +3,8 @@
   import type { Device } from './types'
   import ActionMenu from './ActionMenu.svelte'
   import ActionResult from './ActionResult.svelte'
+  import RecordButton from './RecordButton.svelte'
+  import AppsDialog from './AppsDialog.svelte'
 
   let {
     device,
@@ -10,6 +12,8 @@
     onmonitor,
     listening,
     onlisten,
+    controlling,
+    oncontrol,
     onerror,
   }: {
     device: Device
@@ -17,10 +21,23 @@
     onmonitor: (index: number) => void
     listening: boolean
     onlisten: (on: boolean) => void
+    controlling: boolean
+    oncontrol: (on: boolean) => void
     onerror: (message: string) => void
   } = $props()
 
+  let showApps = $state(false)
+
   function onkey(event: KeyboardEvent) {
+    // While driving a PC, every key belongs to that PC — including Escape, which a remote program
+    // may well need. Ctrl+Alt+Esc is the way out, matching platform::input::KeyGate.
+    if (controlling) {
+      if (event.key === 'Escape' && event.ctrlKey && event.altKey) {
+        event.preventDefault()
+        oncontrol(false)
+      }
+      return
+    }
     if (event.key === 'Escape') onclose()
   }
 </script>
@@ -57,6 +74,16 @@
       >
         {listening ? t('listenStop') : t('listenStart')}
       </button>
+      <button
+        class="listen"
+        class:on={controlling}
+        onclick={() => oncontrol(!controlling)}
+        title={t('controlHint')}
+      >
+        {controlling ? t('controlStop') : t('controlStart')}
+      </button>
+      <button onclick={() => (showApps = true)}>{t('appsButton')}</button>
+      <RecordButton deviceId={device.device_id} {onerror} />
       <ActionResult report={device.last_action} />
       <ActionMenu deviceId={device.device_id} liveCount={device.status === 'live' ? 1 : 0} {onerror} />
       <button onclick={onclose}>{t('close')}</button>
@@ -70,6 +97,10 @@
     </div>
   </div>
 </div>
+
+{#if showApps}
+  <AppsDialog deviceId={device.device_id} onclose={() => (showApps = false)} {onerror} />
+{/if}
 
 <style>
   .backdrop {

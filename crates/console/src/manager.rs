@@ -98,6 +98,49 @@ pub fn parse_action(name: &str, delay_seconds: u16) -> Option<proto::Action> {
     .find(|action| action.name() == name)
 }
 
+/// Something the UI wants from one device, carried to that device's own task.
+///
+/// Every device's connection is owned by its own task, so the UI cannot simply call the network.
+/// It parks a request here with a one-shot reply channel; the task picks it up on its next turn and
+/// answers. The same pattern serves recordings and the app launcher, and it keeps a slow or offline
+/// PC from ever blocking the window.
+enum DeviceRequest {
+    /// Start recording, with the size and rate the teacher asked for.
+    StartRecording {
+        monitor: u8,
+        max_width: u32,
+        max_height: u32,
+        fps: u32,
+        reply: tokio::sync::oneshot::Sender<proto::RecordingInfo>,
+    },
+    /// Stop the recording and report the final state.
+    StopRecording {
+        reply: tokio::sync::oneshot::Sender<proto::RecordingInfo>,
+    },
+    /// How the recording is going.
+    RecordingStatus {
+        reply: tokio::sync::oneshot::Sender<proto::RecordingInfo>,
+    },
+    /// What this PC can start.
+    ListApps {
+        reply: tokio::sync::oneshot::Sender<Vec<proto::AppEntry>>,
+    },
+    /// Start one published program.
+    LaunchApp {
+        id: u32,
+        reply: tokio::sync::oneshot::Sender<(String, bool)>,
+    },
+    /// What is running and closable.
+    ListRunning {
+        reply: tokio::sync::oneshot::Sender<Vec<proto::RunningApp>>,
+    },
+    /// Close a running program.
+    CloseApp {
+        pid: u32,
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
+}
+
 /// Connection state of one device, in the order the UI colours them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -113,7 +156,8 @@ pub enum DeviceStatus {
 }
 
 /// One device's mutable state, shared between its task and the UI.
-#[derive(Debug)]
+///
+/// Not `Debug`: it holds one-shot reply channels, which have nothing useful to print.
 struct DeviceState {
     key: [u8; 32],
     status: DeviceStatus,
@@ -125,6 +169,8 @@ struct DeviceState {
     pending: Vec<proto::Action>,
     /// Input events waiting to be sent while this PC is being controlled.
     pending_input: Vec<proto::InputEvent>,
+    /// Requests from the UI waiting for this device's task to answer them.
+    requests: Vec<DeviceRequest>,
     last_action: Option<ActionReport>,
 }
 
@@ -140,6 +186,7 @@ impl DeviceState {
             monitor: 0,
             pending: Vec::new(),
             pending_input: Vec::new(),
+            requests: Vec::new(),
             last_action: None,
         }
     }
@@ -477,6 +524,121 @@ impl DeviceManager {
             .unwrap_or_default()
     }
 
+    /// Parks a request for one device and waits for its task to answer.
+    ///
+    /// # Errors
+    /// Returns a message if the PC is unknown, not connected, or drops before answering.
+    async fn ask<T>(
+        &self,
+        device_id: &str,
+        make: impl FnOnce(tokio::sync::oneshot::Sender<T>) -> DeviceRequest,
+    ) -> Result<T, String> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        {
+            let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+            let state = devices
+                .get_mut(device_id)
+                .ok_or_else(|| "unknown device".to_string())?;
+            if state.status != DeviceStatus::Live {
+                return Err("that PC is not connected".into());
+            }
+            state.requests.push(make(reply));
+        }
+        answer
+            .await
+            .map_err(|_| "that PC stopped responding".to_string())
+    }
+
+    /// Starts recording on one PC, returning what it is actually recording after clamping.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn start_recording(
+        &self,
+        device_id: &str,
+        max_width: u32,
+        max_height: u32,
+        fps: u32,
+    ) -> Result<proto::RecordingInfo, String> {
+        let monitor = self
+            .devices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(device_id)
+            .map_or(0, |s| s.monitor);
+        self.ask(device_id, |reply| DeviceRequest::StartRecording {
+            monitor,
+            max_width,
+            max_height,
+            fps,
+            reply,
+        })
+        .await
+    }
+
+    /// Stops the recording on one PC.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn stop_recording(&self, device_id: &str) -> Result<proto::RecordingInfo, String> {
+        self.ask(device_id, |reply| DeviceRequest::StopRecording { reply })
+            .await
+    }
+
+    /// How the recording on one PC is going.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn recording_status(&self, device_id: &str) -> Result<proto::RecordingInfo, String> {
+        self.ask(device_id, |reply| DeviceRequest::RecordingStatus { reply })
+            .await
+    }
+
+    /// The programs one PC offers to start.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn list_apps(&self, device_id: &str) -> Result<Vec<proto::AppEntry>, String> {
+        self.ask(device_id, |reply| DeviceRequest::ListApps { reply })
+            .await
+    }
+
+    /// Starts one published program on a PC.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn launch_app(&self, device_id: &str, id: u32) -> Result<(String, bool), String> {
+        self.ask(device_id, |reply| DeviceRequest::LaunchApp { id, reply })
+            .await
+    }
+
+    /// What is running and closable on a PC.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn list_running(&self, device_id: &str) -> Result<Vec<proto::RunningApp>, String> {
+        self.ask(device_id, |reply| DeviceRequest::ListRunning { reply })
+            .await
+    }
+
+    /// Closes a running program on a PC.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn close_app(&self, device_id: &str, pid: u32) -> Result<bool, String> {
+        self.ask(device_id, |reply| DeviceRequest::CloseApp { pid, reply })
+            .await
+    }
+
+    /// Takes the queued UI requests for one device.
+    fn take_requests(&self, id: &str) -> Vec<DeviceRequest> {
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        devices
+            .get_mut(id)
+            .map(|state| std::mem::take(&mut state.requests))
+            .unwrap_or_default()
+    }
+
     /// Takes the queued actions for one device, leaving its queue empty.
     fn take_pending(&self, id: &str) -> Vec<proto::Action> {
         let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
@@ -692,6 +854,53 @@ impl DeviceManager {
                 }
             }
 
+            // Answer whatever the window asked for. A dropped receiver (the teacher closed the
+            // dialog) is not an error: the send simply fails and we move on.
+            for request in self.take_requests(id) {
+                match request {
+                    DeviceRequest::StartRecording {
+                        monitor,
+                        max_width,
+                        max_height,
+                        fps,
+                        reply,
+                    } => {
+                        let info = session
+                            .start_recording(monitor, max_width, max_height, fps)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let _ = reply.send(info);
+                    }
+                    DeviceRequest::StopRecording { reply } => {
+                        let info = session.stop_recording().await.map_err(|e| e.to_string())?;
+                        let _ = reply.send(info);
+                    }
+                    DeviceRequest::RecordingStatus { reply } => {
+                        let info = session
+                            .recording_status()
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let _ = reply.send(info);
+                    }
+                    DeviceRequest::ListApps { reply } => {
+                        let apps = session.request_apps().await.map_err(|e| e.to_string())?;
+                        let _ = reply.send(apps);
+                    }
+                    DeviceRequest::LaunchApp { id, reply } => {
+                        let result = session.launch_app(id).await.map_err(|e| e.to_string())?;
+                        let _ = reply.send(result);
+                    }
+                    DeviceRequest::ListRunning { reply } => {
+                        let running = session.request_running().await.map_err(|e| e.to_string())?;
+                        let _ = reply.send(running);
+                    }
+                    DeviceRequest::CloseApp { pid, reply } => {
+                        let closed = session.close_app(pid).await.map_err(|e| e.to_string())?;
+                        let _ = reply.send(closed);
+                    }
+                }
+            }
+
             // Actions first: a teacher's click should not wait behind a screen refresh.
             // ponytail: picked up on the next loop turn, so up to one refresh interval (1 s) late;
             // wake the loop with a Notify if teachers find that sluggish.
@@ -808,6 +1017,9 @@ impl DeviceManager {
                 // Anything still queued was for a connection that no longer exists; see `perform`.
                 state.pending.clear();
                 state.pending_input.clear();
+                // Drop the reply channels: every waiting caller learns at once that the PC went
+                // away, instead of hanging until it times out.
+                state.requests.clear();
             }
             state.status = status;
             state.detail = detail;

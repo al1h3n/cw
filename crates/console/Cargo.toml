@@ -20,7 +20,7 @@ proto = { path = "../proto" }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] } # the teacher-facing GUI (AGENTS D13)
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

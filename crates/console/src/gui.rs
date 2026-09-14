@@ -266,6 +266,81 @@ fn send_input(state: State<'_, AppState>, events: Vec<UiInput>) -> Result<(), St
     state.manager.queue_input(to_wire(events))
 }
 
+/// Starts recording one PC's screen. Returns what it is actually recording after clamping.
+#[tauri::command]
+async fn start_recording(
+    state: State<'_, AppState>,
+    device_id: String,
+    max_width: u32,
+    max_height: u32,
+    fps: u32,
+) -> Result<proto::RecordingInfo, String> {
+    state
+        .manager
+        .start_recording(&device_id, max_width, max_height, fps)
+        .await
+}
+
+/// Stops the recording on one PC.
+#[tauri::command]
+async fn stop_recording(
+    state: State<'_, AppState>,
+    device_id: String,
+) -> Result<proto::RecordingInfo, String> {
+    state.manager.stop_recording(&device_id).await
+}
+
+/// How the recording on one PC is going.
+#[tauri::command]
+async fn recording_status(
+    state: State<'_, AppState>,
+    device_id: String,
+) -> Result<proto::RecordingInfo, String> {
+    state.manager.recording_status(&device_id).await
+}
+
+/// The programs a PC offers to start.
+#[tauri::command]
+async fn list_apps(
+    state: State<'_, AppState>,
+    device_id: String,
+) -> Result<Vec<proto::AppEntry>, String> {
+    state.manager.list_apps(&device_id).await
+}
+
+/// Starts one of the programs a PC published.
+#[tauri::command]
+async fn launch_app(
+    state: State<'_, AppState>,
+    device_id: String,
+    id: u32,
+) -> Result<bool, String> {
+    state
+        .manager
+        .launch_app(&device_id, id)
+        .await
+        .map(|(_, started)| started)
+}
+
+/// What is running and closable on a PC.
+#[tauri::command]
+async fn list_running(
+    state: State<'_, AppState>,
+    device_id: String,
+) -> Result<Vec<proto::RunningApp>, String> {
+    state.manager.list_running(&device_id).await
+}
+
+/// Closes a running program on a PC.
+#[tauri::command]
+async fn close_app(
+    state: State<'_, AppState>,
+    device_id: String,
+    pid: u32,
+) -> Result<bool, String> {
+    state.manager.close_app(&device_id, pid).await
+}
+
 /// The room a device joins when invited, and the password needed to take one out again.
 #[derive(serde::Serialize)]
 struct RoomInfo {
@@ -384,6 +459,13 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             set_controlling,
             controlling,
             send_input,
+            start_recording,
+            stop_recording,
+            recording_status,
+            list_apps,
+            launch_app,
+            list_running,
+            close_app,
             set_listening,
             listening,
             translation,

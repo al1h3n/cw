@@ -44,3 +44,23 @@ export interface PairingInvite {
   code: string
   command: string
 }
+
+export interface RecordingInfo {
+  active: boolean
+  file: string
+  frames: number
+  width: number
+  height: number
+  fps: number
+  problem: string
+}
+
+export interface AppEntry {
+  id: number
+  name: string
+}
+
+export interface RunningApp {
+  pid: number
+  name: string
+}

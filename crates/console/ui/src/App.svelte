@@ -6,6 +6,8 @@
   import Focused from './lib/Focused.svelte'
   import ActionMenu from './lib/ActionMenu.svelte'
   import BlocklistDialog from './lib/BlocklistDialog.svelte'
+  import Tutorial from './lib/Tutorial.svelte'
+  import RoomCard from './lib/RoomCard.svelte'
   import LanguagePicker from './lib/LanguagePicker.svelte'
   import QualityPicker from './lib/QualityPicker.svelte'
   import { i18n, t } from './lib/i18n.svelte'
@@ -16,6 +18,8 @@
   let watching = $state(false)
   let pairing = $state(false)
   let editingBlocklist = $state(false)
+  let showTutorial = $state(false)
+  let controllingId = $state<string | null>(null)
   let focused = $state<string | null>(null)
   let listeningTo = $state<string | null>(null)
   let error = $state<string | null>(null)
@@ -80,6 +84,16 @@
     }
   }
 
+  /** Taking control is exclusive: the backend enforces it, this just tracks what to show. */
+  async function control(deviceId: string | null) {
+    try {
+      await invoke('set_controlling', { deviceId })
+      controllingId = deviceId
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
   onMount(async () => {
     try {
       // Strings first, so nothing renders in the wrong language.
@@ -87,6 +101,12 @@
       info = await invoke<ConsoleInfo>('console_info')
     } catch (e) {
       error = String(e)
+    }
+    // The tour shows once, and only when there is nothing else demanding attention.
+    try {
+      showTutorial = localStorage.getItem('cowatcher.tutorial.seen') !== 'yes'
+    } catch {
+      showTutorial = false
     }
     await refresh()
     // One poll drives the whole grid; the agents only capture while watching is on.
@@ -126,6 +146,7 @@
       </button>
       <button onclick={() => (pairing = true)}>{t('addPc')}</button>
       <button onclick={() => (editingBlocklist = true)}>{t('blockButton')}</button>
+      <button onclick={() => (showTutorial = true)} title={t('helpHint')}>{t('help')}</button>
       {#if watching}
         <ActionMenu deviceId={null} liveCount={live} onerror={(m) => (error = m)} />
       {/if}
@@ -166,6 +187,7 @@
     {#if info}
       <span>{t('thisConsole')} <code>{info.device_id}</code></span>
     {/if}
+    <RoomCard onerror={(m) => (error = m)} />
     <span class="right">
       <QualityPicker />
       <span class="dot-label">
@@ -187,6 +209,10 @@
   />
 {/if}
 
+{#if showTutorial}
+  <Tutorial onclose={() => (showTutorial = false)} />
+{/if}
+
 {#if editingBlocklist}
   <BlocklistDialog onclose={() => (editingBlocklist = false)} />
 {/if}
@@ -198,6 +224,8 @@
     onmonitor={(index) => chooseMonitor(focusedDevice.device_id, index)}
     listening={listeningTo === focusedDevice.device_id}
     onlisten={(on) => listen(on ? focusedDevice.device_id : null)}
+    controlling={controllingId === focusedDevice.device_id}
+    oncontrol={(on) => control(on ? focusedDevice.device_id : null)}
     onerror={(m) => (error = m)}
   />
 {/if}
