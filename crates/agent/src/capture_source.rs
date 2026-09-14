@@ -22,6 +22,9 @@ pub struct ScreenCapture {
     audit: AuditLog,
     /// Enforces the blocklist on its own thread, independent of any Console (D9: offline too).
     blocker: crate::blocker::Blocker,
+    /// True only while a Console has explicitly taken control of the mouse and keyboard.
+    /// Input is dropped unless this is set, so a stray message can never move a student's pointer.
+    controlled: Mutex<bool>,
 }
 
 impl ScreenCapture {
@@ -36,6 +39,7 @@ impl ScreenCapture {
             audio: Mutex::new(None),
             audit: AuditLog::new(audit_path),
             blocker: crate::blocker::Blocker::start(blocklist_path),
+            controlled: Mutex::new(false),
         })
     }
 
@@ -49,6 +53,46 @@ impl ScreenCapture {
     #[must_use]
     pub fn monitor_count(&self) -> u8 {
         self.capturer.lock().map_or(0, |c| c.monitor_count())
+    }
+}
+
+/// Translates one wire input event into the matching `platform::input` call.
+fn apply_one(event: proto::InputEvent) -> Result<(), platform::input::InputError> {
+    use platform::input::{self, ButtonState, MouseButton};
+    use proto::{InputEvent, PointerButton};
+
+    /// The wire sends positions as `0..=65535`; `platform::input` takes a `0.0..=1.0` fraction.
+    const FULL: f32 = 65_535.0;
+
+    let state = |down: bool| {
+        if down {
+            ButtonState::Down
+        } else {
+            ButtonState::Up
+        }
+    };
+    match event {
+        InputEvent::MoveTo { x, y } => {
+            input::move_pointer(f32::from(x) / FULL, f32::from(y) / FULL)
+        }
+        InputEvent::Button { button, down } => input::mouse_button(
+            match button {
+                PointerButton::Left => MouseButton::Left,
+                PointerButton::Right => MouseButton::Right,
+                PointerButton::Middle => MouseButton::Middle,
+            },
+            state(down),
+        ),
+        InputEvent::Scroll { delta } => input::scroll(delta),
+        InputEvent::Key { virtual_key, down } => input::key(virtual_key, state(down)),
+        InputEvent::Text(ch) => {
+            input::unicode_char(ch, ButtonState::Down)?;
+            input::unicode_char(ch, ButtonState::Up)
+        }
+        InputEvent::ReleaseAll => {
+            input::release_all_modifiers();
+            Ok(())
+        }
     }
 }
 
@@ -173,6 +217,45 @@ impl AgentDevice for ScreenCapture {
                     .map_or_else(Vec::new, |c| c.take(max_samples))
             },
         )
+    }
+
+    fn set_control(&self, from: &PeerInfo, enabled: bool) -> bool {
+        let mut controlled = self.controlled.lock().unwrap_or_else(|e| e.into_inner());
+        if *controlled == enabled {
+            return enabled;
+        }
+        *controlled = enabled;
+        if !enabled {
+            // Never leave a student with a modifier stuck down because the key-up never arrived.
+            platform::input::release_all_modifiers();
+        }
+        // Being driven is exactly the kind of thing that must be on the record (D3).
+        let action = if enabled {
+            "control-start"
+        } else {
+            "control-stop"
+        };
+        println!("console {} → {action}", from.device_id);
+        if let Err(err) = self
+            .audit
+            .note(net::endpoint::now_ms(), from.device_id, action)
+        {
+            eprintln!("audit log write failed: {err}");
+        }
+        enabled
+    }
+
+    fn apply_input(&self, events: &[proto::InputEvent]) -> (u16, bool) {
+        if !*self.controlled.lock().unwrap_or_else(|e| e.into_inner()) {
+            return (0, true); // refused: nobody has been granted control
+        }
+        let mut applied = 0u16;
+        for event in events {
+            if apply_one(*event).is_ok() {
+                applied = applied.saturating_add(1);
+            }
+        }
+        (applied, false)
     }
 
     fn set_blocklist(&self, programs: Vec<String>) -> u16 {

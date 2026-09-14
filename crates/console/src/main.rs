@@ -62,8 +62,9 @@ fn main() -> ExitCode {
         Some("listen") => block_on(cmd_listen(rest)),
         Some("act") => block_on(cmd_act(rest)),
         Some("block") => block_on(cmd_block(rest)),
+        Some("control") => block_on(cmd_control(rest)),
         _ => Err(
-            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|version]  (no arguments opens the window)"
+            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|version]  (no arguments opens the window)"
                 .into(),
         ),
     };
@@ -315,6 +316,87 @@ async fn cmd_act(args: Vec<String>) -> Result<(), String> {
         proto::ActionOutcome::Started { .. } => Ok(()),
         proto::ActionOutcome::Failed(reason) => Err(reason.to_string()),
     }
+}
+
+/// Drives a paired PC's mouse and keyboard from the command line, to prove remote control works
+/// without needing the window. Moves the pointer in a square, then types some text.
+async fn cmd_control(args: Vec<String>) -> Result<(), String> {
+    let Some(agent) = args.first() else {
+        return Err("usage: cowatcher-console control <agent-endpoint-key> [text-to-type]".into());
+    };
+    let agent_key: iroh::EndpointId = agent
+        .parse()
+        .map_err(|_| "invalid agent endpoint key".to_string())?;
+    let text = args.get(1).cloned().unwrap_or_default();
+
+    let (endpoint, mut session) = connect_paired(agent_key).await?;
+
+    // Input is refused until control is explicitly granted; prove that first.
+    let (applied, refused) = session
+        .send_input(vec![proto::InputEvent::MoveTo { x: 100, y: 100 }])
+        .await
+        .map_err(|e| e.to_string())?;
+    println!("before taking control: applied {applied}, refused {refused}");
+
+    let granted = session.set_control(true).await.map_err(|e| e.to_string())?;
+    println!("control granted: {granted}");
+    if !granted {
+        return Err("that PC did not grant control".into());
+    }
+
+    // Walk the pointer around a square, in screen fractions (0..=65535).
+    let corners = [
+        (16_000u16, 16_000u16),
+        (49_000, 16_000),
+        (49_000, 49_000),
+        (16_000, 49_000),
+        (32_767, 32_767),
+    ];
+    let mut total = 0u16;
+    for (x, y) in corners {
+        let (applied, _) = session
+            .send_input(vec![proto::InputEvent::MoveTo { x, y }])
+            .await
+            .map_err(|e| e.to_string())?;
+        total += applied;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    println!("pointer moves applied: {total}");
+
+    if !text.is_empty() {
+        // Click where the pointer ended up first. Typing goes to whatever the student PC has
+        // focused, so a real teacher clicks the window they mean — and this exercises buttons too.
+        session
+            .send_input(vec![
+                proto::InputEvent::Button {
+                    button: proto::PointerButton::Left,
+                    down: true,
+                },
+                proto::InputEvent::Button {
+                    button: proto::PointerButton::Left,
+                    down: false,
+                },
+            ])
+            .await
+            .map_err(|e| e.to_string())?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let events: Vec<proto::InputEvent> = text.chars().map(proto::InputEvent::Text).collect();
+        let (typed, _) = session
+            .send_input(events)
+            .await
+            .map_err(|e| e.to_string())?;
+        println!("characters typed: {typed}");
+    }
+
+    let granted = session
+        .set_control(false)
+        .await
+        .map_err(|e| e.to_string())?;
+    println!("control released: {}", !granted);
+    session.close();
+    endpoint.close().await;
+    Ok(())
 }
 
 /// Sets the blocklist on one paired PC directly (an empty list clears it), for testing without the

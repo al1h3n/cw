@@ -123,6 +123,8 @@ struct DeviceState {
     monitor: u8,
     /// Actions the teacher asked for that the device's task has not sent yet.
     pending: Vec<proto::Action>,
+    /// Input events waiting to be sent while this PC is being controlled.
+    pending_input: Vec<proto::InputEvent>,
     last_action: Option<ActionReport>,
 }
 
@@ -137,6 +139,7 @@ impl DeviceState {
             monitors: Vec::new(),
             monitor: 0,
             pending: Vec::new(),
+            pending_input: Vec::new(),
             last_action: None,
         }
     }
@@ -160,6 +163,8 @@ struct Preview {
     /// The one device being listened to. Listening to a whole room at once would be unusable noise
     /// and heavy on the network, so it is deliberately exclusive.
     listening: Option<[u8; 32]>,
+    /// The one device being driven. Exclusive for the same reason a mouse has one pointer.
+    controlling: Option<[u8; 32]>,
 }
 
 impl Default for Preview {
@@ -169,6 +174,7 @@ impl Default for Preview {
             focused_width: DEFAULT_FOCUSED_WIDTH,
             focused: None,
             listening: None,
+            controlling: None,
         }
     }
 }
@@ -396,6 +402,81 @@ impl DeviceManager {
         Ok(sent)
     }
 
+    /// Takes control of one PC's mouse and keyboard, or gives it back.
+    ///
+    /// Control is exclusive, like listening: driving two PCs at once with one mouse is meaningless,
+    /// and it makes "which PC am I typing into?" impossible for a teacher to answer.
+    ///
+    /// # Errors
+    /// Returns a message if the device is unknown or not connected.
+    pub fn set_controlling(&self, device_id: Option<&str>) -> Result<(), String> {
+        let key = match device_id {
+            Some(id) => {
+                let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+                let state = devices
+                    .get(id)
+                    .ok_or_else(|| "unknown device".to_string())?;
+                if state.status != DeviceStatus::Live {
+                    return Err("that PC is not connected".into());
+                }
+                Some(state.key)
+            }
+            None => None,
+        };
+        let mut preview = self.preview.lock().unwrap_or_else(|e| e.into_inner());
+        preview.controlling = key;
+        Ok(())
+    }
+
+    /// Which PC the teacher is currently driving, if any.
+    #[must_use]
+    pub fn controlling(&self) -> Option<String> {
+        let key = self
+            .preview
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .controlling?;
+        Some(DeviceId::from_public_key(&key).to_string())
+    }
+
+    /// Queues input events for the PC currently being controlled.
+    ///
+    /// # Errors
+    /// Returns a message if no PC is being controlled, or that PC is unknown.
+    pub fn queue_input(&self, events: Vec<proto::InputEvent>) -> Result<(), String> {
+        let key = self
+            .preview
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .controlling
+            .ok_or_else(|| "no PC is being controlled".to_string())?;
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        let state = devices
+            .values_mut()
+            .find(|s| s.key == key)
+            .ok_or_else(|| "unknown device".to_string())?;
+        // Drop the oldest rather than grow without bound: stale pointer positions are worthless,
+        // and a teacher would rather the pointer jump to "now" than replay a backlog.
+        state.pending_input.extend(events);
+        let overflow = state
+            .pending_input
+            .len()
+            .saturating_sub(proto::MAX_INPUT_BATCH);
+        if overflow > 0 {
+            state.pending_input.drain(0..overflow);
+        }
+        Ok(())
+    }
+
+    /// Takes the queued input for one device.
+    fn take_input(&self, id: &str) -> Vec<proto::InputEvent> {
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        devices
+            .get_mut(id)
+            .map(|state| std::mem::take(&mut state.pending_input))
+            .unwrap_or_default()
+    }
+
     /// Takes the queued actions for one device, leaving its queue empty.
     fn take_pending(&self, id: &str) -> Vec<proto::Action> {
         let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
@@ -572,6 +653,8 @@ impl DeviceManager {
         let mut audio_on: Option<proto::AudioFormat> = None;
         // Send the blocklist whenever its version moves; 0 forces a send on the first pass.
         let mut sent_blocklist: u64 = 0;
+        // Whether this connection has been granted control of the PC.
+        let mut controlling = false;
 
         loop {
             let (programs, version) = {
@@ -584,6 +667,29 @@ impl DeviceManager {
                     .await
                     .map_err(|e| e.to_string())?;
                 sent_blocklist = version;
+            }
+
+            // Control and input come first: a click must not wait behind a screen refresh.
+            let wants_control = self
+                .preview
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .controlling
+                == Some(key);
+            if wants_control != controlling {
+                controlling = session
+                    .set_control(wants_control)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            if controlling {
+                let events = self.take_input(id);
+                if !events.is_empty() {
+                    session
+                        .send_input(events)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
             }
 
             // Actions first: a teacher's click should not wait behind a screen refresh.
@@ -701,6 +807,7 @@ impl DeviceManager {
             if status != DeviceStatus::Live {
                 // Anything still queued was for a connection that no longer exists; see `perform`.
                 state.pending.clear();
+                state.pending_input.clear();
             }
             state.status = status;
             state.detail = detail;

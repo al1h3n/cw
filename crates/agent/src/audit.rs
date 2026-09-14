@@ -51,6 +51,28 @@ impl AuditLog {
             .open(&self.path)?;
         writeln!(file, "{}", line(at_ms, console, action, outcome))
     }
+
+    /// Records a non-action event, such as remote control starting or stopping.
+    ///
+    /// # Errors
+    /// The file cannot be opened or written.
+    pub fn note(&self, at_ms: u64, console: DeviceId, event: &str) -> std::io::Result<()> {
+        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+        writeln!(file, "{}", note_line(at_ms, console, event))
+    }
+}
+
+/// Records something that is not an [`Action`] but still belongs on the record — taking control of
+/// the mouse and keyboard, starting a recording, broadcasting to this PC.
+///
+/// # Errors
+/// The file cannot be opened or written.
+pub fn note_line(at_ms: u64, console: DeviceId, event: &str) -> String {
+    format!("{at_ms}\t{console}\t{event}\t-\tnoted")
 }
 
 /// Formats one audit line: `time_ms  console  action  detail  result`.

@@ -187,6 +187,107 @@ fn set_monitor(state: State<'_, AppState>, device_id: String, monitor: u8) -> Re
     state.manager.set_monitor(&device_id, monitor)
 }
 
+/// Takes control of one PC's mouse and keyboard, or releases it when `device_id` is absent.
+#[tauri::command]
+fn set_controlling(state: State<'_, AppState>, device_id: Option<String>) -> Result<(), String> {
+    state.manager.set_controlling(device_id.as_deref())
+}
+
+/// Which PC is being driven, if any.
+#[tauri::command]
+fn controlling(state: State<'_, AppState>) -> Option<String> {
+    state.manager.controlling()
+}
+
+/// One input event as the front end describes it, before it becomes a typed [`proto::InputEvent`].
+///
+/// The UI reports pointer positions as fractions of the *image* it is showing, which is exactly the
+/// fraction of the student's screen — so a different resolution on either side changes nothing.
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum UiInput {
+    /// Pointer moved to this fraction of the screen (0.0 – 1.0).
+    Move { x: f64, y: f64 },
+    /// A mouse button changed state.
+    Button { button: String, down: bool },
+    /// The wheel turned.
+    Scroll { delta: i32 },
+    /// A key changed state, by Windows virtual-key code.
+    Key { virtual_key: u16, down: bool },
+    /// A character was typed.
+    Text { text: String },
+    /// Release every held modifier.
+    ReleaseAll,
+}
+
+/// Converts the UI's description into wire events, dropping anything malformed rather than guessing.
+fn to_wire(events: Vec<UiInput>) -> Vec<proto::InputEvent> {
+    /// Fractions arrive as 0.0–1.0 and go out as 0–65535, the range Windows itself uses.
+    fn fraction(value: f64) -> u16 {
+        let clamped = if value.is_nan() { 0.5 } else { value.clamp(0.0, 1.0) };
+        (clamped * f64::from(u16::MAX)) as u16
+    }
+    let mut out = Vec::new();
+    for event in events {
+        match event {
+            UiInput::Move { x, y } => out.push(proto::InputEvent::MoveTo {
+                x: fraction(x),
+                y: fraction(y),
+            }),
+            UiInput::Button { button, down } => {
+                let button = match button.as_str() {
+                    "left" => proto::PointerButton::Left,
+                    "right" => proto::PointerButton::Right,
+                    "middle" => proto::PointerButton::Middle,
+                    _ => continue, // unknown button: ignore rather than invent a click
+                };
+                out.push(proto::InputEvent::Button { button, down });
+            }
+            UiInput::Scroll { delta } => out.push(proto::InputEvent::Scroll {
+                delta: delta.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+            }),
+            UiInput::Key { virtual_key, down } => {
+                out.push(proto::InputEvent::Key { virtual_key, down });
+            }
+            UiInput::Text { text } => out.extend(text.chars().map(proto::InputEvent::Text)),
+            UiInput::ReleaseAll => out.push(proto::InputEvent::ReleaseAll),
+        }
+    }
+    out
+}
+
+/// Queues input for the PC currently being controlled.
+#[tauri::command]
+fn send_input(state: State<'_, AppState>, events: Vec<UiInput>) -> Result<(), String> {
+    state.manager.queue_input(to_wire(events))
+}
+
+/// The room a device joins when invited, and the password needed to take one out again.
+#[derive(serde::Serialize)]
+struct RoomInfo {
+    name: String,
+    /// Grouped for reading aloud: `K7M2-Q9XR-4T6B`.
+    password: String,
+}
+
+#[tauri::command]
+fn room_info(state: State<'_, AppState>) -> RoomInfo {
+    let (name, password) = state.manager.room();
+    RoomInfo { name, password }
+}
+
+/// Renames the room. Devices already in it keep working.
+#[tauri::command]
+fn rename_room(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    state.manager.rename_room(&name)
+}
+
+/// Issues a new room password. Devices already invited keep the old one until re-invited.
+#[tauri::command]
+fn new_room_password(state: State<'_, AppState>) -> Result<(), String> {
+    state.manager.new_room_password()
+}
+
 /// The room-wide blocklist, one program name per entry.
 #[tauri::command]
 fn blocklist(state: State<'_, AppState>) -> Vec<String> {
@@ -273,6 +374,12 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             perform,
             blocklist,
             set_blocklist,
+            room_info,
+            rename_room,
+            new_room_password,
+            set_controlling,
+            controlling,
+            send_input,
             set_listening,
             listening,
             translation,

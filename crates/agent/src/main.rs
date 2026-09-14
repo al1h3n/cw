@@ -216,7 +216,8 @@ async fn cmd_serve() -> Result<(), String> {
             .union(Capabilities::AUDIO)
             .union(Capabilities::LOCK)
             .union(Capabilities::POWER)
-            .union(Capabilities::BLOCK),
+            .union(Capabilities::BLOCK)
+            .union(Capabilities::REMOTE_INPUT),
     };
     loop {
         tokio::select! {

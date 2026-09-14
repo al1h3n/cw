@@ -92,6 +92,66 @@ pub struct AudioFormat {
     pub channels: u8,
 }
 
+/// The most input events carried in one [`Control::Input`] batch.
+///
+/// Mouse movement produces events far faster than a network round trip, so the Console coalesces
+/// them into batches. The cap keeps one message small and bounds the work an Agent does per message.
+pub const MAX_INPUT_BATCH: usize = 64;
+
+/// A mouse button, as named on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PointerButton {
+    /// Primary button.
+    Left,
+    /// Context-menu button.
+    Right,
+    /// Wheel click.
+    Middle,
+}
+
+/// One remote input event.
+///
+/// Positions are **fractions of the screen** expressed as `0..=65535`, not pixels: the teacher's
+/// screen is rarely the same size or scale as the student's, and a fraction survives a resolution
+/// change, a scaled display and a different monitor. It is also exactly the range Windows'
+/// absolute-positioning API uses, so nothing is lost in translation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InputEvent {
+    /// Move the pointer to this fraction of the screen.
+    MoveTo {
+        /// Horizontal position, `0..=65535` across the screen.
+        x: u16,
+        /// Vertical position, `0..=65535` down the screen.
+        y: u16,
+    },
+    /// Press or release a mouse button where the pointer is.
+    Button {
+        /// Which button.
+        button: PointerButton,
+        /// True to press, false to release.
+        down: bool,
+    },
+    /// Turn the wheel. Positive is away from the user.
+    Scroll {
+        /// Notches to scroll.
+        delta: i16,
+    },
+    /// Press or release a key, by Windows virtual-key code.
+    ///
+    /// A key code rather than a letter, so the **student's** keyboard layout decides what character
+    /// appears — the same choice RDP and VNC make.
+    Key {
+        /// Windows virtual-key code.
+        virtual_key: u16,
+        /// True to press, false to release.
+        down: bool,
+    },
+    /// Type one character directly, for symbols the student's layout cannot otherwise produce.
+    Text(char),
+    /// Release every modifier. Sent when control ends, so no key is left stuck down.
+    ReleaseAll,
+}
+
 /// Something a Console can make a student PC do.
 ///
 /// This is a **closed list on purpose**: there is no "run this command" variant in any tier, so a
@@ -278,6 +338,31 @@ pub enum Control {
         /// Names closed since the previous state message, capped so the reply stays small.
         closed: Vec<String>,
     },
+    /// Console → Agent: take (or give up) control of this PC's mouse and keyboard.
+    ///
+    /// Taking control is explicit and shows on the student's screen, so nobody is driven silently
+    /// (D3). Giving it up releases every held modifier.
+    SetControl {
+        /// True to take control, false to release it.
+        enabled: bool,
+    },
+    /// Agent → Console: whether this PC is currently accepting remote input.
+    ControlState {
+        /// True if remote input is being applied.
+        enabled: bool,
+    },
+    /// Console → Agent: apply these input events in order.
+    ///
+    /// Batched because pointer movement outruns a network round trip. Longer than
+    /// [`MAX_INPUT_BATCH`] is refused rather than truncated.
+    Input(Vec<InputEvent>),
+    /// Agent → Console: how many events were applied, so the Console can tell "refused" from "lost".
+    InputDone {
+        /// Events actually delivered to the OS.
+        applied: u16,
+        /// True if the PC is not currently granting control.
+        refused: bool,
+    },
     /// Console → Agent: do this one named thing (power, lock). See [`Action`].
     Perform(Action),
     /// Agent → Console: what happened to the [`Control::Perform`] request.
@@ -380,6 +465,26 @@ mod tests {
             Control::BlocklistState {
                 rules: 2,
                 closed: vec!["steam.exe".into()],
+            },
+            Control::SetControl { enabled: true },
+            Control::ControlState { enabled: false },
+            Control::Input(vec![
+                InputEvent::MoveTo { x: 0, y: 65_535 },
+                InputEvent::Button {
+                    button: PointerButton::Left,
+                    down: true,
+                },
+                InputEvent::Scroll { delta: -3 },
+                InputEvent::Key {
+                    virtual_key: 0x5B,
+                    down: true,
+                },
+                InputEvent::Text('D'),
+                InputEvent::ReleaseAll,
+            ]),
+            Control::InputDone {
+                applied: 6,
+                refused: false,
             },
             Control::Perform(Action::Shutdown { delay_seconds: 60 }),
             Control::ActionDone {

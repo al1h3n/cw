@@ -32,6 +32,10 @@ impl Room {
     }
 
     /// The password exactly as it must be typed.
+    ///
+    /// Only the grouped form is shown in the UI, so this exists for the tests that prove the
+    /// password is strong, unique per install, and never written to disk in the clear.
+    #[cfg(test)]
     #[must_use]
     pub fn password(&self) -> &str {
         self.password.as_str()

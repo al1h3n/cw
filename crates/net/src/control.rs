@@ -96,6 +96,24 @@ pub trait AgentDevice {
     fn take_blocked(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Grants or withdraws permission for a Console to drive this PC's mouse and keyboard.
+    ///
+    /// Returns whether control is now granted. The default refuses, so a device that cannot inject
+    /// input reports "not controllable" instead of silently swallowing events.
+    fn set_control(&self, from: &PeerInfo, enabled: bool) -> bool {
+        let _ = (from, enabled);
+        false
+    }
+
+    /// Applies input events in order, returning how many reached the OS.
+    ///
+    /// The second value is `true` when the device is not currently granting control, so the Console
+    /// can say "that PC is not letting you drive" rather than "your click vanished".
+    fn apply_input(&self, events: &[proto::InputEvent]) -> (u16, bool) {
+        let _ = events;
+        (0, true)
+    }
 }
 
 /// A capture failure, carrying a human-readable reason.
@@ -256,6 +274,42 @@ impl ControlSession {
         }
     }
 
+    /// Console side: take or release control of the PC's mouse and keyboard.
+    ///
+    /// Returns whether control is now granted.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn set_control(&mut self, enabled: bool) -> Result<bool, EndpointError> {
+        write_message(&mut self.send, &Control::SetControl { enabled }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::ControlState { enabled } => Ok(enabled),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: send a batch of input events and wait for the acknowledgement.
+    ///
+    /// Returns `(applied, refused)`.
+    ///
+    /// # Errors
+    /// Stream failure, an unexpected reply, or a batch longer than [`proto::MAX_INPUT_BATCH`].
+    pub async fn send_input(
+        &mut self,
+        events: Vec<proto::InputEvent>,
+    ) -> Result<(u16, bool), EndpointError> {
+        if events.len() > proto::MAX_INPUT_BATCH {
+            return Err(EndpointError::Protocol);
+        }
+        write_message(&mut self.send, &Control::Input(events)).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::InputDone { applied, refused } => Ok((applied, refused)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Console side: ask the Agent to do one [`proto::Action`] and wait for its answer.
     ///
     /// # Errors
@@ -321,6 +375,20 @@ impl ControlSession {
                         },
                     )
                     .await?;
+                }
+                Control::SetControl { enabled } => {
+                    let enabled = source.set_control(&self.peer, enabled);
+                    write_message(&mut self.send, &Control::ControlState { enabled }).await?;
+                }
+                Control::Input(events) => {
+                    // Trust boundary: an over-long batch is refused outright, never truncated and
+                    // never applied in part, so a malformed peer cannot flood the input queue.
+                    let (applied, refused) = if events.len() > proto::MAX_INPUT_BATCH {
+                        (0, true)
+                    } else {
+                        source.apply_input(&events)
+                    };
+                    write_message(&mut self.send, &Control::InputDone { applied, refused }).await?;
                 }
                 Control::SetBlocklist { programs } => {
                     let rules = source.set_blocklist(programs);
