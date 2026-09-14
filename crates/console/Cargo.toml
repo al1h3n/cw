@@ -1,6 +1,6 @@
 [package]
-name = "agent"
-description = "Student-device agent: the supervising service and its per-session helper."
+name = "console-app"
+description = "Teacher/admin console: pairs devices and watches their screens."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,14 +8,12 @@ license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "cowatcher-agent"
+name = "cowatcher-console"
 path = "src/main.rs"
 
 [dependencies]
 iroh = "1.2"
-media = { path = "../media" }
 net = { path = "../net" }
-platform = { path = "../platform" }
 proto = { path = "../proto" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 

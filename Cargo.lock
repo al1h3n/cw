@@ -56,8 +56,12 @@ dependencies = [
 name = "agent"
 version = "0.1.0"
 dependencies = [
+ "iroh",
+ "media",
+ "net",
  "platform",
  "proto",
+ "tokio",
 ]
 
 [[package]]
@@ -317,6 +321,16 @@ checksum = "cfc320937d09e6de266b31b9afb480f197d7a861be86be7cb2ea7e5d1bfffc5e"
 dependencies = [
  "bytes",
  "memchr",
+]
+
+[[package]]
+name = "console-app"
+version = "0.1.0"
+dependencies = [
+ "iroh",
+ "net",
+ "proto",
+ "tokio",
 ]
 
 [[package]]
@@ -1513,6 +1527,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-encoder"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
+
+[[package]]
 name = "js-sys"
 version = "0.3.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1603,6 +1623,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
+]
+
+[[package]]
+name = "media"
+version = "0.1.0"
+dependencies = [
+ "jpeg-encoder",
+ "thiserror 2.0.20",
+ "windows",
 ]
 
 [[package]]

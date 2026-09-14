@@ -175,9 +175,25 @@ impl PairingSession {
 /// address-independent. When a paired device's IP changes, iroh reconnects to the same public key
 /// and this store still recognises it; nothing here needs updating. Persisting the store to disk
 /// reuses the same protected storage as the device key (added when the Agent service lands).
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TrustStore {
     pinned: HashSet<[u8; 32]>,
+}
+
+/// Errors loading or saving a [`TrustStore`].
+#[derive(Debug, thiserror::Error)]
+pub enum TrustStoreError {
+    /// Reading or writing the file failed.
+    #[error("trust store I/O at {path}: {source}")]
+    Io {
+        /// The file involved.
+        path: std::path::PathBuf,
+        /// The underlying error.
+        source: std::io::Error,
+    },
+    /// The stored file could not be decoded.
+    #[error("trust store file is corrupt")]
+    Corrupt,
 }
 
 impl TrustStore {
@@ -213,6 +229,46 @@ impl TrustStore {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.pinned.is_empty()
+    }
+
+    /// Every trusted key, for display and for pinning a peer the Console wants to dial.
+    pub fn keys(&self) -> impl Iterator<Item = &[u8; 32]> {
+        self.pinned.iter()
+    }
+
+    /// Loads a store from disk. A missing file is an empty store (first run).
+    ///
+    /// The contents are public keys, not secrets — but an attacker who can *write* this file grants
+    /// themselves control, so it must live in a directory only administrators can write.
+    ///
+    /// # Errors
+    /// Returns [`TrustStoreError`] if the file exists but cannot be read or decoded.
+    pub fn load(path: &std::path::Path) -> Result<Self, TrustStoreError> {
+        match std::fs::read(path) {
+            Ok(bytes) => proto::decode(&bytes).map_err(|_| TrustStoreError::Corrupt),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::new()),
+            Err(source) => Err(TrustStoreError::Io {
+                path: path.to_path_buf(),
+                source,
+            }),
+        }
+    }
+
+    /// Writes the store to disk atomically (temp file, then rename).
+    ///
+    /// # Errors
+    /// Returns [`TrustStoreError`] if the file cannot be written.
+    pub fn save(&self, path: &std::path::Path) -> Result<(), TrustStoreError> {
+        let io = |source| TrustStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(io)?;
+        }
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, proto::encode(self)).map_err(io)?;
+        std::fs::rename(&tmp, path).map_err(io)
     }
 }
 
@@ -315,6 +371,32 @@ mod tests {
     fn from_u32_rejects_out_of_range() {
         assert!(PairingCode::from_u32(999_999).is_some());
         assert!(PairingCode::from_u32(1_000_000).is_none());
+    }
+
+    #[test]
+    fn trust_store_round_trips_through_a_file() {
+        let dir = std::env::temp_dir().join(format!("cw-trust-{}", std::process::id()));
+        let path = dir.join("trust.bin");
+        let _ = std::fs::remove_file(&path);
+
+        // A missing file is simply an empty store.
+        assert!(TrustStore::load(&path).unwrap().is_empty());
+
+        let key = *iroh::SecretKey::generate().public().as_bytes();
+        let mut store = TrustStore::new();
+        store.pin(&key);
+        store.save(&path).unwrap();
+
+        let loaded = TrustStore::load(&path).unwrap();
+        assert!(loaded.is_trusted(&key), "pins survive a restart");
+        assert_eq!(loaded.len(), 1);
+
+        std::fs::write(&path, b"not a trust store").unwrap();
+        assert!(matches!(
+            TrustStore::load(&path),
+            Err(TrustStoreError::Corrupt)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

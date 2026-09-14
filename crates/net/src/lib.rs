@@ -14,4 +14,6 @@ pub use endpoint::{
     EndpointError, PairedPeer, agent_request_pairing, bind, console_accept_pairing,
 };
 pub use identity::{Identity, IdentityError};
-pub use pairing::{PairingCode, PairingCodeParseError, PairingSession, TrustStore};
+pub use pairing::{
+    PairingCode, PairingCodeParseError, PairingSession, TrustStore, TrustStoreError,
+};
