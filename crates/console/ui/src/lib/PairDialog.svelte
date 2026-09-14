@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
   import { onMount } from 'svelte'
-  import { t } from './i18n'
+  import { t } from './i18n.svelte'
   import type { PairingInvite } from './types'
 
   let { onclose }: { onclose: () => void } = $props()

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { t } from './i18n'
+  import { t } from './i18n.svelte'
   import type { Device } from './types'
 
   let { device, watching, onopen }: { device: Device; watching: boolean; onopen: () => void } = $props()

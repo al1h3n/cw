@@ -15,6 +15,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // no console window in release
 
 mod gui;
+mod i18n;
 mod manager;
 
 use std::{

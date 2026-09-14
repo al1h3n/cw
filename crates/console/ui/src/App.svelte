@@ -4,7 +4,8 @@
   import DeviceTile from './lib/DeviceTile.svelte'
   import PairDialog from './lib/PairDialog.svelte'
   import Focused from './lib/Focused.svelte'
-  import { t } from './lib/i18n'
+  import LanguagePicker from './lib/LanguagePicker.svelte'
+  import { i18n, t } from './lib/i18n.svelte'
   import type { ConsoleInfo, Device } from './lib/types'
 
   let info = $state<ConsoleInfo | null>(null)
@@ -45,6 +46,8 @@
 
   onMount(async () => {
     try {
+      // Strings first, so nothing renders in the wrong language.
+      await i18n.load()
       info = await invoke<ConsoleInfo>('console_info')
     } catch (e) {
       error = String(e)
@@ -59,6 +62,10 @@
   })
 </script>
 
+<!-- Nothing renders until the strings are in, so raw keys never flash on screen. -->
+{#if !i18n.ready}
+  <div class="boot"></div>
+{:else}
 <div class="shell">
   <header>
     <div class="title">
@@ -114,12 +121,16 @@
     {#if info}
       <span>{t('thisConsole')} <code>{info.device_id}</code></span>
     {/if}
-    <span class:on={watching} class="dot-label">
-      <i class="dot" class:live={watching}></i>
-      {watching ? t('capturing') : t('notCapturing')}
+    <span class="right">
+      <span class="dot-label">
+        <i class="dot" class:live={watching}></i>
+        {watching ? t('capturing') : t('notCapturing')}
+      </span>
+      <LanguagePicker />
     </span>
   </footer>
 </div>
+{/if}
 
 {#if pairing}
   <PairDialog
@@ -219,6 +230,17 @@
     background: var(--panel);
     color: var(--muted);
     font-size: 12px;
+  }
+
+  .boot {
+    height: 100%;
+    background: var(--bg);
+  }
+
+  .right {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
   }
 
   .dot-label {

@@ -15,6 +15,102 @@ struct AppState {
     manager: Arc<DeviceManager>,
     /// The pairing code currently on screen, if the teacher opened "Add a PC".
     pairing_code: Mutex<Option<PairingCode>>,
+    /// Where per-user files live: the trust store, the device key and `languages/`.
+    data_dir: std::path::PathBuf,
+}
+
+impl AppState {
+    /// The folder a teacher drops extra `.ini` translations into.
+    fn languages_dir(&self) -> std::path::PathBuf {
+        self.data_dir.join("languages")
+    }
+
+    /// The language chosen last time, or the OS language, or English.
+    fn saved_language(&self) -> Option<String> {
+        std::fs::read_to_string(self.data_dir.join("language.txt"))
+            .ok()
+            .map(|s| s.trim().to_owned())
+    }
+}
+
+/// One entry in the language switcher.
+#[derive(serde::Serialize)]
+struct LanguageOption {
+    code: String,
+    name: String,
+}
+
+/// The strings the window should display, plus the list of languages to offer.
+#[derive(serde::Serialize)]
+struct Translation {
+    code: String,
+    strings: std::collections::BTreeMap<String, String>,
+    available: Vec<LanguageOption>,
+    /// Files that failed to parse, so a translator sees their mistake instead of silence.
+    problems: Vec<String>,
+    /// Shown in the UI so the teacher knows where to put a new `.ini`.
+    languages_dir: String,
+}
+
+/// Loads the requested language (or the remembered/system one when `code` is `None`).
+#[tauri::command]
+fn translation(
+    state: State<'_, AppState>,
+    code: Option<String>,
+    system: Option<String>,
+) -> Translation {
+    let dir = state.languages_dir();
+    let (catalogs, problems) = crate::i18n::available(&dir);
+
+    // Preference order: what the UI asked for, what was saved, the OS language, English.
+    let system_code = system.unwrap_or_default();
+    let system_code = system_code
+        .split(['-', '_'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let wanted = code
+        .or_else(|| state.saved_language())
+        .filter(|c| catalogs.iter().any(|k| &k.code == c))
+        .or_else(|| {
+            catalogs
+                .iter()
+                .find(|k| k.code == system_code)
+                .map(|k| k.code.clone())
+        })
+        .unwrap_or_else(|| "en".to_owned());
+
+    let resolved = crate::i18n::resolve(&catalogs, &wanted);
+    Translation {
+        code: resolved.code,
+        strings: resolved.strings,
+        available: catalogs
+            .into_iter()
+            .map(|c| LanguageOption {
+                code: c.code,
+                name: c.name,
+            })
+            .collect(),
+        problems,
+        languages_dir: dir.display().to_string(),
+    }
+}
+
+/// Remembers the teacher's language choice for next launch.
+#[tauri::command]
+fn set_language(state: State<'_, AppState>, code: String) -> Result<(), String> {
+    std::fs::create_dir_all(&state.data_dir).map_err(|e| e.to_string())?;
+    std::fs::write(state.data_dir.join("language.txt"), code).map_err(|e| e.to_string())
+}
+
+/// Writes the English file into the languages folder as a starting point for a new translation.
+#[tauri::command]
+fn export_language_template(state: State<'_, AppState>) -> Result<String, String> {
+    let dir = state.languages_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("template.ini");
+    std::fs::write(&path, crate::i18n::template()).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
 }
 
 /// Who this console is, shown in the header and on the pairing card.
@@ -92,6 +188,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             app.manage(AppState {
                 manager: Arc::clone(&manager),
                 pairing_code: Mutex::new(None),
+                data_dir: data_dir.clone(),
             });
             Ok(())
         })
@@ -100,6 +197,9 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             devices,
             start_watching,
             stop_watching,
+            translation,
+            set_language,
+            export_language_template,
             begin_pairing,
             await_pairing,
         ])
