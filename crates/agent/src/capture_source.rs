@@ -219,6 +219,71 @@ impl AgentDevice for ScreenCapture {
         )
     }
 
+    fn list_apps(&self) -> Vec<proto::AppEntry> {
+        platform::apps::list_apps()
+            .into_iter()
+            .map(|a| proto::AppEntry {
+                id: a.id,
+                name: a.name,
+            })
+            .collect()
+    }
+
+    fn launch_app(&self, from: &PeerInfo, id: u32) -> (String, bool) {
+        match platform::apps::launch(id) {
+            Ok(name) => {
+                println!("console {} launch {name}", from.device_id);
+                let _ = self.audit.note(
+                    net::endpoint::now_ms(),
+                    from.device_id,
+                    &format!("launch:{name}"),
+                );
+                (name, true)
+            }
+            Err(err) => {
+                eprintln!("launch {id:#x} failed: {err}");
+                (String::new(), false)
+            }
+        }
+    }
+
+    fn list_running(&self) -> Vec<proto::RunningApp> {
+        platform::process::list_processes()
+            .unwrap_or_default()
+            .into_iter()
+            // Never offer a system-critical process: a teacher must not be one click from a
+            // bluescreen, and `terminate` would refuse it anyway.
+            .filter(|p| !platform::process::is_protected(&p.name))
+            .map(|p| proto::RunningApp {
+                pid: p.pid,
+                name: p.name,
+            })
+            .collect()
+    }
+
+    fn close_app(&self, from: &PeerInfo, pid: u32) -> bool {
+        // Re-check against the live list: the pid must still belong to a closable program, so a
+        // stale or invented pid cannot reach a protected process.
+        let closable = platform::process::list_processes()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|p| p.pid == pid && !platform::process::is_protected(&p.name));
+        let Some(process) = closable else {
+            return false;
+        };
+        let closed = platform::process::terminate(pid).is_ok();
+        println!(
+            "console {} close {} ({closed})",
+            from.device_id, process.name
+        );
+        let _ = self.audit.note(
+            net::endpoint::now_ms(),
+            from.device_id,
+            &format!("close:{}", process.name),
+        );
+        closed
+    }
+
     fn set_control(&self, from: &PeerInfo, enabled: bool) -> bool {
         let mut controlled = self.controlled.lock().unwrap_or_else(|e| e.into_inner());
         if *controlled == enabled {

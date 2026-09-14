@@ -97,6 +97,34 @@ pub trait AgentDevice {
         Vec::new()
     }
 
+    /// The programs this PC offers to start.
+    ///
+    /// The Agent publishes its own catalogue; a Console can only pick from it. The default offers
+    /// nothing, so a device with no launcher simply shows an empty list.
+    fn list_apps(&self) -> Vec<proto::AppEntry> {
+        Vec::new()
+    }
+
+    /// Starts a published program by id, returning its name and whether it started.
+    ///
+    /// An id this PC did not publish must not resolve — that is what keeps "launch an app" from
+    /// becoming "run anything" (AGENTS.md 5).
+    fn launch_app(&self, from: &PeerInfo, id: u32) -> (String, bool) {
+        let _ = (from, id);
+        (String::new(), false)
+    }
+
+    /// The running programs a teacher may close. System-critical ones are filtered out here.
+    fn list_running(&self) -> Vec<proto::RunningApp> {
+        Vec::new()
+    }
+
+    /// Closes a running program by process id.
+    fn close_app(&self, from: &PeerInfo, pid: u32) -> bool {
+        let _ = (from, pid);
+        false
+    }
+
     /// Grants or withdraws permission for a Console to drive this PC's mouse and keyboard.
     ///
     /// Returns whether control is now granted. The default refuses, so a device that cannot inject
@@ -274,6 +302,58 @@ impl ControlSession {
         }
     }
 
+    /// Console side: ask what programs this PC can start.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn request_apps(&mut self) -> Result<Vec<proto::AppEntry>, EndpointError> {
+        write_message(&mut self.send, &Control::ListApps).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::Apps(apps) => Ok(apps),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: start one of the programs this PC published.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn launch_app(&mut self, id: u32) -> Result<(String, bool), EndpointError> {
+        write_message(&mut self.send, &Control::LaunchApp { id }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::AppLaunched { name, started } => Ok((name, started)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: ask what is running on this PC.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn request_running(&mut self) -> Result<Vec<proto::RunningApp>, EndpointError> {
+        write_message(&mut self.send, &Control::ListRunning).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::Running(apps) => Ok(apps),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: close a running program by process id.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn close_app(&mut self, pid: u32) -> Result<bool, EndpointError> {
+        write_message(&mut self.send, &Control::CloseApp { pid }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::AppClosed { closed } => Ok(closed),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Console side: take or release control of the PC's mouse and keyboard.
     ///
     /// Returns whether control is now granted.
@@ -375,6 +455,20 @@ impl ControlSession {
                         },
                     )
                     .await?;
+                }
+                Control::ListApps => {
+                    write_message(&mut self.send, &Control::Apps(source.list_apps())).await?;
+                }
+                Control::LaunchApp { id } => {
+                    let (name, started) = source.launch_app(&self.peer, id);
+                    write_message(&mut self.send, &Control::AppLaunched { name, started }).await?;
+                }
+                Control::ListRunning => {
+                    write_message(&mut self.send, &Control::Running(source.list_running())).await?;
+                }
+                Control::CloseApp { pid } => {
+                    let closed = source.close_app(&self.peer, pid);
+                    write_message(&mut self.send, &Control::AppClosed { closed }).await?;
                 }
                 Control::SetControl { enabled } => {
                     let enabled = source.set_control(&self.peer, enabled);

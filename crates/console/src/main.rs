@@ -63,8 +63,9 @@ fn main() -> ExitCode {
         Some("act") => block_on(cmd_act(rest)),
         Some("block") => block_on(cmd_block(rest)),
         Some("control") => block_on(cmd_control(rest)),
+        Some("apps") => block_on(cmd_apps(rest)),
         _ => Err(
-            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|version]  (no arguments opens the window)"
+            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|apps|version]  (no arguments opens the window)"
                 .into(),
         ),
     };
@@ -316,6 +317,71 @@ async fn cmd_act(args: Vec<String>) -> Result<(), String> {
         proto::ActionOutcome::Started { .. } => Ok(()),
         proto::ActionOutcome::Failed(reason) => Err(reason.to_string()),
     }
+}
+
+/// Lists what a paired PC can start and what is running, and optionally starts or closes one.
+async fn cmd_apps(args: Vec<String>) -> Result<(), String> {
+    const USAGE: &str = "usage: cowatcher-console apps <agent-endpoint-key> [launch <id> | close <pid> | find <text>]";
+    let Some(agent) = args.first() else {
+        return Err(USAGE.into());
+    };
+    let agent_key: iroh::EndpointId = agent
+        .parse()
+        .map_err(|_| "invalid agent endpoint key".to_string())?;
+
+    let (endpoint, mut session) = connect_paired(agent_key).await?;
+    let result = match args.get(1).map(String::as_str) {
+        Some("launch") => {
+            let id = args
+                .get(2)
+                .and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+                .ok_or("launch needs an app id, e.g. 0x8f2c1a")?;
+            let (name, started) = session.launch_app(id).await.map_err(|e| e.to_string())?;
+            if started {
+                println!("started \"{name}\"");
+                Ok(())
+            } else {
+                Err("that PC has no program with that id".to_string())
+            }
+        }
+        Some("close") => {
+            let pid: u32 = args
+                .get(2)
+                .and_then(|s| s.parse().ok())
+                .ok_or("close needs a process id")?;
+            let closed = session.close_app(pid).await.map_err(|e| e.to_string())?;
+            println!("closed: {closed}");
+            Ok(())
+        }
+        Some("find") => {
+            let needle = args.get(2).cloned().unwrap_or_default().to_lowercase();
+            let apps = session.request_apps().await.map_err(|e| e.to_string())?;
+            for app in apps
+                .iter()
+                .filter(|a| a.name.to_lowercase().contains(&needle))
+            {
+                println!("  {:#010x}  {}", app.id, app.name);
+            }
+            Ok(())
+        }
+        None => {
+            let apps = session.request_apps().await.map_err(|e| e.to_string())?;
+            println!("{} program(s) this PC can start:", apps.len());
+            for app in apps.iter().take(15) {
+                println!("  {:#010x}  {}", app.id, app.name);
+            }
+            if apps.len() > 15 {
+                println!("  ... and {} more", apps.len() - 15);
+            }
+            let running = session.request_running().await.map_err(|e| e.to_string())?;
+            println!("{} closable program(s) running", running.len());
+            Ok(())
+        }
+        _ => Err(USAGE.to_string()),
+    };
+    session.close();
+    endpoint.close().await;
+    result
 }
 
 /// Drives a paired PC's mouse and keyboard from the command line, to prove remote control works

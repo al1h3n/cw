@@ -224,7 +224,11 @@ enum UiInput {
 fn to_wire(events: Vec<UiInput>) -> Vec<proto::InputEvent> {
     /// Fractions arrive as 0.0–1.0 and go out as 0–65535, the range Windows itself uses.
     fn fraction(value: f64) -> u16 {
-        let clamped = if value.is_nan() { 0.5 } else { value.clamp(0.0, 1.0) };
+        let clamped = if value.is_nan() {
+            0.5
+        } else {
+            value.clamp(0.0, 1.0)
+        };
         (clamped * f64::from(u16::MAX)) as u16
     }
     let mut out = Vec::new();

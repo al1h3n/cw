@@ -221,6 +221,29 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn the_running_list_on_this_pc_contains_protected_processes_that_must_never_be_closable() {
+        // The guard that matters: these are running right now, and `is_protected` must catch them,
+        // because the Agent filters the closable list with it before a teacher ever sees it.
+        let names: Vec<String> = list_processes()
+            .expect("list")
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        for critical in ["csrss.exe", "winlogon.exe", "explorer.exe"] {
+            if names.iter().any(|n| n == critical) {
+                assert!(is_protected(critical), "{critical} must be protected");
+            }
+        }
+        // And whatever is protected is excluded from what we would offer.
+        let closable: Vec<&String> = names.iter().filter(|n| !is_protected(n)).collect();
+        assert!(
+            !closable.iter().any(|n| n.as_str() == "explorer.exe"),
+            "explorer must never be offered as closable"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn lists_this_test_process_among_the_running_programs() {
         let names: Vec<String> = list_processes()
             .expect("list")

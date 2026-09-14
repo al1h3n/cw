@@ -152,6 +152,24 @@ pub enum InputEvent {
     ReleaseAll,
 }
 
+/// One program a PC offers to start, as published by the Agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppEntry {
+    /// The id a Console uses to ask for it. Meaningful only on the PC that published it.
+    pub id: u32,
+    /// What to show a teacher.
+    pub name: String,
+}
+
+/// One running program a teacher may close.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunningApp {
+    /// Process id on that PC.
+    pub pid: u32,
+    /// Executable name, lower-cased.
+    pub name: String,
+}
+
 /// Something a Console can make a student PC do.
 ///
 /// This is a **closed list on purpose**: there is no "run this command" variant in any tier, so a
@@ -337,6 +355,41 @@ pub enum Control {
         rules: u16,
         /// Names closed since the previous state message, capped so the reply stays small.
         closed: Vec<String>,
+    },
+    /// Console → Agent: what programs can this PC start?
+    ListApps,
+    /// Agent → Console: the programs it offers, as `(id, name)` pairs.
+    ///
+    /// The **path is deliberately absent**: a Console names an app by id and never by location, so
+    /// there is no way to ask a PC to run something it did not itself publish (AGENTS.md §5).
+    Apps(Vec<AppEntry>),
+    /// Console → Agent: start the catalogue entry with this id.
+    LaunchApp {
+        /// An id from a previous [`Control::Apps`] reply.
+        id: u32,
+    },
+    /// Agent → Console: whether the program started, and what it was called.
+    AppLaunched {
+        /// Empty when the id was not in this PC's catalogue.
+        name: String,
+        /// True if it started.
+        started: bool,
+    },
+    /// Console → Agent: what is running right now?
+    ListRunning,
+    /// Agent → Console: the running programs a teacher may close.
+    ///
+    /// System-critical processes are filtered out here, so they cannot even be offered.
+    Running(Vec<RunningApp>),
+    /// Console → Agent: close this running program.
+    CloseApp {
+        /// A process id from a previous [`Control::Running`] reply.
+        pid: u32,
+    },
+    /// Agent → Console: whether it closed.
+    AppClosed {
+        /// True if the process is gone.
+        closed: bool,
     },
     /// Console → Agent: take (or give up) control of this PC's mouse and keyboard.
     ///
