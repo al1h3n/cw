@@ -216,9 +216,17 @@ Order = what a teacher needs first in a real lesson.
   **Done when:** unit tests cover baseline/diff; a **safety test proves wipe never deletes outside the
   scope** (symlinks, junctions, `..` paths, files open in other apps); the collected archive opens.
   `ponytail:` restoring *modified* files needs copy-on-write backups — later, if pilots ask for it.
-- [ ] **2.9 Audio share.** WASAPI loopback (`cpal`) + Opus, with a per-stream on/off toggle. Off = zero
+- [~] **2.9 Audio share.** WASAPI loopback (`cpal`) + Opus, with a per-stream on/off toggle. Off = zero
   audio capture.
   **Done when:** the bandwidth test shows 0 audio bytes when off; A/V drift < 80 ms over 10 min.
+  *Done 2026-09-14 (pulled forward, because screen without sound is half a lesson): `media::audio`
+  captures the student's output device in loopback mode, downmixes to mono and decimates to ~16 kHz,
+  and a ring buffer drops the oldest audio so the teacher always hears "now" instead of a backlog.
+  Capture starts only when a Console sends `SetAudio{enabled:true}` and stops when it stops, so "off =
+  zero capture" holds. Listening is exclusive — one PC at a time. Verified with the release binaries:
+  16 kHz mono, 64 000 samples for 4.0 s, loudest sample 16386 during a tone and exactly 0 in silence.*
+  `ponytail:` still raw PCM (~256 kbit/s). Opus (~32 kbit/s) and the A/V drift measurement wait until
+  full-rate video exists to drift against.
 - [ ] **2.10 Presentation mode.** The Console shares its full screen, a region or one window
   (Windows.Graphics.Capture) to all or selected Agents. They show it on the lock desktop with input
   blocked.

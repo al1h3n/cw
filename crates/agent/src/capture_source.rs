@@ -13,6 +13,8 @@ use net::{CaptureError, CaptureSource};
 /// mutex: thumbnail requests are answered one at a time, which is exactly the pace we want.
 pub struct ScreenCapture {
     capturer: Mutex<media::ThumbnailCapturer>,
+    /// Present only while a Console is listening; dropping it stops the recording.
+    audio: Mutex<Option<media::audio::AudioCapture>>,
 }
 
 impl ScreenCapture {
@@ -24,6 +26,7 @@ impl ScreenCapture {
         let capturer = media::ThumbnailCapturer::new().map_err(|e| CaptureError(e.to_string()))?;
         Ok(Self {
             capturer: Mutex::new(capturer),
+            audio: Mutex::new(None),
         })
     }
 
@@ -48,6 +51,44 @@ impl CaptureSource for ScreenCapture {
                         primary: m.primary,
                     })
                     .collect()
+            },
+        )
+    }
+
+    fn set_audio(&self, enabled: bool) -> Result<Option<proto::AudioFormat>, CaptureError> {
+        let mut audio = self
+            .audio
+            .lock()
+            .map_err(|_| CaptureError("audio lock poisoned".into()))?;
+        if !enabled {
+            // Dropping the capture stops the loopback stream and its thread.
+            *audio = None;
+            return Ok(None);
+        }
+        if let Some(existing) = audio.as_ref() {
+            let format = existing.format();
+            return Ok(Some(proto::AudioFormat {
+                sample_rate: format.sample_rate,
+                channels: format.channels,
+            }));
+        }
+        let capture =
+            media::audio::AudioCapture::start().map_err(|e| CaptureError(e.to_string()))?;
+        let format = capture.format();
+        *audio = Some(capture);
+        Ok(Some(proto::AudioFormat {
+            sample_rate: format.sample_rate,
+            channels: format.channels,
+        }))
+    }
+
+    fn take_audio(&self, max_samples: usize) -> Vec<i16> {
+        self.audio.lock().map_or_else(
+            |_| Vec::new(),
+            |audio| {
+                audio
+                    .as_ref()
+                    .map_or_else(Vec::new, |c| c.take(max_samples))
             },
         )
     }

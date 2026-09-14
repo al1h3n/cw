@@ -37,6 +37,8 @@ impl CaptureError {
     }
 }
 
+pub mod audio;
+
 #[cfg(windows)]
 mod gdi;
 #[cfg(windows)]

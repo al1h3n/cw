@@ -5,5 +5,6 @@
 //! lock desktop and wallpaper enforcement land here in later phases.
 #![allow(unsafe_code)] // sanctioned here per AGENTS.md §5; FFI only, each block documented
 
+pub mod console;
 pub mod secret;
 pub mod session;

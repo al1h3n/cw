@@ -14,6 +14,7 @@
   let watching = $state(false)
   let pairing = $state(false)
   let focused = $state<string | null>(null)
+  let listeningTo = $state<string | null>(null)
   let error = $state<string | null>(null)
   let loaded = $state(false)
   let timer: number | undefined
@@ -25,6 +26,16 @@
     try {
       devices = await invoke<Device[]>('devices')
       loaded = true
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  /** Listening is exclusive: starting one PC stops any other. */
+  async function listen(deviceId: string | null) {
+    try {
+      await invoke('set_listening', { deviceId })
+      listeningTo = deviceId
     } catch (e) {
       error = String(e)
     }
@@ -55,6 +66,8 @@
       if (watching) {
         await invoke('stop_watching')
         watching = false
+        // Watching drives the connections, so listening cannot survive it being switched off.
+        if (listeningTo) await listen(null)
       } else {
         await invoke('start_watching')
         watching = true
@@ -172,6 +185,8 @@
     device={focusedDevice}
     onclose={() => open(null)}
     onmonitor={(index) => chooseMonitor(focusedDevice.device_id, index)}
+    listening={listeningTo === focusedDevice.device_id}
+    onlisten={(on) => listen(on ? focusedDevice.device_id : null)}
   />
 {/if}
 

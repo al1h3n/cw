@@ -5,7 +5,13 @@
 > Original brief: [`ClassWatcher.md`](ClassWatcher.md) · Roadmap: [`docs/PLAN.md`](docs/PLAN.md) ·
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md)
 
-**Status (2026-09-12):** Phase 0 done (6/8 spikes; 0.7 folded into Phase 1). Phase 1 underway:
+**Status (2026-09-14):** shipping as two working binaries. `cowatcher-console.exe` opens a teacher
+window (screen grid, pairing, per-PC monitor choice, preview quality, listen, `.ini` translations with
+a language switcher); `cowatcher-agent.exe` serves screens and audio. Screen share (#1) and audio share
+(#2) from the brief are **done**; the product can watch and listen but cannot yet *act* on a PC.
+See `docs/FEATURES.md` for the full state, including what is **impossible** to build.
+
+**Earlier status (2026-09-12):** Phase 0 done (6/8 spikes; 0.7 folded into Phase 1). Phase 1 underway:
 1.1 identity, 1.2 wire proto, 1.3 pairing logic, and 1.3b pairing over a real iroh endpoint with mDNS
 are built and tested (44 offline tests + 2 `#[ignore]` network e2e tests, all green). Next: 1.4 Agent
 service + session helper (needs an elevated VM). Outstanding real-world reruns for the user are listed

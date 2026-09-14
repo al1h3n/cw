@@ -77,6 +77,15 @@ pub struct Monitor {
     pub primary: bool,
 }
 
+/// The shape of the audio an Agent is sending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioFormat {
+    /// Samples per second.
+    pub sample_rate: u32,
+    /// Channel count; currently always 1, because the stream is downmixed to mono before sending.
+    pub channels: u8,
+}
+
 /// The handshake a peer sends first, before any other message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
@@ -138,6 +147,28 @@ pub enum Control {
     ListMonitors,
     /// Agent → Console: the attached monitors.
     Monitors(Vec<Monitor>),
+    /// Console → Agent: start or stop recording what this PC is playing.
+    ///
+    /// Audio is off until asked for, and only one PC is listened to at a time, because raw PCM is
+    /// far heavier than a thumbnail. Turning it off stops the recording entirely.
+    SetAudio {
+        /// Whether the Agent should be capturing sound.
+        enabled: bool,
+    },
+    /// Agent → Console: whether audio is running, and in what shape.
+    AudioState(Option<AudioFormat>),
+    /// Console → Agent: give me the sound recorded since the last request.
+    RequestAudio {
+        /// Never return more than this many samples, so one reply stays bounded.
+        max_samples: u32,
+    },
+    /// Agent → Console: mono PCM samples recorded since the previous request.
+    Audio {
+        /// Increases by one per reply, so a gap is visible.
+        seq: u64,
+        /// Signed 16-bit mono samples at the rate given in [`Control::AudioState`].
+        samples: Vec<i16>,
+    },
     /// Agent → Console: the requested thumbnail as JPEG bytes.
     Thumbnail {
         /// Which monitor this is for.

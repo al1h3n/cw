@@ -56,6 +56,24 @@ pub trait CaptureSource {
 
     /// The monitors this device has, so the Console can offer them.
     fn monitors(&self) -> Vec<Monitor>;
+
+    /// Starts or stops recording what this PC is playing, reporting the resulting format.
+    ///
+    /// The default refuses: a source that cannot do audio simply reports "not available", and the
+    /// Console shows listening as unsupported rather than failing the session.
+    ///
+    /// # Errors
+    /// Returns [`CaptureError`] if audio cannot be started on this device.
+    fn set_audio(&self, enabled: bool) -> Result<Option<proto::AudioFormat>, CaptureError> {
+        let _ = enabled;
+        Err(CaptureError("this device cannot share audio".into()))
+    }
+
+    /// Returns sound recorded since the previous call, at most `max_samples`.
+    fn take_audio(&self, max_samples: usize) -> Vec<i16> {
+        let _ = max_samples;
+        Vec::new()
+    }
 }
 
 /// A capture failure, carrying a human-readable reason.
@@ -167,6 +185,37 @@ impl ControlSession {
         }
     }
 
+    /// Console side: turn listening on or off for this PC.
+    ///
+    /// Returns the audio format when it started, or `None` when it stopped.
+    ///
+    /// # Errors
+    /// Stream failure, or the Agent cannot share audio.
+    pub async fn set_audio(
+        &mut self,
+        enabled: bool,
+    ) -> Result<Option<proto::AudioFormat>, EndpointError> {
+        write_message(&mut self.send, &Control::SetAudio { enabled }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::AudioState(format) => Ok(format),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: collect the sound recorded since the last call.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn request_audio(&mut self, max_samples: u32) -> Result<Vec<i16>, EndpointError> {
+        write_message(&mut self.send, &Control::RequestAudio { max_samples }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::Audio { samples, .. } => Ok(samples),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Agent side: serve thumbnail requests until the Console closes the session.
     ///
     /// Returns `Ok(())` on a clean close. Capture happens only inside a request, so this loop is idle
@@ -179,6 +228,7 @@ impl ControlSession {
         source: &impl CaptureSource,
     ) -> Result<(), EndpointError> {
         let mut seq = 0u64;
+        let mut audio_seq = 0u64;
         loop {
             let request = match read_message::<Control>(&mut self.recv).await {
                 Ok(message) => message,
@@ -195,6 +245,26 @@ impl ControlSession {
                 }
                 Control::ListMonitors => {
                     write_message(&mut self.send, &Control::Monitors(source.monitors())).await?;
+                }
+                Control::SetAudio { enabled } => {
+                    // A PC that cannot share audio says so; it must not kill the screen session.
+                    let reply = match source.set_audio(enabled) {
+                        Ok(format) => Control::AudioState(format),
+                        Err(_) => Control::AudioState(None),
+                    };
+                    write_message(&mut self.send, &reply).await?;
+                }
+                Control::RequestAudio { max_samples } => {
+                    let samples = source.take_audio(max_samples as usize);
+                    audio_seq += 1;
+                    write_message(
+                        &mut self.send,
+                        &Control::Audio {
+                            seq: audio_seq,
+                            samples,
+                        },
+                    )
+                    .await?;
                 }
                 Control::Ping(nonce) => {
                     write_message(&mut self.send, &Control::Pong(nonce)).await?

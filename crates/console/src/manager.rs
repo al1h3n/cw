@@ -86,6 +86,12 @@ impl DeviceState {
     }
 }
 
+/// How much audio to pull per request: a fifth of a second, so the sound keeps up without
+/// large replies.
+const AUDIO_CHUNK_MS: u32 = 200;
+/// Never let more than this much audio pile up on the teacher's PC; late sound is useless.
+const AUDIO_QUEUE_MS: u32 = 600;
+
 /// What the teacher has chosen about how screens are shown.
 #[derive(Debug, Clone, Copy)]
 struct Preview {
@@ -95,6 +101,9 @@ struct Preview {
     focused_width: u16,
     /// The device currently opened full-size, which is refreshed faster and larger.
     focused: Option<[u8; 32]>,
+    /// The one device being listened to. Listening to a whole room at once would be unusable noise
+    /// and heavy on the network, so it is deliberately exclusive.
+    listening: Option<[u8; 32]>,
 }
 
 impl Default for Preview {
@@ -103,6 +112,7 @@ impl Default for Preview {
             grid_width: DEFAULT_GRID_WIDTH,
             focused_width: DEFAULT_FOCUSED_WIDTH,
             focused: None,
+            listening: None,
         }
     }
 }
@@ -116,6 +126,8 @@ pub struct DeviceManager {
     tasks: Mutex<BTreeMap<String, JoinHandle<()>>>,
     endpoint: Mutex<Option<iroh::Endpoint>>,
     preview: Arc<Mutex<Preview>>,
+    /// Open only while listening to some PC; recreated when the agent's sample rate is known.
+    playback: Arc<Mutex<Option<media::audio::AudioPlayback>>>,
 }
 
 impl DeviceManager {
@@ -146,6 +158,7 @@ impl DeviceManager {
             tasks: Mutex::new(BTreeMap::new()),
             endpoint: Mutex::new(None),
             preview: Arc::new(Mutex::new(Preview::default())),
+            playback: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -206,6 +219,45 @@ impl DeviceManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .focused = key;
+    }
+
+    /// Starts listening to one PC, or stops listening entirely with `None`.
+    ///
+    /// Only one PC is listened to at a time: switching moves the ear, it does not add a second one.
+    ///
+    /// # Errors
+    /// Returns a message if the device is unknown.
+    pub fn set_listening(&self, device_id: Option<&str>) -> Result<(), String> {
+        let key = match device_id {
+            Some(id) => {
+                let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+                Some(
+                    devices
+                        .get(id)
+                        .ok_or_else(|| "unknown device".to_string())?
+                        .key,
+                )
+            }
+            None => None,
+        };
+        let mut preview = self.preview.lock().unwrap_or_else(|e| e.into_inner());
+        if preview.listening != key {
+            preview.listening = key;
+            // Drop playback now; the device's own task opens a fresh one at the agent's sample rate.
+            *self.playback.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+        Ok(())
+    }
+
+    /// The device currently being listened to, if any.
+    #[must_use]
+    pub fn listening(&self) -> Option<String> {
+        let key = self
+            .preview
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .listening?;
+        Some(DeviceId::from_public_key(&key).to_string())
     }
 
     /// Chooses which monitor of a multi-monitor PC to show.
@@ -318,6 +370,9 @@ impl DeviceManager {
             .map_err(|e| e.to_string())?;
         self.set_monitors(id, monitors);
 
+        // Audio is per-connection state on the agent, so this tracks what we have switched on here.
+        let mut audio_on: Option<proto::AudioFormat> = None;
+
         loop {
             let (monitor, width, focused) = self.request_shape(id, key);
             let jpeg = session
@@ -325,7 +380,68 @@ impl DeviceManager {
                 .await
                 .map_err(|e| e.to_string())?;
             self.set_screen(id, &jpeg);
+
+            audio_on = self.pump_audio(&mut session, key, audio_on).await?;
             tokio::time::sleep(if focused { FOCUSED_REFRESH } else { REFRESH }).await;
+        }
+    }
+
+    /// Turns listening on or off for this device as the teacher's choice changes, and moves one
+    /// chunk of sound to the speakers. Returns the format currently running, if any.
+    async fn pump_audio(
+        &self,
+        session: &mut ControlSession,
+        key: [u8; 32],
+        audio_on: Option<proto::AudioFormat>,
+    ) -> Result<Option<proto::AudioFormat>, String> {
+        let wanted = self
+            .preview
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .listening
+            == Some(key);
+
+        match (wanted, audio_on) {
+            // Nothing to do.
+            (false, None) => Ok(None),
+            // The teacher stopped listening to this PC: tell it to stop recording.
+            (false, Some(_)) => {
+                let _ = session.set_audio(false).await;
+                Ok(None)
+            }
+            // Newly listening: start, and open playback at whatever rate the agent reports.
+            (true, None) => {
+                let format = session.set_audio(true).await.map_err(|e| e.to_string())?;
+                if let Some(format) = format {
+                    match media::audio::AudioPlayback::start(format.sample_rate) {
+                        Ok(playback) => {
+                            *self.playback.lock().unwrap_or_else(|e| e.into_inner()) =
+                                Some(playback);
+                        }
+                        Err(err) => return Err(format!("no speakers on this PC: {err}")),
+                    }
+                }
+                Ok(format)
+            }
+            // Already listening: collect a chunk and play it.
+            (true, Some(format)) => {
+                let max = format.sample_rate * AUDIO_CHUNK_MS / 1000;
+                let samples = session
+                    .request_audio(max)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if !samples.is_empty()
+                    && let Some(playback) = self
+                        .playback
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .as_ref()
+                {
+                    let queue_cap = (format.sample_rate * AUDIO_QUEUE_MS / 1000) as usize;
+                    playback.push(&samples, queue_cap);
+                }
+                Ok(Some(format))
+            }
         }
     }
 

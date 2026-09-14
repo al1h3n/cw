@@ -169,6 +169,18 @@ fn set_focused(state: State<'_, AppState>, device_id: Option<String>) {
     state.manager.set_focused(device_id.as_deref());
 }
 
+/// Starts listening to one PC, or stops listening when `device_id` is absent.
+#[tauri::command]
+fn set_listening(state: State<'_, AppState>, device_id: Option<String>) -> Result<(), String> {
+    state.manager.set_listening(device_id.as_deref())
+}
+
+/// Which PC is being listened to, if any.
+#[tauri::command]
+fn listening(state: State<'_, AppState>) -> Option<String> {
+    state.manager.listening()
+}
+
 /// Chooses which monitor of a multi-monitor student PC to show.
 #[tauri::command]
 fn set_monitor(state: State<'_, AppState>, device_id: String, monitor: u8) -> Result<(), String> {
@@ -232,6 +244,8 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             set_preview_widths,
             set_focused,
             set_monitor,
+            set_listening,
+            listening,
             translation,
             set_language,
             export_language_template,

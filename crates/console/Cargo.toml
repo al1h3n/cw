@@ -13,7 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 iroh = "1.2"
+media = { version = "0.1.0", path = "../media" }
 net = { path = "../net" }
+platform = { version = "0.1.0", path = "../platform" }
 proto = { path = "../proto" }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] } # the teacher-facing GUI (AGENTS D13)

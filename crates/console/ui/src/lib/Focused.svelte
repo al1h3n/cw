@@ -6,7 +6,15 @@
     device,
     onclose,
     onmonitor,
-  }: { device: Device; onclose: () => void; onmonitor: (index: number) => void } = $props()
+    listening,
+    onlisten,
+  }: {
+    device: Device
+    onclose: () => void
+    onmonitor: (index: number) => void
+    listening: boolean
+    onlisten: (on: boolean) => void
+  } = $props()
 
   function onkey(event: KeyboardEvent) {
     if (event.key === 'Escape') onclose()
@@ -37,6 +45,14 @@
         </span>
       {/if}
 
+      <button
+        class="listen"
+        class:on={listening}
+        onclick={() => onlisten(!listening)}
+        title={t('listenHint')}
+      >
+        {listening ? t('listenStop') : t('listenStart')}
+      </button>
       <button onclick={onclose}>{t('close')}</button>
     </header>
     <div class="screen">
@@ -111,11 +127,18 @@
     font-weight: 600;
   }
 
-  header > button:last-child {
+  .listen {
     margin-left: auto;
   }
 
-  .monitors ~ button:last-child {
+  .listen.on {
+    background: var(--live);
+    border-color: var(--live);
+    color: #04150d;
+    font-weight: 600;
+  }
+
+  .monitors ~ .listen {
     margin-left: 0;
   }
 

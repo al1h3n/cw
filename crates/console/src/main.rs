@@ -40,6 +40,9 @@ fn main() -> ExitCode {
             }
         };
     }
+    // Built as a GUI app so double-clicking shows no black box; attaching to the terminal that
+    // launched us is what makes the subcommands print anything.
+    platform::console::attach_to_parent();
     let result = match args.first().map(String::as_str) {
         Some("version") => {
             println!(
@@ -53,7 +56,11 @@ fn main() -> ExitCode {
         Some("devices") => cmd_devices(),
         Some("pair") => block_on(cmd_pair()),
         Some("watch") => block_on(cmd_watch(rest)),
-        _ => Err("usage: cowatcher-console [id|pair|devices|watch|version]  (no arguments opens the window)".into()),
+        Some("listen") => block_on(cmd_listen(rest)),
+        _ => Err(
+            "usage: cowatcher-console [id|pair|devices|watch|listen|version]  (no arguments opens the window)"
+                .into(),
+        ),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -204,6 +211,79 @@ async fn cmd_watch(args: Vec<String>) -> Result<(), String> {
     session.close();
     endpoint.close().await;
     println!("done: {count} thumbnail(s) in {}", out_dir.display());
+    Ok(())
+}
+
+/// Listens to a paired PC and plays the sound here, reporting what arrived.
+async fn cmd_listen(args: Vec<String>) -> Result<(), String> {
+    let Some(agent) = args.first() else {
+        return Err("usage: cowatcher-console listen <agent-endpoint-key> [seconds]".into());
+    };
+    let agent_key: iroh::EndpointId = agent
+        .parse()
+        .map_err(|_| "invalid agent endpoint key".to_string())?;
+    let seconds: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5);
+
+    let identity = load_identity()?;
+    let trust = TrustStore::load(&trust_path()).map_err(|e| e.to_string())?;
+    if !trust.is_trusted(agent_key.as_bytes()) {
+        return Err("that device is not paired with this console — run `pair` first".into());
+    }
+
+    let endpoint = net::bind(&identity).await.map_err(|e| e.to_string())?;
+    let mut session = ControlSession::connect(
+        &endpoint,
+        iroh::EndpointAddr::new(agent_key),
+        &trust,
+        local_hello(&identity),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let Some(format) = session.set_audio(true).await.map_err(|e| e.to_string())? else {
+        return Err("that PC cannot share audio (no sound card, or capture was refused)".into());
+    };
+    println!(
+        "listening to {} at {} Hz mono — play something on that PC",
+        session.peer().device_id,
+        format.sample_rate
+    );
+
+    let playback = media::audio::AudioPlayback::start(format.sample_rate)
+        .map_err(|e| format!("no speakers on this PC: {e}"))?;
+    let chunk = format.sample_rate / 5; // 200 ms
+    let queue_cap = (format.sample_rate * 3 / 5) as usize;
+    let mut total = 0usize;
+    let mut loudest = 0i16;
+
+    for _ in 0..(seconds * 5) {
+        let samples = session
+            .request_audio(chunk)
+            .await
+            .map_err(|e| e.to_string())?;
+        total += samples.len();
+        loudest = loudest.max(
+            samples
+                .iter()
+                .copied()
+                .map(i16::saturating_abs)
+                .max()
+                .unwrap_or(0),
+        );
+        playback.push(&samples, queue_cap);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    let _ = session.set_audio(false).await;
+    session.close();
+    endpoint.close().await;
+    println!(
+        "received {total} samples ({:.1} s of audio), loudest sample {loudest}",
+        total as f32 / format.sample_rate as f32
+    );
+    if loudest == 0 {
+        println!("all silence — nothing was playing on that PC, or its output is muted");
+    }
     Ok(())
 }
 
