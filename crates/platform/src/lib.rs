@@ -10,3 +10,4 @@ pub mod power;
 pub mod process;
 pub mod secret;
 pub mod session;
+pub mod wallpaper;

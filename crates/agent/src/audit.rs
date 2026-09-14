@@ -60,7 +60,11 @@ pub fn line(at_ms: u64, console: DeviceId, action: Action, outcome: ActionOutcom
         Action::Shutdown { delay_seconds } | Action::Reboot { delay_seconds } => {
             format!("delay={delay_seconds}s")
         }
-        Action::LogOff | Action::LockScreen | Action::CancelShutdown => "-".to_string(),
+        Action::LogOff
+        | Action::LockScreen
+        | Action::CancelShutdown
+        | Action::LockWallpaper
+        | Action::UnlockWallpaper => "-".to_string(),
     };
     let result = match outcome {
         ActionOutcome::Started { delay_seconds } => format!("started in {delay_seconds}s"),

@@ -92,6 +92,9 @@
           <button class="item" role="menuitem" onclick={() => (confirming = action)}>{label(action)}</button>
         {/each}
         <hr />
+        <button class="item" role="menuitem" onclick={() => send('lock-wallpaper')}>{t('actLockWallpaper')}</button>
+        <button class="item" role="menuitem" onclick={() => send('unlock-wallpaper')}>{t('actUnlockWallpaper')}</button>
+        <hr />
         <button class="item" role="menuitem" onclick={() => send('cancel-shutdown')}>{t('actCancel')}</button>
       {/if}
     </div>

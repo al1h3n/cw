@@ -73,6 +73,21 @@ fn carry_out(action: Action) -> ActionOutcome {
         Action::LogOff => power::log_off().map(|()| 0),
         Action::LockScreen => power::lock_screen().map(|()| 0),
         Action::CancelShutdown => power::cancel_shutdown().map(|()| 0),
+        Action::LockWallpaper | Action::UnlockWallpaper => {
+            let lock = matches!(action, Action::LockWallpaper);
+            let result = if lock {
+                platform::wallpaper::lock()
+            } else {
+                platform::wallpaper::unlock()
+            };
+            return match result {
+                Ok(()) => ActionOutcome::Started { delay_seconds: 0 },
+                Err(err) => {
+                    eprintln!("{} failed: {err}", action.name());
+                    ActionOutcome::Failed(ActionFailure::Failed)
+                }
+            };
+        }
     };
     match result {
         Ok(delay_seconds) => ActionOutcome::Started { delay_seconds },

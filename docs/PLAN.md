@@ -215,9 +215,14 @@ Order = what a teacher needs first in a real lesson.
   Live: Notepad closed within 1 s, re-closed on relaunch, survived after the rule was cleared.
   **Still planned:** website blocking via browser policy files; publisher-signature and path rules;
   the snapshot format tests (`insta`).*
-- [ ] **2.6 Wallpaper lock** via Windows policy keys (`Policies\System\Wallpaper` + NoChangingWallPaper).
+- [~] **2.6 Wallpaper lock** via Windows policy keys (`Policies\System\Wallpaper` + NoChangingWallPaper).
   **Done when:** the user changes the wallpaper in Settings → it is reverted or greyed out; the policy is
   removed cleanly when disabled.
+  *Built 2026-09-14: `platform::wallpaper` sets/clears `NoChangingWallPaper`, wired as the
+  `LockWallpaper`/`UnlockWallpaper` actions with a menu button. Confirmed the mechanism is correct
+  but **admin-only**: writing the HKCU `Policies` hive returns "Access is denied" unelevated, so this
+  only bites once the Agent is the SYSTEM service (1.4b). The unit test is `#[ignore]` for that
+  reason. Setting a specific image waits for file transfer.*
 - [ ] **2.7 Startup shell / launcher** (PC-club style): the admin sets the background and the per-PC
   shortcuts. The bottom-right terminal has `help`, `unlock`, `request` (asks the teacher), `shutdown`,
   `reboot`. The mode is set per Policy: normal desktop / launcher / locked.

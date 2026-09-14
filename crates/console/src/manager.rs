@@ -91,6 +91,8 @@ pub fn parse_action(name: &str, delay_seconds: u16) -> Option<proto::Action> {
         Action::LogOff,
         Action::LockScreen,
         Action::CancelShutdown,
+        Action::LockWallpaper,
+        Action::UnlockWallpaper,
     ]
     .into_iter()
     .find(|action| action.name() == name)

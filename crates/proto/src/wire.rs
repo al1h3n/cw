@@ -115,6 +115,10 @@ pub enum Action {
     LockScreen,
     /// Call off a shutdown or reboot that is still counting down.
     CancelShutdown,
+    /// Stop the student changing their desktop wallpaper. Persists across reboots.
+    LockWallpaper,
+    /// Let the student change their wallpaper again.
+    UnlockWallpaper,
 }
 
 impl Action {
@@ -127,6 +131,8 @@ impl Action {
             Self::LogOff => "log-off",
             Self::LockScreen => "lock-screen",
             Self::CancelShutdown => "cancel-shutdown",
+            Self::LockWallpaper => "lock-wallpaper",
+            Self::UnlockWallpaper => "unlock-wallpaper",
         }
     }
 
@@ -399,6 +405,8 @@ mod tests {
             Action::LogOff,
             Action::LockScreen,
             Action::CancelShutdown,
+            Action::LockWallpaper,
+            Action::UnlockWallpaper,
         ];
         let mut names: Vec<&str> = actions.iter().map(|a| a.name()).collect();
         names.sort_unstable();
