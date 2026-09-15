@@ -24,6 +24,14 @@
   let listeningTo = $state<string | null>(null)
   let error = $state<string | null>(null)
   let loaded = $state(false)
+  let keyCopied = $state(false)
+
+  async function copyKey() {
+    if (!info) return
+    await navigator.clipboard.writeText(info.public_key)
+    keyCopied = true
+    setTimeout(() => (keyCopied = false), 1500)
+  }
   let timer: number | undefined
 
   const live = $derived(devices.filter((d) => d.status === 'live').length)
@@ -196,7 +204,11 @@
 
   <footer>
     {#if info}
-      <span>{t('thisConsole')} <code>{info.device_id}</code></span>
+      <span class="whoami">
+        {t('thisConsole')} <code>{info.device_id}</code>
+        <code class="key" title={info.public_key}>{info.public_key}</code>
+        <button class="copykey" onclick={copyKey}>{keyCopied ? t('copied') : t('copyKey')}</button>
+      </span>
     {/if}
     <RoomCard onerror={(m) => (error = m)} />
     <span class="right">
@@ -326,6 +338,37 @@
     background: var(--panel);
     color: var(--muted);
     font-size: 12px;
+  }
+
+  .whoami {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  /* The full 64-char endpoint key is what a student PC needs to dial this console; show it, but let
+     it shrink with an ellipsis so it never pushes the room card off the footer. */
+  .whoami .key {
+    max-width: 22ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+  }
+
+  .copykey {
+    padding: 2px 8px;
+    font-size: 11px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .copykey:hover {
+    border-color: var(--accent, var(--line));
   }
 
   .boot {
