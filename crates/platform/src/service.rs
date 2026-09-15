@@ -15,9 +15,14 @@
 //!   start= disabled`, or `cowatcher-agent uninstall` from an elevated prompt.
 //!
 //! What we deliberately do **not** do is hide the *process*: it still shows in Task Manager's
-//! Details/Services tabs, still shows its tray icon, and still shows the login notice (D3). Hiding
-//! the running process would make it spyware, get it flagged by antivirus, and break D3 — so we
-//! don't. "Not in the Startup tab" is a property of being a service; "invisible" is not on offer.
+//! Details and Services tabs, and in `services.msc` with the description above. Hiding the running
+//! process would make it spyware, get it flagged by antivirus, and break D3 — so we don't. "Not in
+//! the Startup tab" is a property of being a service; "invisible" is not on offer.
+//!
+//! **Not yet true, and required before release:** D3 also promises a tray icon, a "being viewed"
+//! badge and a login notice that cannot be disabled. None of those are built yet (nothing in the
+//! workspace calls `Shell_NotifyIcon`), so today the only thing telling a student this is running is
+//! the Services list. Until that trio lands, this service is *less* visible than D3 requires.
 //!
 //! Installing, starting and stopping a service all require administrator rights, so everything here
 //! must be run from an elevated prompt. It therefore **cannot be verified in an unelevated dev
