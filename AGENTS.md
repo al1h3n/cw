@@ -6,10 +6,22 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
-**Status (2026-09-14, later):** the Console can now *act*, not just watch. Remote mouse and keyboard
-(Ctrl+Alt+Esc to release), lock, shutdown/reboot/log-off, app blocking, an app launcher, screen
-recording at a chosen size and rate, broadcasting the teacher's screen, rooms with a leave-password,
-six-character device IDs and a first-run tutorial are all built and verified live. 163 tests pass.
+**Status (2026-09-15):** first real two-machine test done, and it drove two fixes. The capture
+storm — a student locking their PC made DXGI report `ACCESS_LOST` (shown as the misleading "keyed
+mutex was abandoned"), and *both* sides tore the session down and reconnected forever — is fixed:
+`ProtocolError::ScreenUnavailable` (transient) keeps the session alive on both sides, and the
+capturer now recovers from a lost D3D device, not just a lost duplication (`PROTOCOL_VERSION` 9→10).
+The **native viewer** (D12) now exists: `crates/viewer` (`cowatcher-viewer`) is a resizable
+winit+softbuffer window that decodes the live H.264 stream and forwards mouse/keyboard; the Console's
+focused view launches it (Live view / Control, with a resolution + fps picker, so 3840×2160 @ 15 is
+selectable). The Agent now serves **concurrent** sessions so the grid and a viewer can watch one PC
+at once. 179 tests pass. Open next: pairing-over-real-network reliability (a first-dial timeout was
+seen), and making the in-webview dialogs draggable/resizable.
+
+**Earlier status (2026-09-14, later):** the Console can now *act*, not just watch. Remote mouse and
+keyboard (Ctrl+Alt+Esc to release), lock, shutdown/reboot/log-off, app blocking, an app launcher,
+screen recording at a chosen size and rate, broadcasting the teacher's screen, rooms with a
+leave-password, six-character device IDs and a first-run tutorial are all built and verified live.
 See `docs/FEATURES.md` for the honest per-feature state.
 
 **Earlier status (2026-09-14):** shipping as two working binaries. `cowatcher-console.exe` opens a teacher
