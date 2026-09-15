@@ -24,3 +24,10 @@ todo = "warn"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Debug info for *dependencies* is what makes `target/debug` enormous: it reached 60 GB of deps plus
+# 30 GB of incremental data on the dev machine before this was set. We debug our own crates, not
+# iroh, tauri or windows-rs, so keep full debug info for the workspace and drop it for everything
+# else. Panic backtraces through our own code still carry file and line numbers.
+[profile.dev.package."*"]
+debug = false
