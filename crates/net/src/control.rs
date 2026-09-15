@@ -97,6 +97,13 @@ pub trait AgentDevice {
         Vec::new()
     }
 
+    /// Tells the device a teacher is (or is no longer) watching, so it can black out its wallpaper.
+    /// Returns whether the wallpaper is now black. The default does nothing.
+    fn set_watched(&self, watched: bool) -> bool {
+        let _ = watched;
+        false
+    }
+
     /// This PC's wakeable MAC addresses, so a Console can store them and wake it later.
     fn list_macs(&self) -> Vec<String> {
         Vec::new()
@@ -370,6 +377,19 @@ impl ControlSession {
         write_message(&mut self.send, &Control::SetBlocklist { programs }).await?;
         match read_message::<Control>(&mut self.recv).await? {
             Control::BlocklistState { rules, closed } => Ok((rules, closed)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: tell this PC whether a teacher is watching (so it blacks its wallpaper).
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn set_watched(&mut self, watched: bool) -> Result<bool, EndpointError> {
+        write_message(&mut self.send, &Control::SetWatched { watched }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::WatchedState { black } => Ok(black),
             Control::Error(err) => Err(EndpointError::ControlRefused(err)),
             _ => Err(EndpointError::Protocol),
         }
@@ -649,6 +669,10 @@ impl ControlSession {
                         },
                     )
                     .await?;
+                }
+                Control::SetWatched { watched } => {
+                    let black = source.set_watched(watched);
+                    write_message(&mut self.send, &Control::WatchedState { black }).await?;
                 }
                 Control::ListMacs => {
                     write_message(&mut self.send, &Control::Macs(source.list_macs())).await?;

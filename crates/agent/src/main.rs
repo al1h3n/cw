@@ -51,6 +51,7 @@ fn main() -> ExitCode {
         Some("pair") => report(block_on(cmd_pair(rest.to_vec()))),
         Some("serve") => report(block_on(cmd_serve())),
         Some("sessions") => report(cmd_sessions()),
+        Some("wallpaper-selftest") => report(cmd_wallpaper_selftest()),
         Some("room") => report(cmd_room()),
         Some("leave") => report(cmd_leave(rest)),
         Some("supervise") => report(cmd_supervise(rest)),
@@ -144,6 +145,7 @@ fn cmd_capture(args: &[String]) -> Result<(), String> {
         &audit_path(),
         &blocklist_path(),
         &recording::directory(&data_dir()),
+        &data_dir().join("wallpaper-prev.txt"),
     )
     .map_err(|e| e.to_string())?;
     println!("monitors: {}", capture.monitor_count());
@@ -203,6 +205,7 @@ async fn cmd_serve() -> Result<(), String> {
         &audit_path(),
         &blocklist_path(),
         &recording::directory(&data_dir()),
+        &data_dir().join("wallpaper-prev.txt"),
     )
     .map_err(|e| e.to_string())?;
     // Fail loudly at start-up rather than on the teacher's first click.
@@ -240,6 +243,8 @@ async fn cmd_serve() -> Result<(), String> {
                     } else {
                         println!("console disconnected");
                     }
+                    // A dropped console must never leave the desktop blacked out.
+                    capture.end_session();
                 }
                 Err(err) => eprintln!("rejected a connection: {err}"),
             },
@@ -277,6 +282,20 @@ fn cmd_leave(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         Err(err) => Err(err.to_string()),
+    }
+}
+
+/// Confirms the black-on-watch wallpaper mechanism works on this PC. Flashes the desktop black for
+/// an instant, then restores the real wallpaper, and reports whether it came back.
+fn cmd_wallpaper_selftest() -> Result<(), String> {
+    let save = data_dir().join("wallpaper-prev.txt");
+    std::fs::create_dir_all(data_dir()).map_err(|e| e.to_string())?;
+    match platform::wallpaper::selftest(&save).map_err(|e| e.to_string())? {
+        true => {
+            println!("PASS: the wallpaper went black and the original was restored");
+            Ok(())
+        }
+        false => Err("the wallpaper did not round-trip cleanly".into()),
     }
 }
 

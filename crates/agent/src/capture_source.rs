@@ -31,6 +31,18 @@ pub struct ScreenCapture {
     broadcast: Mutex<Option<platform::present::Presenter>>,
     /// Where recordings are written.
     recordings_dir: std::path::PathBuf,
+    /// True while a teacher is watching and the wallpaper is blacked out (D11).
+    watched: Mutex<bool>,
+    /// File holding the student's real wallpaper path while black is shown, so it can be restored
+    /// even after a crash.
+    wallpaper_save: std::path::PathBuf,
+}
+
+impl Drop for ScreenCapture {
+    fn drop(&mut self) {
+        // Backstop: never leave a student staring at a black desktop because the Agent went away.
+        let _ = platform::wallpaper::restore(&self.wallpaper_save);
+    }
 }
 
 /// Converts the agent's own recording status into the wire shape.
@@ -55,8 +67,11 @@ impl ScreenCapture {
         audit_path: &Path,
         blocklist_path: &Path,
         recordings_dir: &Path,
+        wallpaper_save: &Path,
     ) -> Result<Self, CaptureError> {
         let capturer = media::ThumbnailCapturer::new().map_err(|e| CaptureError(e.to_string()))?;
+        // In case a previous run was killed mid-watch, put any saved wallpaper back on start-up.
+        let _ = platform::wallpaper::restore(wallpaper_save);
         Ok(Self {
             capturer: Mutex::new(capturer),
             audio: Mutex::new(None),
@@ -66,7 +81,15 @@ impl ScreenCapture {
             recording: Mutex::new(None),
             broadcast: Mutex::new(None),
             recordings_dir: recordings_dir.to_path_buf(),
+            watched: Mutex::new(false),
+            wallpaper_save: wallpaper_save.to_path_buf(),
         })
+    }
+
+    /// Stops watching (restores the wallpaper). Called when a Console session ends, so a dropped
+    /// connection never leaves the desktop black.
+    pub fn end_session(&self) {
+        net::AgentDevice::set_watched(self, false);
     }
 
     /// How many blocklist rules are in force (for the `serve` banner).
@@ -243,6 +266,28 @@ impl AgentDevice for ScreenCapture {
                     .map_or_else(Vec::new, |c| c.take(max_samples))
             },
         )
+    }
+
+    fn set_watched(&self, watched: bool) -> bool {
+        let mut current = self.watched.lock().unwrap_or_else(|e| e.into_inner());
+        if *current == watched {
+            return watched;
+        }
+        let result = if watched {
+            platform::wallpaper::set_black(&self.wallpaper_save)
+        } else {
+            platform::wallpaper::restore(&self.wallpaper_save)
+        };
+        match result {
+            Ok(()) => {
+                *current = watched;
+                watched
+            }
+            Err(err) => {
+                eprintln!("wallpaper black-out failed: {err}");
+                false
+            }
+        }
     }
 
     fn list_macs(&self) -> Vec<String> {

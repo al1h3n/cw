@@ -385,6 +385,20 @@ pub enum Control {
         /// Names closed since the previous state message, capped so the reply stays small.
         closed: Vec<String>,
     },
+    /// Console → Agent: a teacher is now watching (or stopped watching) this PC's screen.
+    ///
+    /// While watched, the Agent replaces the desktop wallpaper with black (D11) — both a privacy
+    /// signal and a way to keep an inappropriate wallpaper out of the teacher's view. The student's
+    /// own wallpaper returns when watching stops or the session drops.
+    SetWatched {
+        /// True while a teacher is watching this screen.
+        watched: bool,
+    },
+    /// Agent → Console: whether the wallpaper is currently blacked out.
+    WatchedState {
+        /// True if the black wallpaper is in place.
+        black: bool,
+    },
     /// Console → Agent: what MAC addresses do you have? Stored so the PC can be woken later.
     ListMacs,
     /// Agent → Console: this PC's wakeable MAC addresses (`AA:BB:CC:DD:EE:FF` form).

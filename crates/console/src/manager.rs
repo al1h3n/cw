@@ -866,8 +866,26 @@ impl DeviceManager {
         let mut sent_blocklist: u64 = 0;
         // Whether this connection has been granted control of the PC.
         let mut controlling = false;
+        // Whether we have told this PC it is being watched (so it blacks its wallpaper, D11).
+        let mut watched = false;
 
         loop {
+            // A PC counts as "watched" once a teacher opens its screen (the focused view), not for
+            // the whole low-fps grid — blacking every wallpaper the instant the grid opens would be
+            // heavy-handed. Blacks on open, restores on close or disconnect.
+            let wants_watched = self
+                .preview
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .focused
+                == Some(key);
+            if wants_watched != watched {
+                watched = session
+                    .set_watched(wants_watched)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+
             let (programs, version) = {
                 let list = self.blocklist.lock().unwrap_or_else(|e| e.into_inner());
                 (list.programs.clone(), list.version)
