@@ -58,6 +58,16 @@
     }
   }
 
+  async function wake(deviceId: string) {
+    try {
+      const count = await invoke<number>('wake', { deviceId })
+      error = null
+      if (count === 0) error = t('wakeNone', deviceId)
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
   async function chooseMonitor(deviceId: string, index: number) {
     try {
       await invoke('set_monitor', { deviceId, monitor: index })
@@ -177,6 +187,7 @@
             {watching}
             onopen={() => open(device.device_id)}
             onmonitor={(index) => chooseMonitor(device.device_id, index)}
+            onwake={() => wake(device.device_id)}
           />
         {/each}
       </div>

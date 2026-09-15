@@ -8,11 +8,13 @@
     watching,
     onopen,
     onmonitor,
+    onwake,
   }: {
     device: Device
     watching: boolean
     onopen: () => void
     onmonitor: (index: number) => void
+    onwake: () => void
   } = $props()
 
   const label = $derived(
@@ -40,6 +42,11 @@
     <span class="id">{device.device_id}</span>
     <span class="status">
       <ActionResult report={device.last_action} />
+      {#if device.status === 'offline' && device.macs.length > 0}
+        <button class="wake" onclick={(e) => (e.stopPropagation(), onwake())} title={t('wakeHint')}>
+          {t('wake')}
+        </button>
+      {/if}
       <i class="dot {device.status}"></i>
       {device.detail ?? label}
     </span>
@@ -130,6 +137,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .wake {
+    padding: 2px 8px;
+    font-size: 11px;
+    border-radius: 999px;
   }
 
   .dot {
