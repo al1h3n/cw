@@ -15,8 +15,15 @@ The **native viewer** (D12) now exists: `crates/viewer` (`cowatcher-viewer`) is 
 winit+softbuffer window that decodes the live H.264 stream and forwards mouse/keyboard; the Console's
 focused view launches it (Live view / Control, with a resolution + fps picker, so 3840×2160 @ 15 is
 selectable). The Agent now serves **concurrent** sessions so the grid and a viewer can watch one PC
-at once. 179 tests pass. Open next: pairing-over-real-network reliability (a first-dial timeout was
-seen), and making the in-webview dialogs draggable/resizable.
+at once. **Phase 1.4b landed (unverified):** the SYSTEM service no longer tries to serve from session
+0 — it launches a per-session **helper** (`platform::session::launch_in_session`, held in a
+kill-on-close job) into the logged-in student's session, which does the capture; agent identity moved
+machine-wide to `%ProgramData%\co-watcher\agent` (with a one-time migration from `%LOCALAPPDATA%`) so
+service, helper and `pair` share one key. The viewer is now a GUI app (no console window), and the
+launcher overlay is draggable/resizable. 181 tests pass. Everything about the service (install, the
+token launch, capture-through-helper) needs the VM/two-machine checks in `docs/TEST-CHECKLIST.md §8`.
+Open next: pairing-over-real-network reliability (a first-dial timeout was seen), and the D3 indicator
+trio (tray icon / login notice / being-viewed badge), which is still entirely missing.
 
 **Earlier status (2026-09-14, later):** the Console can now *act*, not just watch. Remote mouse and
 keyboard (Ctrl+Alt+Esc to release), lock, shutdown/reboot/log-off, app blocking, an app launcher,

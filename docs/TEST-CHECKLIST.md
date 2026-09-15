@@ -179,6 +179,26 @@ None of this could be verified on the dev machine — it is the elevation gate f
       access denied.
 - [ ] An **administrator** can: elevated `sc stop CowatcherAgent`, then `cowatcher-agent.exe uninstall`.
 
+**Capture through the service (the per-session helper — the whole point of 1.4b)**
+
+The service runs in session 0 and cannot capture a desktop itself; it launches a helper into the
+logged-in student's session. This is the path that must work for "watch/control with autostart", and
+it is entirely unverified.
+
+- [ ] With the service installed, **log in as the student**, then from TEACHER open that PC's screen.
+      Pass = you see the live screen and can control it, **without** anyone having run
+      `cowatcher-agent serve` by hand. (Behind the scenes the service started `cowatcher-agent helper`
+      in the student's session — visible in Task Manager → Details as a second `cowatcher-agent.exe`
+      with **no console window**.)
+- [ ] **Sign out and back in** on STUDENT (or switch user) → after a few seconds TEACHER can watch
+      again (the service relaunched the helper in the new session; the tile reconnects on its own).
+- [ ] At the **login screen** (no one signed in) TEACHER shows the PC offline — expected, there is no
+      desktop to capture until someone logs in.
+- [ ] First run after upgrading: the student's device id is **unchanged** (the identity was migrated
+      from `%LOCALAPPDATA%` to `%ProgramData%\co-watcher\agent`). If it changed, TEACHER must re-pair.
+      Note: **pair before installing the service** — an admin-created ProgramData folder can stop a
+      standard student account from writing a new pairing there.
+
 **Constant wallpaper (needs the service, runs as SYSTEM)**
 - [ ] With the service running, on STUDENT open Settings → Personalisation → Background.
       Pass = changing the wallpaper is blocked/greyed out.
