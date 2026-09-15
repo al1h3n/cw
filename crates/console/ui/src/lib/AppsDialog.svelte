@@ -21,6 +21,39 @@
   let loading = $state(true)
   let busy = $state(false)
 
+  // Make this overlay a real movable, resizable window: dragging its title bar switches it from the
+  // centered default to a fixed position, and CSS `resize` gives it a corner grip.
+  let dialogEl = $state<HTMLDivElement>()
+  let placed = $state<{ x: number; y: number } | null>(null)
+  let dragging = false
+  let start = { px: 0, py: 0, x: 0, y: 0 }
+
+  function dragStart(e: PointerEvent) {
+    if (!dialogEl) return
+    const r = dialogEl.getBoundingClientRect()
+    placed = { x: r.left, y: r.top }
+    dragging = true
+    start = { px: e.clientX, py: e.clientY, x: r.left, y: r.top }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  function dragMove(e: PointerEvent) {
+    if (!dragging) return
+    const nx = start.x + (e.clientX - start.px)
+    const ny = start.y + (e.clientY - start.py)
+    // Keep a sliver on screen so it can never be dragged fully out of reach.
+    const maxX = window.innerWidth - 80
+    const maxY = window.innerHeight - 40
+    placed = { x: Math.max(0, Math.min(maxX, nx)), y: Math.max(0, Math.min(maxY, ny)) }
+  }
+  function dragEnd(e: PointerEvent) {
+    dragging = false
+    try {
+      ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+    } catch {
+      // pointer already released; nothing to do
+    }
+  }
+
   const matches = $derived(
     apps.filter((a) => a.name.toLowerCase().includes(filter.trim().toLowerCase())).slice(0, 80),
   )
@@ -89,8 +122,24 @@
 <svelte:window on:keydown={onkey} />
 
 <div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose()}>
-  <div class="dialog" role="dialog" aria-modal="true" aria-label={t('appsTitle')}>
-    <h2>{t('appsTitle', deviceId)}</h2>
+  <div
+    class="dialog"
+    class:placed
+    bind:this={dialogEl}
+    role="dialog"
+    aria-modal="true"
+    aria-label={t('appsTitle')}
+    style={placed ? `left:${placed.x}px; top:${placed.y}px;` : ''}
+  >
+    <h2
+      class="draghandle"
+      onpointerdown={dragStart}
+      onpointermove={dragMove}
+      onpointerup={dragEnd}
+      onpointercancel={dragEnd}
+    >
+      {t('appsTitle', deviceId)}
+    </h2>
     <p class="lead">{t('appsLead')}</p>
 
     <input bind:value={filter} placeholder={t('appsFilter')} aria-label={t('appsFilter')} />
@@ -152,17 +201,36 @@
   .dialog {
     display: flex;
     flex-direction: column;
-    width: min(680px, 100%);
-    max-height: 100%;
+    width: min(680px, 96vw);
+    height: min(560px, 88vh);
+    min-width: 360px;
+    min-height: 260px;
+    max-width: 96vw;
+    max-height: 92vh;
     padding: 20px;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 14px;
+    /* A real window: drag the title bar to move, drag the corner to resize. */
+    resize: both;
+    overflow: hidden;
+  }
+
+  /* Once dragged it detaches from the centered default and floats where the teacher put it. */
+  .dialog.placed {
+    position: fixed;
+    margin: 0;
   }
 
   h2 {
     margin: 0 0 4px;
     font-size: 17px;
+  }
+
+  .draghandle {
+    cursor: move;
+    user-select: none;
+    touch-action: none;
   }
 
   h3 {
@@ -191,9 +259,17 @@
   .columns {
     display: grid;
     grid-template-columns: 1fr 1fr;
+    grid-template-rows: minmax(0, 1fr);
     gap: 14px;
+    flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
+  }
+
+  section {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 
   ul {
@@ -202,7 +278,9 @@
     padding: 0;
     display: grid;
     gap: 4px;
-    max-height: 46vh;
+    flex: 1 1 auto;
+    min-height: 0;
+    align-content: start;
     overflow: auto;
   }
 

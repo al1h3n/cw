@@ -16,8 +16,12 @@
 //! cowatcher-agent version
 //! ```
 //!
-//! State (device key, trust store) lives in `%LOCALAPPDATA%\co-watcher\agent`, or the directory in
-//! `COWATCHER_DIR`. The SYSTEM service and per-session helper arrive in Phase 1.4b.
+//! State (device key, trust store, room membership) lives machine-wide in
+//! `%ProgramData%\co-watcher\agent` so the SYSTEM service, the per-session helper (running as the
+//! student) and interactive `pair` all share one identity; `COWATCHER_DIR` overrides it, and an
+//! identity from the old per-user `%LOCALAPPDATA%` location is migrated across on first use. The
+//! service supervises a per-session `helper` that does the actual capture in the user's session,
+//! since a session-0 service cannot see a desktop (Phase 1.4b).
 
 mod audit;
 mod blocker;
@@ -64,10 +68,7 @@ fn main() -> ExitCode {
         Some("uninstall") => report(cmd_uninstall()),
         Some("run") => report(cmd_run()),
         Some("status") => report(cmd_status()),
-        Some("helper") => {
-            eprintln!("'helper' (per-session capture helper) arrives with the rest of Phase 1.4b.");
-            ExitCode::FAILURE
-        }
+        Some("helper") => report(block_on(cmd_helper(rest))),
         _ => {
             eprintln!(
                 "usage: cowatcher-agent <id|capture|pair|serve|sessions|room|leave|install|\
@@ -98,15 +99,84 @@ fn block_on<F: std::future::Future<Output = Result<(), String>>>(fut: F) -> Resu
         .block_on(fut)
 }
 
-/// Where this device keeps its key and trust store.
+/// Set by the `helper` subcommand so the per-session helper reads exactly the directory the SYSTEM
+/// service handed it, whatever the defaults would otherwise pick.
+static DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Forces the data directory for the rest of this process. Call before anything reads [`data_dir`].
+fn set_data_dir(dir: PathBuf) {
+    let _ = DIR_OVERRIDE.set(dir);
+}
+
+/// Where this device keeps its key, trust store and room membership.
+///
+/// A classroom Agent's identity belongs to the **machine**, not to whoever is logged in: the SYSTEM
+/// service, the per-session helper (running as the student) and an interactive `pair` must all read
+/// the same key. So the default is machine-wide `%ProgramData%\co-watcher\agent`, readable by every
+/// account. `COWATCHER_DIR` (or the `helper` argument) overrides it. If the machine directory cannot
+/// be used, we fall back to the old per-user location so nothing hard-breaks. Cached, since it may do
+/// a little filesystem work (create + migrate) the first time.
 fn data_dir() -> PathBuf {
+    if let Some(dir) = DIR_OVERRIDE.get() {
+        return dir.clone();
+    }
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(choose_data_dir).clone()
+}
+
+fn choose_data_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("COWATCHER_DIR") {
         return PathBuf::from(dir);
     }
-    let base = std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("HOME"))
-        .map_or_else(std::env::temp_dir, PathBuf::from);
+    let machine = program_data_dir();
+    let legacy = user_local_dir();
+    // Already established here: use it.
+    if machine.join("device.key").exists() {
+        return machine;
+    }
+    // Try to set the machine-wide directory up, carrying an existing per-user identity across so a PC
+    // paired before this change keeps its device id and trust.
+    if std::fs::create_dir_all(&machine).is_ok() {
+        if let Some(legacy) = &legacy {
+            migrate_identity(legacy, &machine);
+        }
+        if dir_is_writable(&machine) {
+            return machine;
+        }
+    }
+    // Could not use the machine directory (permissions): keep working in the per-user one.
+    legacy.unwrap_or(machine)
+}
+
+fn program_data_dir() -> PathBuf {
+    let base = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
     base.join("co-watcher").join("agent")
+}
+
+fn user_local_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|base| PathBuf::from(base).join("co-watcher").join("agent"))
+}
+
+fn dir_is_writable(dir: &Path) -> bool {
+    let probe = dir.join(".write-probe");
+    let ok = std::fs::write(&probe, b"x").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
+
+/// Copies the identity, trust store and room membership from an old per-user directory into the new
+/// machine-wide one, so a PC that paired before this change stays paired. Never overwrites.
+fn migrate_identity(from: &Path, to: &Path) {
+    for name in ["device.key", "trust.bin", "room.txt", "leave-attempts.txt"] {
+        let (src, dst) = (from.join(name), to.join(name));
+        if src.exists() && !dst.exists() {
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
 }
 
 fn load_identity() -> Result<Identity, String> {
@@ -201,6 +271,23 @@ async fn cmd_pair(args: Vec<String>) -> Result<(), String> {
 }
 
 async fn cmd_serve() -> Result<(), String> {
+    run_agent(true).await
+}
+
+/// The per-session capture helper. The SYSTEM service launches this **inside the logged-in user's
+/// session** — where the desktop actually is — passing the shared data directory as its one
+/// argument, and terminates it on stop or a session change. It serves paired consoles exactly like
+/// `serve`, only without the banner and with no console window.
+async fn cmd_helper(rest: &[String]) -> Result<(), String> {
+    if let Some(dir) = rest.first() {
+        set_data_dir(PathBuf::from(dir));
+    }
+    run_agent(false).await
+}
+
+/// Binds the endpoint and serves paired consoles until Ctrl+C (or the parent kills this process).
+/// Shared by the interactive `serve` and the service's `helper`.
+async fn run_agent(banner: bool) -> Result<(), String> {
     let identity = load_identity()?;
     let trust = TrustStore::load(&trust_path()).map_err(|e| e.to_string())?;
     if trust.is_empty() {
@@ -224,14 +311,17 @@ async fn cmd_serve() -> Result<(), String> {
     let endpoint = net::bind(&identity).await.map_err(|e| e.to_string())?;
     endpoint.online().await;
 
-    println!("{} agent serving", proto::PRODUCT_NAME);
-    println!("device id   : {}", identity.device_id());
-    println!("endpoint key: {}", identity.public_key());
-    println!("monitors    : {}", capture.monitor_count());
-    println!("blocklist   : {} rule(s) loaded", capture.blocked_count());
-    println!("trusted     : {} console(s). Ctrl+C to stop.", trust.len());
+    if banner {
+        println!("{} agent serving", proto::PRODUCT_NAME);
+        println!("device id   : {}", identity.device_id());
+        println!("endpoint key: {}", identity.public_key());
+        println!("monitors    : {}", capture.monitor_count());
+        println!("blocklist   : {} rule(s) loaded", capture.blocked_count());
+        println!("trusted     : {} console(s). Ctrl+C to stop.", trust.len());
+    }
 
-    // Interactive `serve` stops on Ctrl+C, which the select handles; this flag stays false.
+    // Both stop on Ctrl+C, which `accept_and_serve` handles; this flag stays false. The service
+    // terminates the helper by other means (a job object) when it needs it gone.
     accept_and_serve(
         &endpoint,
         &trust,
@@ -370,41 +460,103 @@ fn cmd_run() -> Result<(), String> {
 /// lands, the service still enforces wallpaper/power/blocking; screen capture belongs to the
 /// user-session `serve`.
 fn service_body(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
-    // Constant wallpaper: as SYSTEM the HKCU-policy write that failed unelevated now succeeds.
+    use std::{
+        sync::atomic::Ordering,
+        time::{Duration, Instant},
+    };
+
+    // Constant wallpaper: as SYSTEM the HKCU-policy write that fails unelevated now succeeds.
     if let Err(err) = platform::wallpaper::lock() {
         eprintln!("constant wallpaper could not be enforced: {err}");
     }
 
-    let Ok(runtime) = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    else {
+    // Establish / migrate the machine-wide identity now, as SYSTEM, so the helper (running as the
+    // student) only has to *read* it.
+    let data = data_dir();
+    let _ = std::fs::create_dir_all(&data);
+    let data_arg = data.to_string_lossy().into_owned();
+
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("service cannot find its own path");
         return;
     };
-    runtime.block_on(async {
-        let Ok(identity) = load_identity() else {
-            return;
-        };
-        let Ok(trust) = TrustStore::load(&trust_path()) else {
-            return;
-        };
-        let Ok(capture) = ScreenCapture::new(
-            &audit_path(),
-            &blocklist_path(),
-            &recording::directory(&data_dir()),
-            &data_dir().join("wallpaper-prev.txt"),
-        ) else {
-            return;
-        };
-        let capture = std::sync::Arc::new(capture);
-        let _ = platform::power::enable_shutdown_privilege();
-        let Ok(endpoint) = net::bind(&identity).await else {
-            return;
-        };
-        endpoint.online().await;
-        accept_and_serve(&endpoint, &trust, capture, identity.device_id(), stop).await;
-        endpoint.close().await;
-    });
+
+    // A service in session 0 cannot capture a user's desktop, so it does not serve directly. It keeps
+    // a per-session *helper* alive in whichever session the student is using — relaunching it when the
+    // student signs in or out or switches user, and killing it (via a job object) on stop.
+    let mut policy = supervisor::RestartPolicy::default();
+    let mut helper: Option<(u32, platform::session::SessionProcess)> = None;
+    let mut started_at: Option<Instant> = None;
+
+    while !stop.load(Ordering::SeqCst) {
+        match platform::session::active_console_session() {
+            None => {
+                // Login screen, nobody signed in: nothing to capture. Drop any helper and wait.
+                if helper.take().is_some() {
+                    println!("no interactive user; session helper stopped");
+                }
+                started_at = None;
+                sleep_until_stop(Duration::from_secs(2), &stop);
+            }
+            Some(session_id) => {
+                let alive =
+                    matches!(&helper, Some((sid, h)) if *sid == session_id && h.is_running());
+                if alive {
+                    sleep_until_stop(Duration::from_secs(1), &stop);
+                    continue;
+                }
+                // The helper died or the active session changed. Back off if it had only just
+                // started, so a crash loop cannot peg the CPU.
+                if let Some(when) = started_at.take() {
+                    let delay = policy.record_exit(when.elapsed());
+                    if delay > Duration::ZERO && sleep_until_stop(delay, &stop) {
+                        break;
+                    }
+                }
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                helper = None; // drop kills the old one before a new one starts
+                match platform::session::launch_in_session(session_id, &exe, &["helper", &data_arg])
+                {
+                    Ok(child) => {
+                        println!(
+                            "session helper started in session {session_id} (pid {})",
+                            child.pid()
+                        );
+                        helper = Some((session_id, child));
+                        started_at = Some(Instant::now());
+                    }
+                    Err(err) => {
+                        eprintln!("could not start session helper: {err}");
+                        started_at = Some(Instant::now()); // an immediate failure: back off next pass
+                    }
+                }
+                sleep_until_stop(Duration::from_millis(500), &stop);
+            }
+        }
+    }
+    // Stopping: drop the helper (the job kills it) and release the wallpaper policy, so an admin who
+    // stops the service gets a normal desktop back.
+    drop(helper);
+    let _ = platform::wallpaper::unlock();
+}
+
+/// Sleeps up to `dur`, returning `true` early if a stop was requested.
+fn sleep_until_stop(
+    dur: std::time::Duration,
+    stop: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> bool {
+    use std::sync::atomic::Ordering;
+    let deadline = std::time::Instant::now() + dur;
+    while std::time::Instant::now() < deadline {
+        if stop.load(Ordering::SeqCst) {
+            return true;
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        std::thread::sleep(std::time::Duration::from_millis(100).min(remaining));
+    }
+    stop.load(Ordering::SeqCst)
 }
 
 /// Shows which room this PC is in.
@@ -485,4 +637,29 @@ fn cmd_supervise(args: &[String]) -> Result<(), String> {
     );
     println!("supervisor stopped after {starts} start(s)");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_copies_missing_identity_files_and_never_overwrites() {
+        // The machine-wide data dir carries an existing per-user identity across on first use, so a
+        // PC paired before the switch keeps its device id — but it must never clobber a file that is
+        // already there (that would throw away a newer identity).
+        let base = std::env::temp_dir().join(format!("cw-migrate-{}", std::process::id()));
+        let (from, to) = (base.join("from"), base.join("to"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(from.join("device.key"), b"KEY").unwrap();
+        std::fs::write(from.join("trust.bin"), b"OLD").unwrap();
+        std::fs::write(to.join("trust.bin"), b"KEEP").unwrap(); // already present in the target
+
+        migrate_identity(&from, &to);
+
+        assert_eq!(std::fs::read(to.join("device.key")).unwrap(), b"KEY", "missing file copied");
+        assert_eq!(std::fs::read(to.join("trust.bin")).unwrap(), b"KEEP", "existing file kept");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

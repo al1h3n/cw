@@ -17,6 +17,10 @@
 //! uses on the student side). While controlling, every key and click goes to that PC; releasing, or
 //! the window losing focus, sends "release everything" so no key is ever left stuck down.
 
+// Release builds are a GUI app, so launching the viewer never flashes a console window next to the
+// teacher's screen. Debug builds keep the console for the connection log and decode diagnostics.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::{
     num::NonZeroU32,
     path::PathBuf,
