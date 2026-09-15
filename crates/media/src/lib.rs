@@ -9,7 +9,7 @@
 #![allow(unsafe_code)]
 
 /// A capture failure.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 #[error("capture failed: {0}")]
 pub struct CaptureError(pub String);
 

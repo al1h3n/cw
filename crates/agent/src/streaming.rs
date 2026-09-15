@@ -147,6 +147,10 @@ fn run(
     // The last frame we encoded, reused when the desktop has not changed. Re-encoding identical
     // pixels costs almost nothing in H.264 and keeps the stream flowing for the decoder.
     let mut previous: Option<Vec<u8>> = None;
+    // A sustained capture failure (a lock screen held for minutes) fires every frame; aggregate the
+    // misses and report at most once a second so the console window is not buried in identical lines.
+    let mut misses: u64 = 0;
+    let mut last_miss_log = Instant::now();
 
     while !stop.load(Ordering::SeqCst) {
         let frame = match capturer.capture_scaled_bgra(monitor, max_width) {
@@ -167,7 +171,12 @@ fn run(
             Ok(None) => previous.clone(),
             Err(err) => {
                 // One missed grab (a UAC prompt, a mode change) must not end the lesson's stream.
-                eprintln!("stream frame missed: {err}");
+                misses += 1;
+                if last_miss_log.elapsed() >= std::time::Duration::from_secs(1) {
+                    eprintln!("stream frame missed ({misses}x, last: {err})");
+                    misses = 0;
+                    last_miss_log = Instant::now();
+                }
                 previous.clone()
             }
         };

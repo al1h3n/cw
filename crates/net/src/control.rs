@@ -335,6 +335,11 @@ impl ControlSession {
             Control::Thumbnail {
                 monitor: got, jpeg, ..
             } if got == monitor => Ok(jpeg),
+            // A transient "can't capture right now" (lock screen, UAC): the caller keeps the
+            // session and retries, so it is not folded into the generic refusal.
+            Control::Error(ProtocolError::ScreenUnavailable) => {
+                Err(EndpointError::ScreenUnavailable)
+            }
             Control::Error(err) => Err(EndpointError::ControlRefused(err)),
             _ => Err(EndpointError::Protocol),
         }
@@ -711,12 +716,28 @@ impl ControlSession {
             };
             match request {
                 Control::RequestThumbnail { monitor, max_width } => {
-                    let jpeg = source
-                        .capture_thumbnail(monitor, max_width)
-                        .map_err(|e| EndpointError::Capture(e.0))?;
-                    seq += 1;
-                    write_message(&mut self.send, &Control::Thumbnail { monitor, seq, jpeg })
-                        .await?;
+                    // A capture failure is almost always transient — a lock screen, a UAC secure
+                    // desktop, a resolution change. Ending the whole session on it made both sides
+                    // reconnect at once and again, an endless storm (seen live). Instead, tell the
+                    // Console the screen is momentarily unavailable and keep serving; the next
+                    // request usually succeeds once the desktop is back.
+                    match source.capture_thumbnail(monitor, max_width) {
+                        Ok(jpeg) => {
+                            seq += 1;
+                            write_message(
+                                &mut self.send,
+                                &Control::Thumbnail { monitor, seq, jpeg },
+                            )
+                            .await?;
+                        }
+                        Err(_) => {
+                            write_message(
+                                &mut self.send,
+                                &Control::Error(proto::ProtocolError::ScreenUnavailable),
+                            )
+                            .await?;
+                        }
+                    }
                 }
                 Control::ListMonitors => {
                     write_message(&mut self.send, &Control::Monitors(source.monitors())).await?;

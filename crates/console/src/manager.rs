@@ -977,11 +977,14 @@ impl DeviceManager {
             }
 
             let (monitor, width, focused) = self.request_shape(id, key);
-            let jpeg = session
-                .request_thumbnail(monitor, width)
-                .await
-                .map_err(|e| e.to_string())?;
-            self.set_screen(id, &jpeg);
+            match session.request_thumbnail(monitor, width).await {
+                Ok(jpeg) => self.set_screen(id, &jpeg),
+                // The student's screen is momentarily uncapturable — locked, or a UAC prompt is up.
+                // Keep the connection and the last frame; the screen comes back on a later tick.
+                // Dropping the session here is what produced the reconnect storm seen in testing.
+                Err(net::EndpointError::ScreenUnavailable) => {}
+                Err(e) => return Err(e.to_string()),
+            }
 
             audio_on = self.pump_audio(&mut session, key, audio_on).await?;
             tokio::time::sleep(if focused { FOCUSED_REFRESH } else { REFRESH }).await;

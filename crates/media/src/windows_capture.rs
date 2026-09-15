@@ -61,24 +61,7 @@ impl ThumbnailCapturer {
     /// # Errors
     /// Returns [`CaptureError`] if Direct3D or DXGI are unavailable.
     pub fn new() -> Result<Self, CaptureError> {
-        let (mut device, mut context) = (None, None);
-        // SAFETY: plain D3D11 device creation; the out-params are Options we own.
-        unsafe {
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            )
-            .map_err(CaptureError::new)?;
-        }
-        let device = device.ok_or_else(|| CaptureError("no D3D11 device".into()))?;
-        let context = context.ok_or_else(|| CaptureError("no D3D11 context".into()))?;
+        let (device, context) = create_device()?;
         let monitors = enumerate_outputs(&device)?;
         Ok(Self {
             device,
@@ -132,15 +115,16 @@ impl ThumbnailCapturer {
                 None => self.gdi_fallback(monitor, max_width),
             },
             Err(err) => {
-                // Access is lost on desktop switches (UAC, lock screen) and mode changes: rebuild once.
-                self.active = Some(Duplication::new(&self.device, monitor, max_width)?);
+                // Almost always a transient desktop switch (lock screen, UAC) or a lost device.
+                // Rebuild — escalating to a full device recreate if a plain duplication rebuild
+                // fails — and try once more; if it still will not grab, fall back to a GDI BitBlt of
+                // the desktop. Only when even that fails do we report an error, and the serve loop
+                // turns that into "screen momentarily unavailable" and keeps the session, so this
+                // path never needs to spin.
+                self.recover(monitor, max_width);
                 match self.grab(monitor, max_width) {
                     Ok(Some(jpeg)) => Ok(jpeg),
-                    Ok(None) => match self.cached(monitor, max_width) {
-                        Some(jpeg) => Ok(jpeg),
-                        None => self.gdi_fallback(monitor, max_width).map_err(|_| err),
-                    },
-                    Err(err) => Err(err),
+                    Ok(None) | Err(_) => self.gdi_fallback(monitor, max_width).map_err(|_| err),
                 }
             }
         }
@@ -200,19 +184,28 @@ impl ThumbnailCapturer {
                 Ok(Some(seeded))
             }
             Ok(None) => Ok(None),
-            Err(err) => {
-                // Access is lost on desktop switches (UAC, lock screen) and mode changes: rebuild
-                // once and try again, so a stream survives a student hitting Ctrl+Alt+Del.
-                self.active = Some(Duplication::new(&self.device, monitor, max_width)?);
-                self.primed = false;
-                let Some(active) = self.active.as_ref() else {
-                    return Err(err);
-                };
-                let frame = active.next_frame(&self.context, true, 0)?;
-                if frame.is_some() {
-                    self.primed = true;
+            Err(_) => {
+                // Access is lost on desktop switches (UAC, lock screen) and mode changes; a driver
+                // reset loses the device outright. Rebuild — escalating to a full device recreate —
+                // so a stream survives a student hitting Ctrl+Alt+Del, then take one forced frame.
+                // If duplication still will not produce one, seed from GDI so the stream keeps
+                // flowing rather than stalling the teacher's window.
+                self.recover(monitor, max_width);
+                let forced = self
+                    .active
+                    .as_ref()
+                    .and_then(|active| active.next_frame(&self.context, true, 0).ok().flatten());
+                match forced {
+                    Some(frame) => {
+                        self.primed = true;
+                        Ok(Some(frame))
+                    }
+                    None => {
+                        let seeded = self.gdi_scaled(monitor, max_width)?;
+                        self.primed = true;
+                        Ok(Some(seeded))
+                    }
                 }
-                Ok(frame)
             }
         }
     }
@@ -238,6 +231,47 @@ impl ThumbnailCapturer {
             .ok_or_else(|| CaptureError(format!("monitor {monitor} has no desktop area")))?;
         // u16::MAX as the cap means "do not downscale": the caller resizes properly.
         crate::gdi::capture_area_bgra(area, u16::MAX)
+    }
+
+    /// Rebuilds the capture pipeline after a duplication error, escalating as needed.
+    ///
+    /// A desktop switch (lock screen, UAC secure desktop, a resolution change) reports
+    /// `DXGI_ERROR_ACCESS_LOST` and needs only a fresh duplication. A driver reset or GPU TDR reports
+    /// `DXGI_ERROR_DEVICE_REMOVED`/`_RESET`, which a new duplication on the dead device cannot fix —
+    /// so if the plain rebuild fails, the whole D3D device is recreated and the duplication built on
+    /// the new one. Best-effort: on total failure `active` is left `None` and the caller falls back
+    /// to GDI or the cached frame.
+    fn recover(&mut self, monitor: u8, max_width: u16) {
+        self.last = None;
+        self.primed = false;
+        // Cheapest first: a new duplication on the existing device (handles ACCESS_LOST).
+        if let Ok(dup) = Duplication::new(&self.device, monitor, max_width) {
+            self.active = Some(dup);
+            return;
+        }
+        // The device itself is probably gone: recreate it, then the duplication.
+        self.active = None;
+        if self.recreate_device().is_err() {
+            return;
+        }
+        self.active = Duplication::new(&self.device, monitor, max_width).ok();
+    }
+
+    /// Recreates the D3D11 device, context and monitor list after the device was lost.
+    fn recreate_device(&mut self) -> Result<(), CaptureError> {
+        let (device, context) = create_device()?;
+        // Re-enumerating can transiently fail during a mode change; keep the old list if so, since a
+        // monitor index is all the caller needs and the geometry rarely changes under our feet.
+        if let Ok(monitors) = enumerate_outputs(&device)
+            && !monitors.is_empty()
+        {
+            self.monitors = monitors;
+        }
+        self.device = device;
+        self.context = context;
+        self.active = None;
+        self.primed = false;
+        Ok(())
     }
 
     /// Grabs this monitor with GDI, downscaled to at most `max_width`, as raw BGRA.
@@ -302,6 +336,32 @@ impl ThumbnailCapturer {
             }
         }
     }
+}
+
+/// Creates a hardware D3D11 device and its immediate context, the pair every duplication is built
+/// against. Factored out so it can be called again after the device is *lost* (a driver reset or GPU
+/// TDR reports `DXGI_ERROR_DEVICE_REMOVED`/`_RESET`, and no amount of rebuilding the duplication
+/// recovers that — the whole device must be recreated).
+fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext), CaptureError> {
+    let (mut device, mut context) = (None, None);
+    // SAFETY: plain D3D11 device creation; the out-params are Options we own.
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            None,
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        )
+        .map_err(CaptureError::new)?;
+    }
+    let device = device.ok_or_else(|| CaptureError("no D3D11 device".into()))?;
+    let context = context.ok_or_else(|| CaptureError("no D3D11 context".into()))?;
+    Ok((device, context))
 }
 
 /// Encodes packed BGRA pixels as JPEG.

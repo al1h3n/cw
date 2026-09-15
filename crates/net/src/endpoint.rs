@@ -77,6 +77,11 @@ pub enum EndpointError {
     /// Capturing a thumbnail failed on the Agent.
     #[error("capture failed: {0}")]
     Capture(String),
+    /// The Agent's screen is momentarily uncapturable (lock screen, UAC prompt, mode change).
+    /// **Transient** — the Console keeps the session and retries rather than disconnecting, so a
+    /// student locking their PC no longer triggers an endless reconnect storm.
+    #[error("screen temporarily unavailable")]
+    ScreenUnavailable,
     /// No incoming connection was available to accept.
     #[error("no incoming connection")]
     NoConnection,

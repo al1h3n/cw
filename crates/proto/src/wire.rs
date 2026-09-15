@@ -334,6 +334,11 @@ pub enum ProtocolError {
     /// The sender is shutting the connection down cleanly.
     #[error("peer is going away")]
     GoingAway,
+    /// The screen cannot be captured *right now* — a lock screen, a UAC secure desktop, or a
+    /// display mode change. Unlike the others this is **transient**: the receiver should keep the
+    /// session open and retry, not disconnect. Kills the reconnect storm a hard error used to cause.
+    #[error("screen temporarily unavailable")]
+    ScreenUnavailable,
 }
 
 /// A control-channel message. This is the top-level type carried over the control stream.
