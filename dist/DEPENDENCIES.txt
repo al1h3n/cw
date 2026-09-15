@@ -38,11 +38,16 @@ What you may need to configure yourself (NOT bundled, on purpose)
    The student program (cowatcher-agent.exe) does NOT use WebView2 and needs
    nothing here.
 
+The full-resolution viewer (cowatcher-viewer.exe) is like the student program
+here: everything is built in (H.264 decode, the window, Direct3D), it does NOT
+use WebView2, and it needs nothing extra. Keep it in the same folder as the
+teacher app, which launches it.
+
 Summary
 -------
-                          cowatcher-agent.exe   cowatcher-console.exe
-  Visual C++ runtime      built in              built in
-  WebView2 runtime        not used              needs it (ships with Win 10 21H2+/11)
-  Any other download      none                  none
+                          agent.exe    console.exe                 viewer.exe
+  Visual C++ runtime      built in     built in                   built in
+  WebView2 runtime        not used     needs it (Win 10 21H2+/11)  not used
+  Any other download      none         none                       none
 
 64-bit Windows 10 (1809+) or Windows 11 is assumed. There is no 32-bit build.

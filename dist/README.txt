@@ -1,10 +1,17 @@
 Co-watcher — preview build (working name)
 =========================================
 
-Two Windows programs. Nothing to install: unzip and double-click.
+Three Windows programs. Nothing to install: unzip and double-click.
+Keep all three files in the same folder — the console launches the viewer from
+right next to itself.
 
   cowatcher-console.exe   The TEACHER app (the "host"). Opens a window with a
                           live grid of student screens and the controls.
+
+  cowatcher-viewer.exe    The full-resolution WINDOW for one PC. You do not run
+                          this yourself — the teacher app opens it when you press
+                          "Live view" or "Control" on a student's screen. It
+                          shows the live video large and lets you drive that PC.
 
   cowatcher-agent.exe     The STUDENT program (the "client"). Runs on each
                           student PC. It has no window; run it from a terminal
@@ -19,7 +26,11 @@ WHAT THIS BUILD CAN DO
 ----------------------
   * See every student screen at once; pick the monitor and the preview quality
   * Open one screen larger, and listen to what that PC is playing
+  * Open a full-resolution "Live view" window of one PC (a real window you can
+    resize), at a resolution and frame rate you choose (720p up to 4K; e.g.
+    3840x2160 @ 15 for a projector). Press "Control" to drive it there
   * TAKE CONTROL of a PC's mouse and keyboard. Ctrl+Alt+Esc gives it back
+    (works both in the grid and in the Live view window)
   * Start a program on a student PC, or close one that is running
   * Block apps and games by name — closed within a second and kept closed,
     and the list survives a reboot on the student PC
