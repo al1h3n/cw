@@ -320,6 +320,19 @@ impl DeviceManager {
         self.identity.public_key().to_string()
     }
 
+    /// One device's endpoint key in the canonical form the viewer parses, resolved from the stored
+    /// public key so it always round-trips (never a hand-formatted hex string).
+    ///
+    /// # Errors
+    /// The device is unknown, or its key is not a valid endpoint id.
+    pub fn endpoint_key(&self, device_id: &str) -> Result<String, String> {
+        let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        let state = devices.get(device_id).ok_or("unknown device")?;
+        iroh::EndpointId::from_bytes(&state.key)
+            .map(|id| id.to_string())
+            .map_err(|e| e.to_string())
+    }
+
     /// A snapshot of every paired device for the UI.
     #[must_use]
     pub fn devices(&self) -> Vec<DeviceView> {

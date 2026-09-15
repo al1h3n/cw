@@ -1,0 +1,25 @@
+[package]
+name = "viewer"
+description = "Native full-resolution remote-view window (ADR D12): decode H.264 in Rust, forward input."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "cowatcher-viewer"
+path = "src/main.rs"
+
+[dependencies]
+net = { path = "../net" }
+proto = { path = "../proto" }
+media = { version = "0.1.0", path = "../media" }
+iroh = "1.2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "io-util"] }
+anyhow = "1"
+winit = "0.30"
+softbuffer = "0.4"
+
+[lints]
+workspace = true

@@ -38,6 +38,23 @@
   }
   load()
 
+  // Keep the running list live: a program the student (or the teacher) started should appear on its
+  // own within a couple of seconds, not only when Refresh is pressed. The installed-apps list is
+  // re-fetched by Refresh, since it changes rarely.
+  async function refreshRunning() {
+    if (busy) return
+    try {
+      running = await invoke<RunningApp[]>('list_running', { deviceId })
+    } catch {
+      // A transient miss is not worth interrupting the teacher; the next tick retries.
+    }
+  }
+
+  $effect(() => {
+    const timer = setInterval(refreshRunning, 2000)
+    return () => clearInterval(timer)
+  })
+
   async function launch(app: AppEntry) {
     busy = true
     try {

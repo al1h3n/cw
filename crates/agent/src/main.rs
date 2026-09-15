@@ -208,13 +208,15 @@ async fn cmd_serve() -> Result<(), String> {
             "no paired console yet — run `cowatcher-agent pair <console-key> <code>` first".into(),
         );
     }
-    let capture = ScreenCapture::new(
-        &audit_path(),
-        &blocklist_path(),
-        &recording::directory(&data_dir()),
-        &data_dir().join("wallpaper-prev.txt"),
-    )
-    .map_err(|e| e.to_string())?;
+    let capture = std::sync::Arc::new(
+        ScreenCapture::new(
+            &audit_path(),
+            &blocklist_path(),
+            &recording::directory(&data_dir()),
+            &data_dir().join("wallpaper-prev.txt"),
+        )
+        .map_err(|e| e.to_string())?,
+    );
     // Fail loudly at start-up rather than on the teacher's first click.
     if let Err(err) = platform::power::enable_shutdown_privilege() {
         eprintln!("warning: power actions will be refused: {err}");
@@ -233,7 +235,7 @@ async fn cmd_serve() -> Result<(), String> {
     accept_and_serve(
         &endpoint,
         &trust,
-        &capture,
+        capture,
         identity.device_id(),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
@@ -257,7 +259,7 @@ fn agent_capabilities() -> Capabilities {
 async fn accept_and_serve(
     endpoint: &iroh::Endpoint,
     trust: &TrustStore,
-    capture: &ScreenCapture,
+    capture: std::sync::Arc<ScreenCapture>,
     device_id: proto::DeviceId,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
@@ -294,14 +296,20 @@ async fn accept_and_serve(
             _ = tokio::signal::ctrl_c() => break,
             session = net::ControlSession::accept(endpoint, trust, local) => match session {
                 Ok(session) => {
-                    println!("console {} connected", session.peer().device_id);
-                    if let Err(err) = session.serve(capture).await {
-                        eprintln!("session ended: {err}");
-                    } else {
-                        println!("console disconnected");
-                    }
-                    // A dropped console must never leave the desktop blacked out.
-                    capture.end_session();
+                    // One task per session, so a teacher can keep the thumbnail grid open *and*
+                    // open a full-resolution viewer of the same PC at the same time. Serving
+                    // sessions one-at-a-time made the second connection hang until the first ended.
+                    let capture = std::sync::Arc::clone(&capture);
+                    tokio::spawn(async move {
+                        println!("console {} connected", session.peer().device_id);
+                        if let Err(err) = session.serve(&*capture).await {
+                            eprintln!("session ended: {err}");
+                        } else {
+                            println!("console disconnected");
+                        }
+                        // A dropped console must never leave the desktop blacked out.
+                        capture.end_session();
+                    });
                 }
                 Err(err) => eprintln!("rejected a connection: {err}"),
             },
@@ -388,12 +396,13 @@ fn service_body(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
         ) else {
             return;
         };
+        let capture = std::sync::Arc::new(capture);
         let _ = platform::power::enable_shutdown_privilege();
         let Ok(endpoint) = net::bind(&identity).await else {
             return;
         };
         endpoint.online().await;
-        accept_and_serve(&endpoint, &trust, &capture, identity.device_id(), stop).await;
+        accept_and_serve(&endpoint, &trust, capture, identity.device_id(), stop).await;
         endpoint.close().await;
     });
 }

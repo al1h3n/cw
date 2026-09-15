@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { invoke } from '@tauri-apps/api/core'
   import { t } from './i18n.svelte'
   import type { Device } from './types'
   import ActionMenu from './ActionMenu.svelte'
@@ -27,6 +28,34 @@
   } = $props()
 
   let showApps = $state(false)
+
+  // Full-resolution native viewer (ADR D12): the small JPEG below is the grid preview; this opens a
+  // real window that decodes the live H.264 stream and can drive the PC. Resolution and rate are the
+  // teacher's to pick — a 4K classroom projector may want 3840×2160 @ 15, a laptop 1280×720 @ 30.
+  let res = $state('1920x1080')
+  let fps = $state(30)
+  const KBPS: Record<string, number> = {
+    '1280x720': 2500,
+    '1920x1080': 5000,
+    '2560x1440': 9000,
+    '3840x2160': 16000,
+  }
+
+  async function openViewer(control: boolean) {
+    const [width, height] = res.split('x').map(Number)
+    try {
+      await invoke('open_viewer', {
+        deviceId: device.device_id,
+        width,
+        height,
+        fps: Math.max(1, Math.min(60, fps)),
+        kbps: KBPS[res] ?? 5000,
+        control,
+      })
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
 
   function onkey(event: KeyboardEvent) {
     // While driving a PC, every key belongs to that PC — including Escape, which a remote program
@@ -82,6 +111,24 @@
       >
         {controlling ? t('controlStop') : t('controlStart')}
       </button>
+      <span class="liveview" role="group" aria-label={t('liveView')}>
+        <select bind:value={res} aria-label={t('resolution')} title={t('resolution')}>
+          <option value="1280x720">720p</option>
+          <option value="1920x1080">1080p</option>
+          <option value="2560x1440">1440p</option>
+          <option value="3840x2160">4K</option>
+        </select>
+        <input
+          type="number"
+          min="1"
+          max="60"
+          bind:value={fps}
+          aria-label={t('fpsLabel')}
+          title={t('fpsLabel')}
+        />
+        <button onclick={() => openViewer(false)} title={t('liveViewHint')}>{t('liveView')}</button>
+        <button onclick={() => openViewer(true)} title={t('liveControlHint')}>{t('liveControl')}</button>
+      </span>
       <button onclick={() => (showApps = true)}>{t('appsButton')}</button>
       <RecordButton deviceId={device.device_id} {onerror} />
       <ActionResult report={device.last_action} />
@@ -134,6 +181,26 @@
   .id {
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
     font-size: 14px;
+  }
+
+  .liveview {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .liveview select,
+  .liveview input {
+    padding: 4px 6px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+  }
+
+  .liveview input {
+    width: 3.5em;
   }
 
   .status {

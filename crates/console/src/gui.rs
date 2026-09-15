@@ -193,6 +193,48 @@ fn wake(state: State<'_, AppState>, device_id: String) -> Result<usize, String> 
     state.manager.wake(&device_id)
 }
 
+/// Opens the native full-resolution viewer window for one PC (ADR D12).
+///
+/// The viewer is a separate binary that decodes the H.264 stream in Rust; the WebView cannot. It
+/// dials as this same console (it reads the same state directory), so no key is passed around. When
+/// `control` is true the teacher can immediately drive that PC; Ctrl+Alt+Esc toggles it in-window.
+#[tauri::command]
+fn open_viewer(
+    state: State<'_, AppState>,
+    device_id: String,
+    width: u32,
+    height: u32,
+    fps: u32,
+    kbps: u32,
+    control: bool,
+) -> Result<(), String> {
+    let key = state.manager.endpoint_key(&device_id)?;
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("cowatcher-viewer.exe")))
+        .ok_or("could not locate the viewer next to the console")?;
+    if !exe.exists() {
+        return Err(format!(
+            "the viewer is not installed next to the console (looked for {})",
+            exe.display()
+        ));
+    }
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg(key)
+        .arg(width.to_string())
+        .arg(height.to_string())
+        .arg(fps.to_string())
+        .arg(kbps.to_string());
+    if control {
+        command.arg("control");
+    }
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not start the viewer: {e}"))
+}
+
 /// Takes control of one PC's mouse and keyboard, or releases it when `device_id` is absent.
 #[tauri::command]
 fn set_controlling(state: State<'_, AppState>, device_id: Option<String>) -> Result<(), String> {
@@ -466,6 +508,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             controlling,
             send_input,
             wake,
+            open_viewer,
             start_recording,
             stop_recording,
             recording_status,
