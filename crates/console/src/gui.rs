@@ -187,6 +187,12 @@ fn set_monitor(state: State<'_, AppState>, device_id: String, monitor: u8) -> Re
     state.manager.set_monitor(&device_id, monitor)
 }
 
+/// Wakes a switched-off PC by broadcasting a Wake-on-LAN packet for the MACs we learned earlier.
+#[tauri::command]
+fn wake(state: State<'_, AppState>, device_id: String) -> Result<usize, String> {
+    state.manager.wake(&device_id)
+}
+
 /// Takes control of one PC's mouse and keyboard, or releases it when `device_id` is absent.
 #[tauri::command]
 fn set_controlling(state: State<'_, AppState>, device_id: Option<String>) -> Result<(), String> {
@@ -459,6 +465,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             set_controlling,
             controlling,
             send_input,
+            wake,
             start_recording,
             stop_recording,
             recording_status,

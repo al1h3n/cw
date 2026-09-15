@@ -97,6 +97,17 @@ pub trait AgentDevice {
         Vec::new()
     }
 
+    /// This PC's wakeable MAC addresses, so a Console can store them and wake it later.
+    fn list_macs(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Broadcasts a Wake-on-LAN packet for another PC on this Agent's LAN. Returns whether it went.
+    fn wake_on_lan(&self, from: &PeerInfo, mac: &str) -> bool {
+        let _ = (from, mac);
+        false
+    }
+
     /// Shows one frame of the teacher's screen full-screen on this PC.
     ///
     /// Returns whether the broadcast is on screen, and a reason when it is not. The default refuses,
@@ -364,6 +375,32 @@ impl ControlSession {
         }
     }
 
+    /// Console side: ask this PC for its MAC addresses (to store for waking it later).
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn request_macs(&mut self) -> Result<Vec<String>, EndpointError> {
+        write_message(&mut self.send, &Control::ListMacs).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::Macs(macs) => Ok(macs),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: ask this (awake) PC to broadcast a wake packet for a sleeping peer.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn wake_on_lan(&mut self, mac: String) -> Result<bool, EndpointError> {
+        write_message(&mut self.send, &Control::WakeOnLan { mac }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::WakeSent { sent } => Ok(sent),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Console side: put one frame of this console's screen on the student PC.
     ///
     /// Returns whether it is showing, plus a reason when it is not.
@@ -612,6 +649,13 @@ impl ControlSession {
                         },
                     )
                     .await?;
+                }
+                Control::ListMacs => {
+                    write_message(&mut self.send, &Control::Macs(source.list_macs())).await?;
+                }
+                Control::WakeOnLan { mac } => {
+                    let sent = source.wake_on_lan(&self.peer, &mac);
+                    write_message(&mut self.send, &Control::WakeSent { sent }).await?;
                 }
                 Control::ShowBroadcast { jpeg } => {
                     let (showing, problem) = source.show_broadcast(&self.peer, &jpeg);

@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+mac_address = "1" # Wake-on-LAN interface enumeration; cross-platform, no admin (D15: prefer a library)
 thiserror = "2"
 
 [target.'cfg(windows)'.dependencies]

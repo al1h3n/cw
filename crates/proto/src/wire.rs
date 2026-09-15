@@ -385,6 +385,23 @@ pub enum Control {
         /// Names closed since the previous state message, capped so the reply stays small.
         closed: Vec<String>,
     },
+    /// Console → Agent: what MAC addresses do you have? Stored so the PC can be woken later.
+    ListMacs,
+    /// Agent → Console: this PC's wakeable MAC addresses (`AA:BB:CC:DD:EE:FF` form).
+    Macs(Vec<String>),
+    /// Console → Agent (to an *awake* PC): broadcast a Wake-on-LAN packet for `mac` on your LAN.
+    ///
+    /// This is how a teacher wakes a switched-off PC: an Agent still awake in the same room puts the
+    /// magic packet on the wire, because the target has no IP to reach directly.
+    WakeOnLan {
+        /// The sleeping PC's MAC, `AA:BB:CC:DD:EE:FF`.
+        mac: String,
+    },
+    /// Agent → Console: whether the wake packet went out.
+    WakeSent {
+        /// True if the packet was broadcast.
+        sent: bool,
+    },
     /// Console → Agent: show this frame of the teacher's screen, full-screen, on the student PC.
     ///
     /// Each message carries one complete JPEG, so a student who joins late or misses a frame sees

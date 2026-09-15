@@ -8,6 +8,7 @@
 //!                                            pull n thumbnails from a paired agent into dir
 //! cowatcher-console act <agent-key> <action> [delay]
 //!                                            lock-screen, shutdown, reboot, log-off, cancel-shutdown
+//! cowatcher-console wake <MAC>                 broadcast a Wake-on-LAN packet
 //! cowatcher-console version
 //! ```
 //!
@@ -66,8 +67,9 @@ fn main() -> ExitCode {
         Some("apps") => block_on(cmd_apps(rest)),
         Some("record") => block_on(cmd_record(rest)),
         Some("broadcast") => block_on(cmd_broadcast(rest)),
+        Some("wake") => cmd_wake(&rest),
         _ => Err(
-            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|apps|record|broadcast|version]  (no arguments opens the window)"
+            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|apps|record|broadcast|wake|version]  (no arguments opens the window)"
                 .into(),
         ),
     };
@@ -319,6 +321,18 @@ async fn cmd_act(args: Vec<String>) -> Result<(), String> {
         proto::ActionOutcome::Started { .. } => Ok(()),
         proto::ActionOutcome::Failed(reason) => Err(reason.to_string()),
     }
+}
+
+/// Broadcasts a Wake-on-LAN packet for a MAC address, to wake a switched-off PC on this LAN.
+fn cmd_wake(args: &[String]) -> Result<(), String> {
+    let Some(mac) = args.first() else {
+        return Err("usage: cowatcher-console wake <AA:BB:CC:DD:EE:FF>".into());
+    };
+    let mac = platform::wol::MacAddress::parse(mac).map_err(|e| e.to_string())?;
+    platform::wol::wake(mac).map_err(|e| e.to_string())?;
+    println!("sent a wake packet to {}", mac.to_hex());
+    println!("(the PC wakes only if its BIOS/UEFI and network card have Wake-on-LAN enabled)");
+    Ok(())
 }
 
 /// Broadcasts this console's screen to a paired PC for a few seconds.

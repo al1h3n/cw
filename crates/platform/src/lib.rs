@@ -14,3 +14,4 @@ pub mod process;
 pub mod secret;
 pub mod session;
 pub mod wallpaper;
+pub mod wol;

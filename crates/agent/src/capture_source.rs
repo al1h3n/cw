@@ -245,6 +245,34 @@ impl AgentDevice for ScreenCapture {
         )
     }
 
+    fn list_macs(&self) -> Vec<String> {
+        platform::wol::local_macs()
+            .into_iter()
+            .map(|m| m.to_hex())
+            .collect()
+    }
+
+    fn wake_on_lan(&self, from: &PeerInfo, mac: &str) -> bool {
+        let Ok(mac) = platform::wol::MacAddress::parse(mac) else {
+            return false;
+        };
+        match platform::wol::wake(mac) {
+            Ok(()) => {
+                println!("console {} -> wake {}", from.device_id, mac.to_hex());
+                let _ = self.audit.note(
+                    net::endpoint::now_ms(),
+                    from.device_id,
+                    &format!("wake:{}", mac.to_hex()),
+                );
+                true
+            }
+            Err(err) => {
+                eprintln!("wake failed: {err}");
+                false
+            }
+        }
+    }
+
     fn show_broadcast(&self, from: &PeerInfo, jpeg: &[u8]) -> (bool, String) {
         let (pixels, width, height) = match media::jpeg::decode_to_bgra(jpeg) {
             Ok(frame) => frame,

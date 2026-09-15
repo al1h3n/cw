@@ -18,6 +18,8 @@ export interface Device {
   monitors: Monitor[]
   /** Which monitor is currently shown. */
   monitor: number
+  /** MAC addresses learned while online, so an offline PC can be woken. */
+  macs: string[]
   /** The answer to the last lock/power action sent to this PC. */
   last_action: ActionReport | null
 }

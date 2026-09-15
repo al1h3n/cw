@@ -45,6 +45,8 @@ pub struct DeviceView {
     pub monitors: Vec<proto::Monitor>,
     /// Which monitor is being shown.
     pub monitor: u8,
+    /// This PC's MAC addresses, learned while it was connected, for Wake-on-LAN when it is off.
+    pub macs: Vec<String>,
     /// What happened to the last action sent to this PC, for the UI to show.
     pub last_action: Option<ActionReport>,
 }
@@ -165,6 +167,8 @@ struct DeviceState {
     detail: Option<String>,
     monitors: Vec<proto::Monitor>,
     monitor: u8,
+    /// MAC addresses reported while connected; kept across a drop so an offline PC can be woken.
+    macs: Vec<String>,
     /// Actions the teacher asked for that the device's task has not sent yet.
     pending: Vec<proto::Action>,
     /// Input events waiting to be sent while this PC is being controlled.
@@ -184,6 +188,7 @@ impl DeviceState {
             detail: None,
             monitors: Vec::new(),
             monitor: 0,
+            macs: Vec::new(),
             pending: Vec::new(),
             pending_input: Vec::new(),
             requests: Vec::new(),
@@ -329,6 +334,7 @@ impl DeviceManager {
                 detail: state.detail.clone(),
                 monitors: state.monitors.clone(),
                 monitor: state.monitor,
+                macs: state.macs.clone(),
                 last_action: state.last_action,
             })
             .collect()
@@ -719,6 +725,41 @@ impl DeviceManager {
         Ok(())
     }
 
+    /// Wakes a paired PC that is switched off, by broadcasting a magic packet for every MAC we
+    /// learned while it was last connected.
+    ///
+    /// Broadcasts from this Console directly, which reaches any PC on the same LAN — the classroom
+    /// case. Requires that the PC connected at least once (so we know its MAC) and that its BIOS and
+    /// network card have Wake-on-LAN enabled, which is a one-time setting the school's IT makes.
+    ///
+    /// # Errors
+    /// Returns a message if the device is unknown, was never seen online, or no packet could be sent.
+    pub fn wake(&self, device_id: &str) -> Result<usize, String> {
+        let macs = {
+            let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+            devices
+                .get(device_id)
+                .ok_or_else(|| "unknown device".to_string())?
+                .macs
+                .clone()
+        };
+        if macs.is_empty() {
+            return Err("this PC has never been online, so its MAC address is unknown".into());
+        }
+        let mut woken = 0;
+        for mac in &macs {
+            if let Ok(mac) = platform::wol::MacAddress::parse(mac)
+                && platform::wol::wake(mac).is_ok()
+            {
+                woken += 1;
+            }
+        }
+        if woken == 0 {
+            return Err("could not send a wake packet".into());
+        }
+        Ok(woken)
+    }
+
     /// Binds the shared endpoint once, reusing it for every device.
     async fn endpoint(&self) -> Result<iroh::Endpoint, String> {
         if let Some(endpoint) = self
@@ -810,6 +851,14 @@ impl DeviceManager {
             .await
             .map_err(|e| e.to_string())?;
         self.set_monitors(id, monitors);
+
+        // Learn its MAC addresses too, so it can be woken by Wake-on-LAN once it is switched off.
+        if let Ok(macs) = session.request_macs().await {
+            let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(state) = devices.get_mut(id) {
+                state.macs = macs;
+            }
+        }
 
         // Audio is per-connection state on the agent, so this tracks what we have switched on here.
         let mut audio_on: Option<proto::AudioFormat> = None;
