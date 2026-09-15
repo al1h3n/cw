@@ -78,12 +78,12 @@ pub fn is_installed() -> bool {
 /// when Windows asks the service to stop. Call this only from the service's own process (the
 /// `run` subcommand the installer registers).
 ///
-/// `work` receives a `&AtomicBool` that flips to `true` when a stop is requested, so a long-running
-/// loop can exit cleanly.
+/// `work` receives an `Arc<AtomicBool>` that flips to `true` when a stop is requested, so a
+/// long-running loop — including async tasks it spawns — can share it and exit cleanly.
 ///
 /// # Errors
 /// [`ServiceError`] if the dispatcher cannot start (e.g. the process was not launched by the SCM).
-pub fn run(work: fn(&std::sync::atomic::AtomicBool)) -> Result<(), ServiceError> {
+pub fn run(work: fn(std::sync::Arc<std::sync::atomic::AtomicBool>)) -> Result<(), ServiceError> {
     imp::run(work)
 }
 
@@ -178,11 +178,11 @@ mod imp {
     /// The stop flag, shared between the SCM control handler and the work closure.
     static STOP: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     /// The work to run, stashed so the `extern "system"` entry point can reach it.
-    static WORK: OnceLock<fn(&AtomicBool)> = OnceLock::new();
+    static WORK: OnceLock<fn(Arc<AtomicBool>)> = OnceLock::new();
 
     windows_service::define_windows_service!(ffi_service_main, service_main);
 
-    pub fn run(work: fn(&AtomicBool)) -> Result<(), ServiceError> {
+    pub fn run(work: fn(Arc<AtomicBool>)) -> Result<(), ServiceError> {
         let _ = WORK.set(work);
         service_dispatcher::start(SERVICE_NAME, ffi_service_main).map_err(scm)
     }
@@ -227,7 +227,7 @@ mod imp {
 
         // Do the actual work until a stop is requested.
         if let Some(work) = WORK.get() {
-            work(&stop);
+            work(Arc::clone(&stop));
         }
 
         status_handle
@@ -255,7 +255,7 @@ mod imp {
     pub fn is_installed() -> bool {
         false
     }
-    pub fn run(_work: fn(&AtomicBool)) -> Result<(), ServiceError> {
+    pub fn run(_work: fn(std::sync::Arc<AtomicBool>)) -> Result<(), ServiceError> {
         Err(ServiceError::NotSupported)
     }
 }

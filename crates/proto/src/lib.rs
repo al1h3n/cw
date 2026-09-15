@@ -9,7 +9,8 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 ///
 /// Bump it on every breaking change to message layout or meaning. Peers with different
 /// versions must refuse the session with a clear error instead of guessing.
-/// Version 8 added the watched/black-wallpaper signal (`SetWatched`);
+/// Version 9 added full-resolution H.264 streaming (`StartStream`, on its own uni-stream);
+/// version 8 added the watched/black-wallpaper signal (`SetWatched`);
 /// version 7 added Wake-on-LAN (`ListMacs`, `WakeOnLan`); version 6 added broadcasting the
 /// teacher's screen (`ShowBroadcast`, `StopBroadcast`);
 /// version 5 added screen recording (`StartRecording`, `RecordingState`, …); version 4 added the
@@ -17,7 +18,7 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 /// added remote mouse/keyboard input; version 2 added remote actions. Each shifted the later
 /// `Control` discriminants, so a peer on an older version would decode them as the wrong message and
 /// the handshake refuses it outright.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 mod device_id;
 mod pairing;
@@ -30,6 +31,6 @@ pub use record_id::{RecordId, RecordIdParseError};
 pub use wire::{
     Action, ActionFailure, ActionOutcome, AppEntry, AudioFormat, Capabilities, Control,
     DecodeError, Hello, InputEvent, MAX_BLOCKLIST, MAX_INPUT_BATCH, Monitor, PointerButton,
-    ProtocolError, RecordingInfo, Role, RunningApp, StoredRecording, decode, encode,
+    ProtocolError, RecordingInfo, Role, RunningApp, StoredRecording, VideoSettings, decode, encode,
     version_compatible,
 };

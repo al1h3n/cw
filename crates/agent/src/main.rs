@@ -25,6 +25,7 @@ mod capture_source;
 mod membership;
 mod record_id;
 mod recording;
+mod streaming;
 mod supervisor;
 
 use std::{
@@ -228,10 +229,14 @@ async fn cmd_serve() -> Result<(), String> {
     println!("blocklist   : {} rule(s) loaded", capture.blocked_count());
     println!("trusted     : {} console(s). Ctrl+C to stop.", trust.len());
 
-    accept_and_serve(&endpoint, &trust, &capture, identity.device_id(), &|| {
-        // Interactive `serve`: stop only on Ctrl+C. We poll a flag the signal task sets.
-        false
-    })
+    // Interactive `serve` stops on Ctrl+C, which the select handles; this flag stays false.
+    accept_and_serve(
+        &endpoint,
+        &trust,
+        &capture,
+        identity.device_id(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
     .await;
     endpoint.close().await;
     Ok(())
@@ -254,22 +259,39 @@ async fn accept_and_serve(
     trust: &TrustStore,
     capture: &ScreenCapture,
     device_id: proto::DeviceId,
-    should_stop: &dyn Fn() -> bool,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
+    use std::sync::atomic::Ordering;
+
     let local = net::LocalHello {
         role: Role::Agent,
         device_id,
         capabilities: agent_capabilities(),
     };
+
+    // A stop request closes the endpoint, which makes the pending `accept` below return.
+    //
+    // Doing it this way, rather than racing a timer inside the `select!`, matters: `accept` is
+    // **not** cancel-safe, so a timer branch firing part-way through a handshake throws away the
+    // connection a console was in the middle of making. That showed up as an intermittent
+    // "connection lost" the first time a teacher connected.
+    let watcher = tokio::spawn({
+        let endpoint = endpoint.clone();
+        let stop = std::sync::Arc::clone(&stop);
+        async move {
+            while !stop.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            endpoint.close().await;
+        }
+    });
+
     loop {
-        if should_stop() {
+        if stop.load(Ordering::SeqCst) {
             break;
         }
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break,
-            // Wake up regularly so a stop request (from the service control manager) is noticed
-            // even while no console is connecting.
-            _ = tokio::time::sleep(Duration::from_secs(1)) => continue,
             session = net::ControlSession::accept(endpoint, trust, local) => match session {
                 Ok(session) => {
                     println!("console {} connected", session.peer().device_id);
@@ -285,6 +307,7 @@ async fn accept_and_serve(
             },
         }
     }
+    watcher.abort();
 }
 
 /// Installs the Agent as an auto-start Windows service (needs an elevated/admin prompt).
@@ -338,9 +361,7 @@ fn cmd_run() -> Result<(), String> {
 /// (`WTSQueryUserToken` + `CreateProcessAsUserW`) — the remaining part of PLAN 1.4b. Until that
 /// lands, the service still enforces wallpaper/power/blocking; screen capture belongs to the
 /// user-session `serve`.
-fn service_body(stop: &std::sync::atomic::AtomicBool) {
-    use std::sync::atomic::Ordering;
-
+fn service_body(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     // Constant wallpaper: as SYSTEM the HKCU-policy write that failed unelevated now succeeds.
     if let Err(err) = platform::wallpaper::lock() {
         eprintln!("constant wallpaper could not be enforced: {err}");
@@ -372,10 +393,7 @@ fn service_body(stop: &std::sync::atomic::AtomicBool) {
             return;
         };
         endpoint.online().await;
-        accept_and_serve(&endpoint, &trust, &capture, identity.device_id(), &|| {
-            stop.load(Ordering::SeqCst)
-        })
-        .await;
+        accept_and_serve(&endpoint, &trust, &capture, identity.device_id(), stop).await;
         endpoint.close().await;
     });
 }

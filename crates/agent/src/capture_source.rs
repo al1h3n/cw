@@ -33,6 +33,8 @@ pub struct ScreenCapture {
     recordings_dir: std::path::PathBuf,
     /// True while a teacher is watching and the wallpaper is blacked out (D11).
     watched: Mutex<bool>,
+    /// The live H.264 stream, if a teacher has opened the full-resolution view.
+    stream: Mutex<Option<crate::streaming::Stream>>,
     /// File holding the student's real wallpaper path while black is shown, so it can be restored
     /// even after a crash.
     wallpaper_save: std::path::PathBuf,
@@ -82,6 +84,7 @@ impl ScreenCapture {
             broadcast: Mutex::new(None),
             recordings_dir: recordings_dir.to_path_buf(),
             watched: Mutex::new(false),
+            stream: Mutex::new(None),
             wallpaper_save: wallpaper_save.to_path_buf(),
         })
     }
@@ -266,6 +269,34 @@ impl AgentDevice for ScreenCapture {
                     .map_or_else(Vec::new, |c| c.take(max_samples))
             },
         )
+    }
+
+    fn start_stream(
+        &self,
+        from: &PeerInfo,
+        monitor: u8,
+        settings: proto::VideoSettings,
+    ) -> Result<(proto::VideoSettings, tokio::sync::mpsc::Receiver<Vec<u8>>), String> {
+        let mut slot = self.stream.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = None; // dropping the old stream stops its encoder before a new one starts
+        let (stream, actual, packets) = crate::streaming::Stream::start(monitor, settings)?;
+        println!(
+            "console {} started a {}x{} @ {} fps stream ({} kbit/s)",
+            from.device_id, actual.width, actual.height, actual.fps, actual.kbps
+        );
+        let _ = self
+            .audit
+            .note(net::endpoint::now_ms(), from.device_id, "stream-start");
+        *slot = Some(stream);
+        Ok((actual, packets))
+    }
+
+    fn stop_stream(&self) {
+        let mut slot = self.stream.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(stream) = slot.take() {
+            let (frames, dropped) = stream.counts();
+            println!("stream stopped after {frames} frame(s), {dropped} dropped");
+        }
     }
 
     fn set_watched(&self, watched: bool) -> bool {

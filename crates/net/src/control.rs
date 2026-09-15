@@ -97,6 +97,26 @@ pub trait AgentDevice {
         Vec::new()
     }
 
+    /// Starts encoding this screen as H.264, returning the settings actually used and a channel of
+    /// encoded packets. The Agent opens a uni-stream and pumps the channel down it.
+    ///
+    /// The default refuses, so a device that cannot encode reports that instead of going silent.
+    ///
+    /// # Errors
+    /// A message explaining why no stream can start.
+    fn start_stream(
+        &self,
+        from: &PeerInfo,
+        monitor: u8,
+        settings: proto::VideoSettings,
+    ) -> Result<(proto::VideoSettings, tokio::sync::mpsc::Receiver<Vec<u8>>), String> {
+        let _ = (from, monitor, settings);
+        Err("this device cannot stream video".to_string())
+    }
+
+    /// Stops any running video stream.
+    fn stop_stream(&self) {}
+
     /// Tells the device a teacher is (or is no longer) watching, so it can black out its wallpaper.
     /// Returns whether the wallpaper is now black. The default does nothing.
     fn set_watched(&self, watched: bool) -> bool {
@@ -395,6 +415,57 @@ impl ControlSession {
         }
     }
 
+    /// Console side: ask for a full-resolution H.264 stream of one screen.
+    ///
+    /// Returns the settings the Agent will actually use. The frames arrive on a separate uni-stream:
+    /// call [`ControlSession::accept_video`] next to read them.
+    ///
+    /// # Errors
+    /// Stream failure, an unexpected reply, or a message explaining why the Agent will not stream.
+    pub async fn start_stream(
+        &mut self,
+        monitor: u8,
+        settings: proto::VideoSettings,
+    ) -> Result<proto::VideoSettings, EndpointError> {
+        write_message(&mut self.send, &Control::StartStream { monitor, settings }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::StreamStarted { settings, problem } if problem.is_empty() => Ok(settings),
+            Control::StreamStarted { problem, .. } => Err(EndpointError::Capture(problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: stop the video stream.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn stop_stream(&mut self) -> Result<(), EndpointError> {
+        write_message(&mut self.send, &Control::StopStream).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::StreamStopped => Ok(()),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: accept the video uni-stream the Agent opened after [`start_stream`].
+    ///
+    /// # Errors
+    /// [`EndpointError::Connection`] if no stream arrives.
+    pub async fn accept_video(&self) -> Result<VideoStream, EndpointError> {
+        // QUIC only reveals a uni-stream to the peer once the sender writes bytes, so an Agent that
+        // starts a stream but produces no frames would leave us waiting for ever. Bound the wait and
+        // report it, rather than hanging a teacher's window.
+        let recv = tokio::time::timeout(VIDEO_START_TIMEOUT, self.conn.accept_uni())
+            .await
+            .map_err(|_| {
+                EndpointError::Connection("no video arrived from that PC in time".to_string())
+            })?
+            .map_err(|e| EndpointError::Connection(e.to_string()))?;
+        Ok(VideoStream { recv })
+    }
+
     /// Console side: ask this PC for its MAC addresses (to store for waking it later).
     ///
     /// # Errors
@@ -670,6 +741,45 @@ impl ControlSession {
                     )
                     .await?;
                 }
+                Control::StartStream { monitor, settings } => {
+                    match source.start_stream(&self.peer, monitor, settings) {
+                        Ok((actual, mut packets)) => {
+                            write_message(
+                                &mut self.send,
+                                &Control::StreamStarted {
+                                    settings: actual,
+                                    problem: String::new(),
+                                },
+                            )
+                            .await?;
+                            // Video rides its own uni-stream, so a slow decoder can never stall the
+                            // control channel. The task ends when the encoder's channel closes.
+                            let conn = self.conn.clone();
+                            tokio::spawn(async move {
+                                let Ok(mut video) = conn.open_uni().await else {
+                                    return;
+                                };
+                                while let Some(packet) = packets.recv().await {
+                                    if write_video_frame(&mut video, &packet).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                let _ = video.finish();
+                            });
+                        }
+                        Err(problem) => {
+                            write_message(
+                                &mut self.send,
+                                &Control::StreamStarted { settings, problem },
+                            )
+                            .await?;
+                        }
+                    }
+                }
+                Control::StopStream => {
+                    source.stop_stream();
+                    write_message(&mut self.send, &Control::StreamStopped).await?;
+                }
                 Control::SetWatched { watched } => {
                     let black = source.set_watched(watched);
                     write_message(&mut self.send, &Control::WatchedState { black }).await?;
@@ -768,6 +878,54 @@ impl ControlSession {
     /// Closes the session, letting the peer tear down gracefully.
     pub fn close(self) {
         self.conn.close(0u32.into(), b"session closed");
+    }
+}
+
+/// How long to wait for the first video bytes before giving up on a stream.
+const VIDEO_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The largest single encoded video frame we will accept, as a trust boundary. A 4K keyframe is a
+/// few hundred kilobytes; 8 MiB is far above anything legitimate and far below anything dangerous.
+const MAX_VIDEO_FRAME: u32 = 8 * 1024 * 1024;
+
+/// Writes one length-prefixed encoded frame to the video uni-stream.
+async fn write_video_frame(send: &mut SendStream, packet: &[u8]) -> Result<(), EndpointError> {
+    let len = u32::try_from(packet.len()).map_err(|_| EndpointError::TooLarge(u32::MAX))?;
+    send.write_all(&len.to_be_bytes())
+        .await
+        .map_err(|e| EndpointError::Stream(e.to_string()))?;
+    send.write_all(packet)
+        .await
+        .map_err(|e| EndpointError::Stream(e.to_string()))?;
+    Ok(())
+}
+
+/// The incoming side of a video stream: length-prefixed H.264 packets.
+pub struct VideoStream {
+    recv: RecvStream,
+}
+
+impl VideoStream {
+    /// Reads the next encoded frame, or `None` when the Agent closed the stream.
+    ///
+    /// # Errors
+    /// [`EndpointError`] on a stream failure or an over-long frame.
+    pub async fn next_frame(&mut self) -> Result<Option<Vec<u8>>, EndpointError> {
+        let mut header = [0u8; 4];
+        match self.recv.read_exact(&mut header).await {
+            Ok(()) => {}
+            Err(_) => return Ok(None), // clean end of stream
+        }
+        let len = u32::from_be_bytes(header);
+        if len > MAX_VIDEO_FRAME {
+            return Err(EndpointError::TooLarge(len));
+        }
+        let mut packet = vec![0u8; len as usize];
+        self.recv
+            .read_exact(&mut packet)
+            .await
+            .map_err(|e| EndpointError::Stream(e.to_string()))?;
+        Ok(Some(packet))
     }
 }
 

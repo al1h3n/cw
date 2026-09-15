@@ -24,6 +24,8 @@ use crate::{CaptureError, MonitorInfo};
 
 /// How long a capture waits for a changed frame before falling back to the cached thumbnail.
 const FRAME_WAIT: Duration = Duration::from_millis(400);
+/// How long a single thumbnail acquire blocks waiting for the desktop to change.
+const FRAME_WAIT_MS: u32 = 50;
 /// JPEG quality for thumbnails; 60 measured ~5–7 KB at 320×180 in spike 0.4.
 const QUALITY: u8 = 60;
 
@@ -36,6 +38,8 @@ pub struct ThumbnailCapturer {
     active: Option<Duplication>,
     /// Last successfully encoded thumbnail, reused when the screen has not changed.
     last: Option<(u8, u16, Vec<u8>)>,
+    /// Whether the raw-BGRA duplication has produced at least one frame since it was (re)built.
+    primed: bool,
 }
 
 /// One monitor's duplication plus the scratch textures sized for a given output width.
@@ -82,6 +86,7 @@ impl ThumbnailCapturer {
             monitors,
             active: None,
             last: None,
+            primed: false,
         })
     }
 
@@ -141,6 +146,77 @@ impl ThumbnailCapturer {
         }
     }
 
+    /// Captures `monitor` as raw BGRA through **Desktop Duplication**, downscaled on the GPU to at
+    /// most `max_width`.
+    ///
+    /// This is the path live streaming wants. [`Self::capture_bgra`] takes a full-size GDI BitBlt
+    /// and then resizes on the CPU, which measured about 9–12 fps at 1440p; this hands the scaling
+    /// to the GPU's mip chain (spike 0.4 measured the whole thing at ≤0.03 % of one core) and
+    /// returns a frame already close to the size the encoder wants.
+    ///
+    /// Returns `Ok(None)` when the desktop has not changed since the last call — for video that is
+    /// useful information, not a failure: the caller can re-send the previous frame cheaply instead
+    /// of encoding identical pixels again.
+    ///
+    /// # Errors
+    /// Returns [`CaptureError`] if the monitor is missing or duplication cannot be rebuilt.
+    pub fn capture_scaled_bgra(
+        &mut self,
+        monitor: u8,
+        max_width: u16,
+    ) -> Result<Option<(Vec<u8>, u32, u32)>, CaptureError> {
+        if usize::from(monitor) >= self.monitors.len() {
+            return Err(CaptureError(format!("monitor {monitor} not attached")));
+        }
+        let stale = self
+            .active
+            .as_ref()
+            .is_none_or(|d| d.monitor != monitor || d.max_width != max_width);
+        if stale {
+            self.active = Some(Duplication::new(&self.device, monitor, max_width)?);
+            self.primed = false;
+        }
+        // The very first grab must return something even if the screen is idle, or a stream would
+        // start with nothing on it.
+        let force = !self.primed;
+        let attempt = {
+            let Some(active) = self.active.as_ref() else {
+                return Err(CaptureError("no duplication".into()));
+            };
+            active.next_frame(&self.context, force, 0)
+        };
+        match attempt {
+            Ok(Some(frame)) => {
+                self.primed = true;
+                Ok(Some(frame))
+            }
+            // Duplication reports *changes*. On a completely static desktop the first acquire just
+            // times out, so a stream would start with nothing on screen and — because QUIC only
+            // reveals a uni-stream once bytes flow — the viewer would wait forever. Seed the first
+            // frame from GDI instead; after that, "no change" is genuinely useful information.
+            Ok(None) if !self.primed => {
+                let seeded = self.gdi_scaled(monitor, max_width)?;
+                self.primed = true;
+                Ok(Some(seeded))
+            }
+            Ok(None) => Ok(None),
+            Err(err) => {
+                // Access is lost on desktop switches (UAC, lock screen) and mode changes: rebuild
+                // once and try again, so a stream survives a student hitting Ctrl+Alt+Del.
+                self.active = Some(Duplication::new(&self.device, monitor, max_width)?);
+                self.primed = false;
+                let Some(active) = self.active.as_ref() else {
+                    return Err(err);
+                };
+                let frame = active.next_frame(&self.context, true, 0)?;
+                if frame.is_some() {
+                    self.primed = true;
+                }
+                Ok(frame)
+            }
+        }
+    }
+
     /// Captures `monitor` as raw BGRA pixels at (close to) its native size.
     ///
     /// Recording needs the *unscaled* frame, because the exact output size is reached afterwards by
@@ -162,6 +238,19 @@ impl ThumbnailCapturer {
             .ok_or_else(|| CaptureError(format!("monitor {monitor} has no desktop area")))?;
         // u16::MAX as the cap means "do not downscale": the caller resizes properly.
         crate::gdi::capture_area_bgra(area, u16::MAX)
+    }
+
+    /// Grabs this monitor with GDI, downscaled to at most `max_width`, as raw BGRA.
+    ///
+    /// Used to seed the first frame of a stream when Desktop Duplication has nothing to report yet.
+    fn gdi_scaled(
+        &mut self,
+        monitor: u8,
+        max_width: u16,
+    ) -> Result<(Vec<u8>, u32, u32), CaptureError> {
+        let area = output_area(&self.device, monitor)
+            .ok_or_else(|| CaptureError(format!("monitor {monitor} has no desktop area")))?;
+        crate::gdi::capture_area_bgra(area, max_width)
     }
 
     /// Grabs this monitor's area with GDI and encodes it, caching it like a normal capture.
@@ -202,7 +291,7 @@ impl ThumbnailCapturer {
             // With no thumbnail yet we must return *something*, so take the first frame we can get
             // even if the desktop has not changed (a pointer-only update still carries the full image).
             let force = self.last.is_none();
-            let pixels = active.next_frame(&self.context, force)?;
+            let pixels = active.next_frame(&self.context, force, FRAME_WAIT_MS)?;
             if let Some((pixels, w, h)) = pixels {
                 let jpeg = encode_bgra(&pixels, w, h)?;
                 self.last = Some((monitor, max_width, jpeg.clone()));
@@ -353,10 +442,15 @@ impl Duplication {
     /// With `force`, any acquired frame is accepted even when only the pointer moved. That is needed
     /// for the very first capture: a completely static desktop never reports a content change, but the
     /// acquired surface still holds the current screen.
+    ///
+    /// `wait_ms` is how long to block waiting for a change. Thumbnails can afford to wait; a live
+    /// stream must not — on an idle screen a 50 ms wait alone caps the loop at 20 fps, so streaming
+    /// passes 0 and re-sends its previous frame instead.
     fn next_frame(
         &self,
         context: &ID3D11DeviceContext,
         force: bool,
+        wait_ms: u32,
     ) -> Result<Option<(Vec<u8>, u32, u32)>, CaptureError> {
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
@@ -365,7 +459,7 @@ impl Duplication {
         unsafe {
             match self
                 .duplication
-                .AcquireNextFrame(50, &mut info, &mut resource)
+                .AcquireNextFrame(wait_ms, &mut info, &mut resource)
             {
                 Ok(()) => {}
                 Err(err) if err.code() == DXGI_ERROR_WAIT_TIMEOUT => return Ok(None),

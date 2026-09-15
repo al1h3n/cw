@@ -152,6 +152,22 @@ pub enum InputEvent {
     ReleaseAll,
 }
 
+/// The shape of a live video stream.
+///
+/// Separate from [`RecordingInfo`] because they answer different questions: a recording is written
+/// to the student's disk, a stream is watched now. Both are clamped by the Agent, never trusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoSettings {
+    /// Frame width in pixels (forced even — H.264 chroma is subsampled).
+    pub width: u32,
+    /// Frame height in pixels (forced even).
+    pub height: u32,
+    /// Frames per second.
+    pub fps: u32,
+    /// Target bitrate in kbit/s. This is the knob that decides whether a room of streams fits.
+    pub kbps: u32,
+}
+
 /// How a recording is going, as the Agent reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordingInfo {
@@ -385,6 +401,28 @@ pub enum Control {
         /// Names closed since the previous state message, capped so the reply stays small.
         closed: Vec<String>,
     },
+    /// Console → Agent: start sending full-resolution H.264 video of this screen.
+    ///
+    /// The frames do **not** come back on this stream. The Agent opens a separate QUIC uni-stream
+    /// and pushes encoded packets down it, so a slow decoder or a dropped frame never blocks the
+    /// control channel — the design Phase-0 spike 0.6 validated.
+    StartStream {
+        /// Which monitor to stream.
+        monitor: u8,
+        /// The picture size and rate asked for; the Agent clamps and reports what it will do.
+        settings: VideoSettings,
+    },
+    /// Agent → Console: the stream is starting with these (clamped) settings, or could not start.
+    StreamStarted {
+        /// What the Agent will actually send.
+        settings: VideoSettings,
+        /// Empty on success; otherwise why no stream is coming.
+        problem: String,
+    },
+    /// Console → Agent: stop the video stream.
+    StopStream,
+    /// Agent → Console: the stream is stopped.
+    StreamStopped,
     /// Console → Agent: a teacher is now watching (or stopped watching) this PC's screen.
     ///
     /// While watched, the Agent replaces the desktop wallpaper with black (D11) — both a privacy

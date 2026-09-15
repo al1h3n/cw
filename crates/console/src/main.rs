@@ -68,8 +68,9 @@ fn main() -> ExitCode {
         Some("record") => block_on(cmd_record(rest)),
         Some("broadcast") => block_on(cmd_broadcast(rest)),
         Some("wake") => cmd_wake(&rest),
+        Some("stream") => block_on(cmd_stream(rest)),
         _ => Err(
-            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|apps|record|broadcast|wake|version]  (no arguments opens the window)"
+            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|apps|record|broadcast|wake|stream|version]  (no arguments opens the window)"
                 .into(),
         ),
     };
@@ -321,6 +322,88 @@ async fn cmd_act(args: Vec<String>) -> Result<(), String> {
         proto::ActionOutcome::Started { .. } => Ok(()),
         proto::ActionOutcome::Failed(reason) => Err(reason.to_string()),
     }
+}
+
+/// Streams a paired PC's screen as H.264 for a few seconds and reports what arrived.
+///
+/// Decodes every frame, so this proves the whole pipeline — capture, resize, encode, QUIC
+/// uni-stream, decode — not merely that bytes moved.
+async fn cmd_stream(args: Vec<String>) -> Result<(), String> {
+    let Some(agent) = args.first() else {
+        return Err(
+            "usage: cowatcher-console stream <agent-endpoint-key> [seconds] [width] [height] [fps] [kbps]"
+                .into(),
+        );
+    };
+    let agent_key: iroh::EndpointId = agent
+        .parse()
+        .map_err(|_| "invalid agent endpoint key".to_string())?;
+    let seconds: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5);
+    let settings = proto::VideoSettings {
+        width: args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1280),
+        height: args.get(3).and_then(|s| s.parse().ok()).unwrap_or(720),
+        fps: args.get(4).and_then(|s| s.parse().ok()).unwrap_or(30),
+        kbps: args.get(5).and_then(|s| s.parse().ok()).unwrap_or(2_000),
+    };
+
+    let (endpoint, mut session) = connect_paired(agent_key).await?;
+    let actual = session
+        .start_stream(0, settings)
+        .await
+        .map_err(|e| e.to_string())?;
+    println!(
+        "asked for {}x{} @ {} fps; streaming {}x{} @ {} fps at {} kbit/s",
+        settings.width,
+        settings.height,
+        settings.fps,
+        actual.width,
+        actual.height,
+        actual.fps,
+        actual.kbps
+    );
+
+    let mut video = session.accept_video().await.map_err(|e| e.to_string())?;
+    let mut decoder = media::h264::Decoder::new().map_err(|e| e.to_string())?;
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(seconds);
+    let (mut packets, mut frames, mut bytes) = (0u32, 0u32, 0usize);
+    let mut last_size = (0u32, 0u32);
+
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let Ok(next) = tokio::time::timeout(remaining, video.next_frame()).await else {
+            break; // ran out of time
+        };
+        match next.map_err(|e| e.to_string())? {
+            Some(packet) => {
+                packets += 1;
+                bytes += packet.len();
+                if let Some((_, w, h)) = decoder.decode(&packet).map_err(|e| e.to_string())? {
+                    frames += 1;
+                    last_size = (w, h);
+                }
+            }
+            None => break, // the agent closed the stream
+        }
+    }
+
+    let elapsed = started.elapsed().as_secs_f32().max(0.001);
+    println!("received {packets} packet(s), decoded {frames} frame(s) in {elapsed:.1}s");
+    println!(
+        "  {:.1} fps, {:.0} kbit/s, last decoded frame {}x{}",
+        frames as f32 / elapsed,
+        (bytes as f32 * 8.0 / 1000.0) / elapsed,
+        last_size.0,
+        last_size.1
+    );
+    if frames == 0 {
+        return Err("no frames decoded — the stream did not work".into());
+    }
+
+    session.stop_stream().await.map_err(|e| e.to_string())?;
+    session.close();
+    endpoint.close().await;
+    Ok(())
 }
 
 /// Broadcasts a Wake-on-LAN packet for a MAC address, to wake a switched-off PC on this LAN.
