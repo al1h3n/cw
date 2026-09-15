@@ -4,9 +4,11 @@ Every capability named in [`../ClassWatcher.md`](../ClassWatcher.md), with an ho
 2026-09-14. Legend: **done** = built and tested · **partial** = some of it works · **planned** = designed
 but no code.
 
-**Summary: 8 of 27 done, 4 partial, 15 planned.** The product can now *watch* screens, *listen* to a PC, *lock* and *power off* one PC or a whole room,
-and *block* apps and games. What it cannot yet do is take live *remote control* of a mouse and keyboard,
-and it has no signed offline policy engine yet (blocking persists on the Agent, but power/lock do not).
+**Summary: 12 of 27 done, 6 partial, 9 planned.** The product can now *watch* screens, *listen* to a PC, *drive* its mouse and keyboard, *lock* and
+*power off* one PC or a whole room, *block* apps and games, *start and close programs*, *record* a
+screen to a file, and *broadcast* the teacher's screen. What it still cannot do is run an exam: there
+is no inescapable lock screen, no file collection, and no signed offline policy engine yet (blocking
+and wallpaper persist on the Agent, but lock and power do not).
 
 There is also a list of things that **cannot** be built at all, and things we **will not** build:
 see [Impossible, and deliberately refused](#impossible-and-deliberately-refused) at the end.
@@ -17,20 +19,20 @@ see [Impossible, and deliberately refused](#impossible-and-deliberately-refused)
 |---|----------------|-------|-------|
 | 1 | Screen share, pin other monitors, virtual desktops | **done** (see limits) | Every monitor is enumerated and selectable per PC; preview width is chosen by the teacher (240–1920 px) separately for the grid and the opened screen, which also refreshes 4× faster. Still JPEG frames rather than an H.264 stream — fine to ~4 fps, and spike 0.5 has the codec ready when smoother is needed. Inactive virtual desktops cannot be captured by anyone — see *Impossible*. |
 | 2 | Audio share, on/off switch | **done** | WASAPI loopback of what the student hears, downmixed to mono and decimated to ~16 kHz (~256 kbit/s). Off until asked for, and exclusive: one PC at a time. Verified end to end — 16 kHz mono, 64 000 samples for 4.0 s, loud while a tone played and exactly 0 in silence. Raw PCM for now; Opus would cut it to ~32 kbit/s when several PCs need listening at once. |
-| 3 | Remote mouse and keyboard, Win key captured, exit chord | planned | Spike 0.9 proved the keyboard hook; injection and forwarding not built. |
+| 3 | Remote mouse and keyboard, Win key captured, exit chord | **done** | Move, click, scroll, keys and direct Unicode. Positions travel as screen *fractions*, so a teacher on 1080p driving a student on 1440p (or a scaled display, or a second monitor) lands where they meant. Input is dropped unless the teacher has explicitly taken control, and taking or releasing it is audit-logged. Win goes to the remote PC; plain Esc still reaches the remote program; **Ctrl+Alt+Esc** hands the keyboard back; every held modifier is released when control ends. Verified live: refused before consent, then a click focused Notepad and the typed text read back exactly. Still missing: the low-level hook that stops the *local* PC reacting too (the decision function is written and unit-tested; the hook needs a physical-keyboard check). |
 | 4 | Lock screen like parental controls | **partial** | One PC or the whole room can be locked now — the standard Windows lock, as Win+L. The full-screen *custom* lock (separate Win32 desktop, spike 0.8) that the student cannot unlock without the teacher is #10. |
 | 5 | Shut down / power off all or one PC | **done** | Shut down, restart, sign out and cancel, for one PC or every connected PC, with a Now / 1 min / 5 min warning. Windows shows the student its own localised countdown; an immediate shutdown force-closes programs so one unsaved file cannot veto the room. Offline PCs are never queued (a shutdown must not fire next morning). Every action, including refusals, goes to the PC's `audit.log` (D3). Verified live: a real 300 s countdown started and was cancelled. Wake-on-LAN is still planned. |
 | 6 | Constant wallpaper nobody can change | **built, needs the service** | Implemented as the `NoChangingWallPaper` user policy (PLAN 2.6), toggled by a Lock/Unlock wallpaper action and a menu button. It persists across reboots because it is a registry value. **But** the `Policies` hive is admin/GPO-writable only, so it takes effect only once the Agent runs as the SYSTEM service (step 1.4b); an unelevated Agent gets "Access is denied", which is why this is not yet ticked done. Setting a *specific* school image needs file transfer (not built). |
 | 7 | Keep student files temporarily, wipe with one button, host can browse | planned | Baseline + diff design; wipe must be scope-proven by tests. |
-| 8 | Add computers by ID or LAN; changes apply when back online | **done** (ID/LAN) / planned (offline queue) | Pairing by key with a 6-digit code, mDNS on LAN, reconnect by key after an IP change. The offline mailbox (D9) is not built. |
-| 9 | Enable/disable programs, editable games list | **done** (apps) / planned (websites) | A room-wide, editable list of program names (`steam.exe`, `roblox.exe`, …) closes those programs on every connected PC within a second and closes them again if a student reopens them. Matching is by exact file name so a rule never kills an unrelated app, system-critical processes are protected, and the list is saved on the Agent so it keeps enforcing after a reboot with no network (D9). Verified live: Notepad closed within 1 s and stayed closed until the rule was cleared. Website blocking via browser policy files is still planned. |
+| 8 | Add computers by ID or LAN; changes apply when back online | **done** (ID/LAN) / planned (offline queue) | Pairing by key with a 6-digit code, mDNS on LAN, reconnect by key after an IP change. Device IDs are six characters (`K7M2Q9`) **derived from the public key**, so no central table allocates them and two devices can never race for one. A paired PC **joins a room** and cannot leave without the room password (Argon2id-hashed on the PC). The offline mailbox (D9) is not built. |
+| 9 | Enable/disable programs, editable games list, **app launcher** | **done** (apps) / planned (websites) | A room-wide, editable list of program names (`steam.exe`, `roblox.exe`, …) closes those programs on every connected PC within a second and closes them again if a student reopens them. Matching is by exact file name so a rule never kills an unrelated app, system-critical processes are protected, and the list is saved on the Agent so it keeps enforcing after a reboot with no network (D9). Verified live: Notepad closed within 1 s and stayed closed until the rule was cleared. Website blocking via browser policy files is still planned. Also a launcher: each PC publishes its own Start Menu and a teacher starts an entry by id or closes a running program by pid. The Console never sends a path, so "launch an app" can never become "run anything", and system-critical processes are never even offered as closable. |
 | 10 | Custom lock screen: background, per-PC shortcuts, terminal with `unlock` and power commands | planned | Depends on #4. |
 | 11 | Black background while the host watches | planned | Cheap win once streaming lands. |
-| 12 | Screen recordings, all or one, scheduled | planned | Agent-side, low fps, crash-safe segments. |
-| 13 | Broadcast the host screen to all/some, input blocked | planned | Reuses #4's lock desktop. |
+| 12 | Screen recordings, all or one, scheduled | **done** (manual) / planned (scheduled) | Records on the student PC at a chosen size and frame rate, e.g. a 1440p screen saved as 1080p. Downscaling is area-averaged, not point-sampled, so text stays readable. MJPEG in an AVI: every frame independent, the index rewritten every 30 frames, so a power cut leaves a file that still plays. If the PC cannot keep up, the **measured** frame rate is written into the file so it plays at normal speed, and the teacher is told. Scheduling it from a Policy is still planned. |
+| 13 | Broadcast the host screen to all/some, input blocked | **partial** | The teacher's screen appears full-screen and on top on the student PC, scaled to whatever resolution that PC has, and disappears on command. Input is **not** blocked yet: Alt+Tab and the Windows key still work, because trapping a session needs the separate Win32 desktop from spike 0.8 — that is #4/#10. So today this is "everyone look at my screen", not "nobody can do anything else". |
 | 14 | Send audio/video in real time, notification, play once | planned | Preload + synchronised start beats live streaming for exams. |
 | 15 | Update centre from the deploy branch | planned | Signed manifests, channels, rollback. |
-| 16 | Tutorial on first start, skippable | planned | — |
+| 16 | Tutorial on first start, skippable | **done** | A five-step tour on first run — add PCs, watch, open one screen, take control, room password — skippable from every step and re-openable from the Help button. |
 | 17 | One binary, choose client or server, ID added later | **partial** | Two binaries today (`cowatcher-agent`, `cowatcher-console`). Double-clicking the console opens the window; the agent is headless. A single installer with a role picker is the plan (D8). |
 
 ## Paid tier (AI)
@@ -90,10 +92,56 @@ doing something that will break. The second list is where it *is* possible and w
 | A single hardcoded master password | In an open-source project it is public the day it ships. Replaced by per-organisation codes and offline one-time codes (D10) |
 | Silent install with no administrator involved | Anything that installs a SYSTEM service without admin is, by definition, a privilege-escalation exploit |
 
+
+## Storage: why SQLite, and where ScyllaDB would actually fit
+
+A fair question came up: should the device list live in SQL, and is ScyllaDB worth using because it
+handles very large numbers of devices well?
+
+**Today there is no database at all**, and that is deliberate rather than lazy. The state each side
+keeps is tiny and is read whole every time: an Agent has a device key, a trust store, a room file and
+a blocklist; a Console has its key, its trust store, a room file and a blocklist. Plain files with
+atomic writes are the right tool for a few kilobytes that are always read in full.
+
+**SQLite (AGENTS.md D14) is the next step, not Postgres or Scylla.** It earns its place the moment we
+need to *query* rather than *load*: searching an audit log, indexing recordings, or the Hub's
+directory of devices. It is one file, needs no server, and a school's IT can copy it as a backup.
+
+**ScyllaDB is a cluster database.** It is excellent at what it does — a wide-column store, Cassandra
+compatible, built for millions of operations a second spread over many machines. Every one of those
+properties is aimed at a problem we do not have:
+
+* A Console manages one room, tens of devices. A Hub for an entire school district is still in the
+  thousands of rows, with traffic measured in a few writes per device per lesson.
+* **D16 says the Hub must be self-hostable by a school.** "Run this one binary" is a realistic ask of
+  a school's IT; "operate a Scylla cluster" is not. Adopting it would make self-hosting the privilege
+  of organisations with a database team, which contradicts the plan.
+* Scylla trades away joins, transactions and ad-hoc queries for scale. We would pay that price
+  immediately and collect the benefit at a size we may never reach.
+
+So it goes on the planned list with an honest trigger rather than being dismissed or adopted on
+faith. **We would move the hosted Hub to a clustered store when a measurement says so** — concretely,
+when a single Postgres/SQLite node can no longer keep up with audit-event ingestion, which for the
+shape of data here means somewhere north of a hundred thousand actively reporting devices. At that
+point the sensible ladder is SQLite → Postgres → (Scylla or similar) for the *hosted* Hub only, while
+self-hosted Hubs stay on the single-file option forever. Writing the storage layer behind a narrow
+interface now is what keeps that door open, and costs nothing today.
+
+| Where | Now | Next | Only if a measurement demands it |
+|-------|-----|------|----------------------------------|
+| Agent | files (key, trust, room, blocklist) | SQLite for the audit log and recording index | — |
+| Console | files + recordings list | SQLite for device names, rooms, audit history | — |
+| Hub (self-hosted) | not built | SQLite, one file | Postgres for a large district |
+| Hub (our hosted service) | not built | Postgres | ScyllaDB/Cassandra at 100k+ reporting devices |
+
 ## What to build next, in value order
 
-1. **Act on a PC**: power off/reboot, lock screen, block apps — the actual classroom control (#5, #4, #9).
-2. **Policy engine** so those survive a reboot and work offline (#24, #6).
-3. **Full-resolution view and remote control** (#1, #3).
-4. **Exam mode**: lock everyone, broadcast, collect and wipe files (#13, #7, #14).
+1. **The exam lock screen** (#4, #10): a separate Win32 desktop the student cannot escape. Spike 0.8
+   already proved it works; it is what turns broadcast into presentation mode and lock into a real
+   lock, and it unblocks the single biggest gap in the product.
+2. **Policy engine** (2.1) so lock, power and wallpaper survive a reboot the way blocking already
+   does, signed and enforced offline (#24, #6).
+3. **The SYSTEM service** (1.4b): the Agent starts itself at boot, survives a student killing it, and
+   gains the rights wallpaper lock and UAC-desktop capture need.
+4. **Exam mode** on top of those: collect and wipe student files (#7), play media once (#14).
 5. Then updates (#15), installer and role picker (#17), other platforms (#23), AI (#18–20).

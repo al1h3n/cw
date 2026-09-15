@@ -5,7 +5,13 @@
 > Original brief: [`ClassWatcher.md`](ClassWatcher.md) · Roadmap: [`docs/PLAN.md`](docs/PLAN.md) ·
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md)
 
-**Status (2026-09-14):** shipping as two working binaries. `cowatcher-console.exe` opens a teacher
+**Status (2026-09-14, later):** the Console can now *act*, not just watch. Remote mouse and keyboard
+(Ctrl+Alt+Esc to release), lock, shutdown/reboot/log-off, app blocking, an app launcher, screen
+recording at a chosen size and rate, broadcasting the teacher's screen, rooms with a leave-password,
+six-character device IDs and a first-run tutorial are all built and verified live. 163 tests pass.
+See `docs/FEATURES.md` for the honest per-feature state.
+
+**Earlier status (2026-09-14):** shipping as two working binaries. `cowatcher-console.exe` opens a teacher
 window (screen grid, pairing, per-PC monitor choice, preview quality, listen, `.ini` translations with
 a language switcher); `cowatcher-agent.exe` serves screens and audio. Screen share (#1) and audio share
 (#2) from the brief are **done**; the product can watch and listen but cannot yet *act* on a PC.
@@ -65,6 +71,9 @@ the internet by device ID. When offline, each PC keeps enforcing the last policy
 | D15 | Rust stack: `tokio`, `serde` + `postcard` (wire), `thiserror` (libs) / `anyhow` (bins), `tracing`, `windows` crate (official Microsoft bindings), `axum` (Hub). | Mainstream crates, easy hiring. |
 | D16 | **Hub must be self-hostable** as one binary or Docker image, with install docs for school IT. Our own cloud Hub will be hosted in-country later. | CIS data-localisation laws; public-school IT policy. |
 | D17 | i18n from day 1: **Russian + English**, then the pilot country's language. Rust sends message codes, not user-facing text. | Market (D2). |
+| D19 | **Device IDs are derived, never allocated.** Six Crockford base32 characters (`K7M2Q9`) hashed from the device's public key. **Record** ids (recordings, log rows) are **UUIDv7**. | A derived id needs no central table, no lock and no "is this taken?" round trip, and works offline — the failure mode that makes a 4-byte auto-increment painful cannot occur. The key (2^256) is the real identity, so a short-id collision is harmless. UUIDv7 keeps v4's freedom from coordination but sorts by creation time, so recordings and audit rows order themselves. |
+| D20 | **A paired device joins a Room and needs the room password to leave.** The password is 12 Crockford characters generated at first run, kept on the Console under DPAPI, and stored on the Agent only as an **Argon2id hash**. Wrong attempts are rate-limited and audit-logged. | Answers "students must not be able to unenrol their own PC" without ever shipping a default or hardcoded password (D10). It stops a student, not a local administrator — that limit is recorded in FEATURES. |
+| D21 | **Storage stays files → SQLite.** ScyllaDB is recorded as a *planned, measurement-triggered* option for the hosted Hub only. | A room is tens of devices; a cluster database is the wrong shape and would make self-hosting (D16) impossible for a school. See the storage section in `docs/FEATURES.md` for the threshold. |
 | D18 | Git: trunk-based `main` + **Conventional Commits**. Channels: nightly (each `main` commit), beta, stable (tags). GitHub is primary, with push-mirrors to **Codeberg + GitLab**. Every update is **signed (minisign/ed25519)**, so mirrors are untrusted transport. | User request: automatic releases and multiple mirrors. |
 
 ## 4. Architecture
