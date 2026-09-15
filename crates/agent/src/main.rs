@@ -8,6 +8,10 @@
 //! cowatcher-agent room                     show which room this PC is in
 //! cowatcher-agent leave <room-password>    take this PC out of its room
 //! cowatcher-agent sessions                 list the machine's login sessions
+//! cowatcher-agent install                  register the auto-start service (admin)
+//! cowatcher-agent uninstall                remove the service (admin)
+//! cowatcher-agent status                   is the service installed?
+//! cowatcher-agent run                      service entry point (the SCM calls this)
 //! cowatcher-agent supervise <prog> [args]  run a program and keep it alive
 //! cowatcher-agent version
 //! ```
@@ -55,16 +59,18 @@ fn main() -> ExitCode {
         Some("room") => report(cmd_room()),
         Some("leave") => report(cmd_leave(rest)),
         Some("supervise") => report(cmd_supervise(rest)),
-        Some("install" | "uninstall" | "run" | "helper") => {
-            eprintln!(
-                "'{}' arrives in Phase 1.4b (Windows service + session helper).",
-                args[0]
-            );
+        Some("install") => report(cmd_install()),
+        Some("uninstall") => report(cmd_uninstall()),
+        Some("run") => report(cmd_run()),
+        Some("status") => report(cmd_status()),
+        Some("helper") => {
+            eprintln!("'helper' (per-session capture helper) arrives with the rest of Phase 1.4b.");
             ExitCode::FAILURE
         }
         _ => {
             eprintln!(
-                "usage: cowatcher-agent <id|capture|pair|serve|sessions|room|leave|supervise|version>"
+                "usage: cowatcher-agent <id|capture|pair|serve|sessions|room|leave|install|\
+                 uninstall|status|run|supervise|version>"
             );
             ExitCode::FAILURE
         }
@@ -222,23 +228,52 @@ async fn cmd_serve() -> Result<(), String> {
     println!("blocklist   : {} rule(s) loaded", capture.blocked_count());
     println!("trusted     : {} console(s). Ctrl+C to stop.", trust.len());
 
+    accept_and_serve(&endpoint, &trust, &capture, identity.device_id(), &|| {
+        // Interactive `serve`: stop only on Ctrl+C. We poll a flag the signal task sets.
+        false
+    })
+    .await;
+    endpoint.close().await;
+    Ok(())
+}
+
+/// The capabilities this Agent announces. One place, so `serve` and the service `run` agree.
+fn agent_capabilities() -> Capabilities {
+    Capabilities::SCREEN_CAPTURE
+        .union(Capabilities::AUDIO)
+        .union(Capabilities::LOCK)
+        .union(Capabilities::POWER)
+        .union(Capabilities::BLOCK)
+        .union(Capabilities::REMOTE_INPUT)
+}
+
+/// Accepts and serves Console sessions until `should_stop` returns true (checked between accepts
+/// and on a 1 s tick), or Ctrl+C is pressed. Shared by the interactive `serve` and the service.
+async fn accept_and_serve(
+    endpoint: &iroh::Endpoint,
+    trust: &TrustStore,
+    capture: &ScreenCapture,
+    device_id: proto::DeviceId,
+    should_stop: &dyn Fn() -> bool,
+) {
     let local = net::LocalHello {
         role: Role::Agent,
-        device_id: identity.device_id(),
-        capabilities: Capabilities::SCREEN_CAPTURE
-            .union(Capabilities::AUDIO)
-            .union(Capabilities::LOCK)
-            .union(Capabilities::POWER)
-            .union(Capabilities::BLOCK)
-            .union(Capabilities::REMOTE_INPUT),
+        device_id,
+        capabilities: agent_capabilities(),
     };
     loop {
+        if should_stop() {
+            break;
+        }
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break,
-            session = net::ControlSession::accept(&endpoint, &trust, local) => match session {
+            // Wake up regularly so a stop request (from the service control manager) is noticed
+            // even while no console is connecting.
+            _ = tokio::time::sleep(Duration::from_secs(1)) => continue,
+            session = net::ControlSession::accept(endpoint, trust, local) => match session {
                 Ok(session) => {
                     println!("console {} connected", session.peer().device_id);
-                    if let Err(err) = session.serve(&capture).await {
+                    if let Err(err) = session.serve(capture).await {
                         eprintln!("session ended: {err}");
                     } else {
                         println!("console disconnected");
@@ -250,8 +285,99 @@ async fn cmd_serve() -> Result<(), String> {
             },
         }
     }
-    endpoint.close().await;
+}
+
+/// Installs the Agent as an auto-start Windows service (needs an elevated/admin prompt).
+fn cmd_install() -> Result<(), String> {
+    platform::service::install().map_err(|e| e.to_string())?;
+    println!(
+        "installed the \"{}\" service (auto-start).",
+        platform::service::DISPLAY_NAME
+    );
+    println!("It starts at boot and does not appear in Task Manager's Startup tab, so a student");
+    println!("cannot switch it off there. An administrator can, via services.msc or:");
+    println!("    cowatcher-agent uninstall   (from an elevated prompt)");
     Ok(())
+}
+
+/// Removes the Agent service (needs an elevated/admin prompt).
+fn cmd_uninstall() -> Result<(), String> {
+    platform::service::uninstall().map_err(|e| e.to_string())?;
+    println!(
+        "removed the \"{}\" service.",
+        platform::service::DISPLAY_NAME
+    );
+    Ok(())
+}
+
+/// Shows whether the service is installed.
+fn cmd_status() -> Result<(), String> {
+    if platform::service::is_installed() {
+        println!(
+            "the \"{}\" service is installed.",
+            platform::service::DISPLAY_NAME
+        );
+    } else {
+        println!("the service is not installed (run `install` from an elevated prompt).");
+    }
+    Ok(())
+}
+
+/// The service entry point: the SCM launches `cowatcher-agent run`. Runs as LocalSystem, which is
+/// what lets it enforce the constant-wallpaper policy that an unelevated Agent cannot.
+fn cmd_run() -> Result<(), String> {
+    platform::service::run(service_body).map_err(|e| e.to_string())
+}
+
+/// What the service actually does once the control manager says it is running.
+///
+/// Enables the constant-wallpaper policy (now possible as SYSTEM) and then serves paired consoles
+/// until asked to stop.
+///
+/// ponytail: capturing the interactive desktop from session 0 needs the per-session helper spawn
+/// (`WTSQueryUserToken` + `CreateProcessAsUserW`) — the remaining part of PLAN 1.4b. Until that
+/// lands, the service still enforces wallpaper/power/blocking; screen capture belongs to the
+/// user-session `serve`.
+fn service_body(stop: &std::sync::atomic::AtomicBool) {
+    use std::sync::atomic::Ordering;
+
+    // Constant wallpaper: as SYSTEM the HKCU-policy write that failed unelevated now succeeds.
+    if let Err(err) = platform::wallpaper::lock() {
+        eprintln!("constant wallpaper could not be enforced: {err}");
+    }
+
+    let Ok(runtime) = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    else {
+        return;
+    };
+    runtime.block_on(async {
+        let Ok(identity) = load_identity() else {
+            return;
+        };
+        let Ok(trust) = TrustStore::load(&trust_path()) else {
+            return;
+        };
+        let Ok(capture) = ScreenCapture::new(
+            &audit_path(),
+            &blocklist_path(),
+            &recording::directory(&data_dir()),
+            &data_dir().join("wallpaper-prev.txt"),
+        ) else {
+            return;
+        };
+        let _ = platform::power::enable_shutdown_privilege();
+        let Ok(endpoint) = net::bind(&identity).await else {
+            return;
+        };
+        endpoint.online().await;
+        accept_and_serve(&endpoint, &trust, &capture, identity.device_id(), &|| {
+            stop.load(Ordering::SeqCst)
+        })
+        .await;
+        endpoint.close().await;
+    });
 }
 
 /// Shows which room this PC is in.

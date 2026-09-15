@@ -12,6 +12,7 @@ mac_address = "1" # Wake-on-LAN interface enumeration; cross-platform, no admin 
 thiserror = "2"
 
 [target.'cfg(windows)'.dependencies]
+windows-service = "0.8" # register the Agent as a Windows service (D15: use a library, not raw SCM FFI)
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",

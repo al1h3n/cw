@@ -12,6 +12,7 @@ pub mod power;
 pub mod present;
 pub mod process;
 pub mod secret;
+pub mod service;
 pub mod session;
 pub mod wallpaper;
 pub mod wol;
