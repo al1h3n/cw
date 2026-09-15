@@ -1,6 +1,8 @@
 # Roadmap — small steps, each with a test
 
 > Rules and decisions live in [`../AGENTS.md`](../AGENTS.md). This file is the order of work.
+> Every "User TODO" below is collected into [`TEST-CHECKLIST.md`](TEST-CHECKLIST.md), which is the
+> two-machine checklist to run before a release.
 > Every step has a **Done when** line. A step without a passing check is not done.
 > Tick boxes as you go. Add measured numbers next to the step, and fix AGENTS.md §6 when they differ.
 

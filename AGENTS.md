@@ -3,7 +3,8 @@
 > **Read this file first, every session.** It is the single source of truth for rules, decisions and
 > architecture. If code and this file disagree, stop and ask — then fix whichever is wrong.
 > Original brief: [`ClassWatcher.md`](ClassWatcher.md) · Roadmap: [`docs/PLAN.md`](docs/PLAN.md) ·
-> Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md)
+> Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
+> Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
 **Status (2026-09-14, later):** the Console can now *act*, not just watch. Remote mouse and keyboard
 (Ctrl+Alt+Esc to release), lock, shutdown/reboot/log-off, app blocking, an app launcher, screen
