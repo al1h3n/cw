@@ -164,11 +164,14 @@ fn run(args: Args) -> Result<()> {
     let (input_tx, input_rx) = unbounded_channel::<InputCmd>();
 
     let initial_control = args.control;
+    // Launched to control: queue the grant now so the input loop opens its gate as soon as it runs.
+    if initial_control {
+        let _ = input_tx.send(InputCmd::Control(true));
+    }
     // Network: connect, start the stream, pump encoded packets to the decoder, apply input.
     {
         thread::spawn(move || {
-            if let Err(err) = network_main(args, &packets_tx, input_rx, initial_control, &net_proxy)
-            {
+            if let Err(err) = network_main(args, &packets_tx, input_rx, &net_proxy) {
                 eprintln!("network: {err:#}");
                 std::process::exit(1);
             }
@@ -193,7 +196,6 @@ fn network_main(
     args: Args,
     packets_tx: &std::sync::mpsc::Sender<Vec<u8>>,
     input_rx: UnboundedReceiver<InputCmd>,
-    want_control: bool,
     ended: &EventLoopProxy<UserEvent>,
 ) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -271,14 +273,10 @@ fn network_main(
             let _ = ended.send_event(UserEvent::StreamEnded);
         });
 
-        if want_control {
-            match session.set_control(true).await {
-                Ok(true) => println!("control: ON"),
-                Ok(false) => println!("control: refused by that PC"),
-                Err(err) => eprintln!("control request failed: {err}"),
-            }
-        }
-
+        // Control (initial or toggled) is driven entirely through the input loop: the window queues
+        // an InputCmd::Control(true) at startup when launched with `control`, so the loop both asks
+        // the Agent for control *and* flips its own gate that lets input through. Setting control
+        // here directly used to leave that gate closed, so nothing the teacher did was forwarded.
         input_loop(&mut session, input_rx).await;
         reader.abort();
         let _ = session.stop_stream().await;
@@ -528,6 +526,15 @@ impl App {
             });
         }
         drop(guard);
+        // A green frame makes "you are driving this PC" unmistakable at a glance.
+        if self.controlling {
+            let buf: &mut [u32] = &mut buffer;
+            let (c, t) = (0x00_2ECC71, 4);
+            fill_rect(buf, width, height, (0, 0, width, t), c);
+            fill_rect(buf, width, height, (0, height.saturating_sub(t), width, t), c);
+            fill_rect(buf, width, height, (0, 0, t, height), c);
+            fill_rect(buf, width, height, (width.saturating_sub(t), 0, t, height), c);
+        }
         buffer.present().map_err(|e| anyhow!("{e}"))?;
         Ok(())
     }

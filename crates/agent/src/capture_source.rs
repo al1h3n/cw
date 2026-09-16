@@ -293,6 +293,10 @@ impl AgentDevice for ScreenCapture {
             .audit
             .note(net::endpoint::now_ms(), from.device_id, "stream-start");
         *slot = Some(stream);
+        drop(slot);
+        // Black the wallpaper only for a *full* live preview (D11: "while streaming"), not for the
+        // low-cost grid thumbnails. Restored in stop_stream / when the session drops.
+        net::AgentDevice::set_watched(self, true);
         Ok((actual, packets))
     }
 
@@ -302,6 +306,9 @@ impl AgentDevice for ScreenCapture {
             let (frames, dropped) = stream.counts();
             println!("stream stopped after {frames} frame(s), {dropped} dropped");
         }
+        drop(slot);
+        // Live preview over: put the student's own wallpaper back.
+        net::AgentDevice::set_watched(self, false);
     }
 
     fn set_watched(&self, watched: bool) -> bool {

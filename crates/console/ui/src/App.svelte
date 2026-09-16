@@ -264,16 +264,21 @@
 {/if}
 
 <style>
+  /* A flex column, not a fixed grid: the footer stays pinned to the bottom whether or not the error
+     banner is showing. (The old 4-row grid mis-placed the footer into a tall row when the banner was
+     absent, floating it into the middle of the screen.) */
   .shell {
-    display: grid;
-    grid-template-rows: auto auto 1fr auto;
+    display: flex;
+    flex-direction: column;
     height: 100%;
+    min-height: 0;
   }
 
   header {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 16px;
     padding: 16px 20px;
     border-bottom: 1px solid var(--line);
@@ -311,6 +316,8 @@
   }
 
   main {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: auto;
     padding: 18px 20px;
   }
@@ -343,6 +350,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    gap: 8px 16px;
     padding: 9px 20px;
     border-top: 1px solid var(--line);
     background: var(--panel);

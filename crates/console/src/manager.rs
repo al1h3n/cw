@@ -919,26 +919,12 @@ impl DeviceManager {
         let mut sent_blocklist: u64 = 0;
         // Whether this connection has been granted control of the PC.
         let mut controlling = false;
-        // Whether we have told this PC it is being watched (so it blacks its wallpaper, D11).
-        let mut watched = false;
 
         loop {
-            // A PC counts as "watched" once a teacher opens its screen (the focused view), not for
-            // the whole low-fps grid — blacking every wallpaper the instant the grid opens would be
-            // heavy-handed. Blacks on open, restores on close or disconnect.
-            let wants_watched = self
-                .preview
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .focused
-                == Some(key);
-            if wants_watched != watched {
-                watched = session
-                    .set_watched(wants_watched)
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
-
+            // The wallpaper is blacked out by the Agent only during a *full* live preview (the native
+            // viewer's H.264 stream), not for the grid or its focused thumbnail view — a teacher
+            // glancing at low-fps thumbnails should still see the real desktop, and it costs almost
+            // nothing to send. So the Console no longer drives set_watched from the focused state.
             let (programs, version) = {
                 let list = self.blocklist.lock().unwrap_or_else(|e| e.into_inner());
                 (list.programs.clone(), list.version)

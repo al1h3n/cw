@@ -465,10 +465,11 @@ fn service_body(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
         time::{Duration, Instant},
     };
 
-    // Constant wallpaper: as SYSTEM the HKCU-policy write that fails unelevated now succeeds.
-    if let Err(err) = platform::wallpaper::lock() {
-        eprintln!("constant wallpaper could not be enforced: {err}");
-    }
+    // Note: the "constant wallpaper" policy is NOT auto-enabled here. It is HKEY_CURRENT_USER, and a
+    // service runs as SYSTEM, so this process would only lock *SYSTEM's* profile, never the student's
+    // — and auto-locking surprised testers who had not asked for it. Wallpaper lock is now an
+    // explicit teacher action (Action::LockWallpaper), applied by the per-session helper as the
+    // student, where HKCU is the right hive.
 
     // Establish / migrate the machine-wide identity now, as SYSTEM, so the helper (running as the
     // student) only has to *read* it.
@@ -536,10 +537,8 @@ fn service_body(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
             }
         }
     }
-    // Stopping: drop the helper (the job kills it) and release the wallpaper policy, so an admin who
-    // stops the service gets a normal desktop back.
+    // Stopping: drop the helper, which the job object kills.
     drop(helper);
-    let _ = platform::wallpaper::unlock();
 }
 
 /// Sleeps up to `dur`, returning `true` early if a stop was requested.
