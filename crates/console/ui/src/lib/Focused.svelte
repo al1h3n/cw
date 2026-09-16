@@ -57,21 +57,110 @@
     }
   }
 
-  function onkey(event: KeyboardEvent) {
-    // While driving a PC, every key belongs to that PC — including Escape, which a remote program
-    // may well need. Ctrl+Alt+Esc is the way out, matching platform::input::KeyGate.
+  // Driving the PC from this preview: the picture below is a live JPEG, and these forward the
+  // teacher's mouse and keyboard to the student over the same input path the native viewer uses.
+  let imgEl: HTMLImageElement | undefined = $state()
+  let lastMove = 0
+
+  function sendInput(events: unknown[]) {
+    invoke('send_input', { events }).catch((e) => onerror(String(e)))
+  }
+
+  // Cursor position as a 0–1 fraction of the *picture* (not the window), so a different resolution
+  // on the student's side changes nothing.
+  function fraction(event: PointerEvent) {
+    if (!imgEl) return null
+    const r = imgEl.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) return null
+    return {
+      x: Math.min(1, Math.max(0, (event.clientX - r.left) / r.width)),
+      y: Math.min(1, Math.max(0, (event.clientY - r.top) / r.height)),
+    }
+  }
+
+  const BUTTONS = ['left', 'middle', 'right'] // PointerEvent.button 0 / 1 / 2
+
+  function onPointerMove(event: PointerEvent) {
+    if (!controlling) return
+    const now = performance.now()
+    if (now - lastMove < 15) return // ~60 Hz is plenty; do not flood the channel
+    lastMove = now
+    const f = fraction(event)
+    if (f) sendInput([{ kind: 'move', x: f.x, y: f.y }])
+  }
+
+  function onPointerDown(event: PointerEvent) {
+    if (!controlling) return
+    const button = BUTTONS[event.button]
+    if (!button) return
+    const f = fraction(event)
+    const events: unknown[] = []
+    if (f) events.push({ kind: 'move', x: f.x, y: f.y })
+    events.push({ kind: 'button', button, down: true })
+    sendInput(events)
+    // Capture the pointer so a release outside the picture still reaches us (no stuck button).
+    try {
+      ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+    } catch {
+      // capture unsupported; releasing over the picture still works
+    }
+    event.preventDefault()
+  }
+
+  function onPointerUp(event: PointerEvent) {
+    if (!controlling) return
+    const button = BUTTONS[event.button]
+    if (!button) return
+    sendInput([{ kind: 'button', button, down: false }])
+    try {
+      ;(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId)
+    } catch {
+      // nothing to release
+    }
+    event.preventDefault()
+  }
+
+  function onWheel(event: WheelEvent) {
+    if (!controlling) return
+    const delta = Math.max(-30, Math.min(30, Math.round(-event.deltaY / 40)))
+    if (delta !== 0) sendInput([{ kind: 'scroll', delta }])
+    event.preventDefault()
+  }
+
+  // Never forward keys the teacher is typing into a field of the console itself.
+  function typingInConsole(event: KeyboardEvent) {
+    const tag = (event.target as HTMLElement | null)?.tagName
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+  }
+
+  function onKeyDown(event: KeyboardEvent) {
     if (controlling) {
+      // Ctrl+Alt+Esc releases control (matches platform::input::KeyGate); never forwarded.
       if (event.key === 'Escape' && event.ctrlKey && event.altKey) {
         event.preventDefault()
         oncontrol(false)
+        return
       }
+      if (typingInConsole(event)) return
+      // keyCode is the legacy Windows virtual-key code, which is exactly what the Agent wants.
+      if (event.keyCode) sendInput([{ kind: 'key', virtualKey: event.keyCode, down: true }])
+      else if (event.key.length === 1) sendInput([{ kind: 'text', text: event.key }])
+      event.preventDefault()
       return
     }
     if (event.key === 'Escape') onclose()
   }
+
+  function onKeyUp(event: KeyboardEvent) {
+    if (!controlling || typingInConsole(event)) return
+    if (event.keyCode) {
+      sendInput([{ kind: 'key', virtualKey: event.keyCode, down: false }])
+      event.preventDefault()
+    }
+  }
 </script>
 
-<svelte:window on:keydown={onkey} />
+<svelte:window on:keydown={onKeyDown} on:keyup={onKeyUp} />
 
 <!-- One screen, as large as the window allows: what the teacher opens to actually look at a PC. -->
 <div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose()}>
@@ -140,7 +229,17 @@
     </header>
     <div class="screen">
       {#if device.screen}
-        <img src={device.screen} alt={t('screenOf', device.device_id)} />
+        <img
+          bind:this={imgEl}
+          class:driving={controlling}
+          src={device.screen}
+          alt={t('screenOf', device.device_id)}
+          draggable="false"
+          onpointermove={onPointerMove}
+          onpointerdown={onPointerDown}
+          onpointerup={onPointerUp}
+          onwheel={onWheel}
+        />
       {:else}
         <p class="hint">{t('waitingFirst')}</p>
       {/if}
@@ -286,6 +385,15 @@
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  /* While driving, the picture takes the pointer and a crosshair shows the teacher is in control. */
+  img.driving {
+    cursor: crosshair;
+    outline: 2px solid var(--live);
+    outline-offset: -2px;
   }
 
   .hint {

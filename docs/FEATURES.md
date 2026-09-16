@@ -28,7 +28,7 @@ see [Impossible, and deliberately refused](#impossible-and-deliberately-refused)
 | 9 | Enable/disable programs, editable games list, **app launcher** | **done** (apps) / planned (websites) | A room-wide, editable list of program names (`steam.exe`, `roblox.exe`, …) closes those programs on every connected PC within a second and closes them again if a student reopens them. Matching is by exact file name so a rule never kills an unrelated app, system-critical processes are protected, and the list is saved on the Agent so it keeps enforcing after a reboot with no network (D9). Verified live: Notepad closed within 1 s and stayed closed until the rule was cleared. Website blocking via browser policy files is still planned. Also a launcher: each PC publishes its own Start Menu and a teacher starts an entry by id or closes a running program by pid. The Console never sends a path, so "launch an app" can never become "run anything", and system-critical processes are never even offered as closable. |
 | 10 | Custom lock screen: background, per-PC shortcuts, terminal with `unlock` and power commands | planned | Depends on #4. |
 | 11 | Black background while the host watches | **done** | The Agent swaps the wallpaper for black when a teacher opens the PC's screen and restores it on close/disconnect (unelevated SPI). Restore is guarded four ways (on close, on disconnect, on start-up, on Drop) so a student is never left with a black desktop. Verified live via `wallpaper-selftest`. |
-| 12 | Screen recordings, all or one, scheduled | **done** (manual) / planned (scheduled) | Records on the student PC at a chosen size and frame rate, e.g. a 1440p screen saved as 1080p. Downscaling is area-averaged, not point-sampled, so text stays readable. MJPEG in an AVI: every frame independent, the index rewritten every 30 frames, so a power cut leaves a file that still plays. If the PC cannot keep up, the **measured** frame rate is written into the file so it plays at normal speed, and the teacher is told. Scheduling it from a Policy is still planned. |
+| 12 | Screen recordings, all or one, scheduled | **done** (manual) / planned (scheduled, two-pass) | Records on the student PC at a chosen size and frame rate, e.g. a 1440p screen saved as 1080p, area-averaged so text stays readable. When an `ffmpeg.exe` is present next to the Agent (or on PATH) it encodes real video — **H.264/H.265/AV1** with a chosen preset, CRF quality, B-frames and the lanczos scaler — to an `.mp4`; without it, the built-in **MJPEG-in-AVI** writer is used (every frame independent, index rewritten every 30 frames, so a power cut still leaves a playable file, and the **measured** fps is written so it plays at normal speed). The teacher can **download** any recording to their own PC (streamed over a QUIC uni-stream, path-traversal guarded). Still planned: **two-pass** encode (needs a post-record re-encode, not a live pipe) and scheduling from a Policy. |
 | 13 | Broadcast the host screen to all/some, input blocked | **partial** | The teacher's screen appears full-screen and on top on the student PC, scaled to whatever resolution that PC has, and disappears on command. Input is **not** blocked yet: Alt+Tab and the Windows key still work, because trapping a session needs the separate Win32 desktop from spike 0.8 — that is #4/#10. So today this is "everyone look at my screen", not "nobody can do anything else". |
 | 14 | Send audio/video in real time, notification, play once | planned | Preload + synchronised start beats live streaming for exams. |
 | 15 | Update centre from the deploy branch | planned | Signed manifests, channels, rollback. |
@@ -141,7 +141,12 @@ interface now is what keeps that door open, and costs nothing today.
    lock, and it unblocks the single biggest gap in the product.
 2. **Policy engine** (2.1) so lock, power and wallpaper survive a reboot the way blocking already
    does, signed and enforced offline (#24, #6).
-3. **The SYSTEM service** (1.4b): the Agent starts itself at boot, survives a student killing it, and
-   gains the rights wallpaper lock and UAC-desktop capture need.
-4. **Exam mode** on top of those: collect and wipe student files (#7), play media once (#14).
+3. **Two-pass recording** (#12): a small post-record re-encode pass for the best size/quality, the one
+   recording option currently stubbed but not applied (a live pipe cannot do 2-pass).
+4. **Exam mode** on top of the lock screen: collect and wipe student files (#7), play media once (#14).
 5. Then updates (#15), installer and role picker (#17), other platforms (#23), AI (#18–20).
+
+**Landed since this list was written:** the SYSTEM service + per-session helper (1.4b) — the Agent
+installs as an auto-start service that launches a capture helper into the logged-in student's session;
+and ffmpeg-based recording with download-to-teacher (#12). Elevation paths still need VM verification
+(`docs/TEST-CHECKLIST.md §8`).

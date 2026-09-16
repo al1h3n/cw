@@ -191,11 +191,15 @@ fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-/// The network thread: one Tokio runtime that owns the control session.
+/// The network thread: one Tokio runtime that reconnects the control session as needed.
+///
+/// If the student's signal drops, the video reader ends; we tell the window (which shows the
+/// bouncing "disabled" sign) and keep retrying. As soon as a session comes back and frames flow, the
+/// decode thread's `NewFrame` events make the window switch back to the live screen on its own.
 fn network_main(
     args: Args,
     packets_tx: &std::sync::mpsc::Sender<Vec<u8>>,
-    input_rx: UnboundedReceiver<InputCmd>,
+    mut input_rx: UnboundedReceiver<InputCmd>,
     ended: &EventLoopProxy<UserEvent>,
 ) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -219,119 +223,173 @@ fn network_main(
             .await
             .map_err(|e| anyhow!("bind endpoint: {e}"))?;
         endpoint.online().await;
-
         let local = net::LocalHello {
             role: proto::Role::Console,
             device_id: identity.device_id(),
             capabilities: proto::Capabilities::EMPTY,
         };
-        let mut session = net::ControlSession::connect(
-            &endpoint,
-            iroh::EndpointAddr::new(args.agent_key),
-            &trust,
-            local,
-        )
-        .await
-        .map_err(|e| anyhow!("connect: {e}"))?;
 
-        let actual = session
-            .start_stream(args.monitor, args.settings)
+        // Whether the teacher currently holds control — kept across reconnects so a dropped signal
+        // does not silently give it up.
+        let mut controlling = false;
+        loop {
+            match session_once(
+                &endpoint,
+                &args,
+                &trust,
+                local,
+                &packets_tx,
+                &mut input_rx,
+                &mut controlling,
+            )
             .await
-            .map_err(|e| anyhow!("start stream: {e}"))?;
-        println!(
-            "streaming {}x{} @ {} fps, {} kbit/s (asked {}x{} @ {})",
-            actual.width,
-            actual.height,
-            actual.fps,
-            actual.kbps,
-            args.settings.width,
-            args.settings.height,
-            args.settings.fps
-        );
-
-        let mut video = session
-            .accept_video()
-            .await
-            .map_err(|e| anyhow!("open video: {e}"))?;
-        let reader = tokio::spawn(async move {
-            loop {
-                match video.next_frame().await {
-                    Ok(Some(packet)) => {
-                        if packets_tx.send(packet).is_err() {
-                            break; // decoder gone
-                        }
-                    }
-                    Ok(None) => break, // agent closed the stream
-                    Err(err) => {
-                        eprintln!("video ended: {err}");
-                        break;
-                    }
+            {
+                SessionEnd::WindowClosed => break,
+                SessionEnd::Lost => {
+                    // Signal lost: show the bouncing sign and try again shortly.
+                    let _ = ended.send_event(UserEvent::StreamEnded);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
-            // The stream is over (the teacher stopped watching, or the PC went away): tell the window
-            // to switch to the bouncing "disabled" screen.
-            let _ = ended.send_event(UserEvent::StreamEnded);
-        });
-
-        // Control (initial or toggled) is driven entirely through the input loop: the window queues
-        // an InputCmd::Control(true) at startup when launched with `control`, so the loop both asks
-        // the Agent for control *and* flips its own gate that lets input through. Setting control
-        // here directly used to leave that gate closed, so nothing the teacher did was forwarded.
-        input_loop(&mut session, input_rx).await;
-        reader.abort();
-        let _ = session.stop_stream().await;
+        }
         Ok(())
     })
 }
 
-/// Applies input commands from the window, coalescing bursts of pointer moves into one batch so a
-/// fast mouse does not become a queue of round-trips.
-async fn input_loop(session: &mut net::ControlSession, mut rx: UnboundedReceiver<InputCmd>) {
-    let mut controlling = false;
-    while let Some(cmd) = rx.recv().await {
-        match cmd {
-            InputCmd::Control(on) => match session.set_control(on).await {
-                Ok(state) => {
-                    controlling = state;
-                    println!("control: {}", if state { "ON" } else { "OFF" });
+/// Why a single connection attempt ended.
+enum SessionEnd {
+    /// The window closed (the input channel was dropped): stop for good.
+    WindowClosed,
+    /// The stream/connection dropped: reconnect.
+    Lost,
+}
+
+/// One connection: dial, start the stream, and pump video + input until it drops or the window
+/// closes.
+async fn session_once(
+    endpoint: &iroh::Endpoint,
+    args: &Args,
+    trust: &net::TrustStore,
+    local: net::LocalHello,
+    packets_tx: &std::sync::mpsc::Sender<Vec<u8>>,
+    input_rx: &mut UnboundedReceiver<InputCmd>,
+    controlling: &mut bool,
+) -> SessionEnd {
+    let mut session = match net::ControlSession::connect(
+        endpoint,
+        iroh::EndpointAddr::new(args.agent_key),
+        trust,
+        local,
+    )
+    .await
+    {
+        Ok(session) => session,
+        Err(err) => {
+            eprintln!("connect: {err}");
+            return SessionEnd::Lost;
+        }
+    };
+    let actual = match session.start_stream(args.monitor, args.settings).await {
+        Ok(actual) => actual,
+        Err(err) => {
+            eprintln!("start stream: {err}");
+            return SessionEnd::Lost;
+        }
+    };
+    println!(
+        "streaming {}x{} @ {} fps, {} kbit/s",
+        actual.width, actual.height, actual.fps, actual.kbps
+    );
+    let mut video = match session.accept_video().await {
+        Ok(video) => video,
+        Err(err) => {
+            eprintln!("open video: {err}");
+            return SessionEnd::Lost;
+        }
+    };
+
+    // Re-assert control on a fresh session if the teacher held it before the drop.
+    if *controlling {
+        let _ = session.set_control(true).await;
+    }
+
+    let reader_done = std::sync::Arc::new(tokio::sync::Notify::new());
+    let reader = {
+        let packets_tx = packets_tx.clone();
+        let done = std::sync::Arc::clone(&reader_done);
+        tokio::spawn(async move {
+            // Ends on Ok(None) (clean close) or Err (dropped): either way the stream is over.
+            while let Ok(Some(packet)) = video.next_frame().await {
+                if packets_tx.send(packet).is_err() {
+                    break; // decoder gone
                 }
-                Err(err) => eprintln!("control toggle failed: {err}"),
+            }
+            done.notify_one();
+        })
+    };
+
+    let result = loop {
+        tokio::select! {
+            biased;
+            () = reader_done.notified() => break SessionEnd::Lost,
+            cmd = input_rx.recv() => match cmd {
+                None => break SessionEnd::WindowClosed,
+                Some(cmd) => apply_input(&mut session, input_rx, cmd, controlling).await,
             },
-            InputCmd::Events(mut events) => {
-                // Drain anything already queued into the same batch (bounded by the wire cap).
-                loop {
-                    if events.len() >= proto::MAX_INPUT_BATCH {
+        }
+    };
+    reader.abort();
+    let _ = session.stop_stream().await;
+    result
+}
+
+/// Applies one input command, coalescing any queued pointer moves into the same batch so a fast
+/// mouse does not become a queue of round-trips.
+async fn apply_input(
+    session: &mut net::ControlSession,
+    rx: &mut UnboundedReceiver<InputCmd>,
+    cmd: InputCmd,
+    controlling: &mut bool,
+) {
+    match cmd {
+        InputCmd::Control(on) => match session.set_control(on).await {
+            Ok(state) => {
+                *controlling = state;
+                println!("control: {}", if state { "ON" } else { "OFF" });
+            }
+            Err(err) => eprintln!("control toggle failed: {err}"),
+        },
+        InputCmd::Events(mut events) => {
+            loop {
+                if events.len() >= proto::MAX_INPUT_BATCH {
+                    break;
+                }
+                match rx.try_recv() {
+                    Ok(InputCmd::Events(more)) => {
+                        for event in more {
+                            if events.len() < proto::MAX_INPUT_BATCH {
+                                events.push(event);
+                            }
+                        }
+                    }
+                    Ok(InputCmd::Control(on)) => {
+                        if *controlling && !events.is_empty() {
+                            let _ = session.send_input(std::mem::take(&mut events)).await;
+                        }
+                        if let Ok(state) = session.set_control(on).await {
+                            *controlling = state;
+                            println!("control: {}", if state { "ON" } else { "OFF" });
+                        }
                         break;
                     }
-                    match rx.try_recv() {
-                        Ok(InputCmd::Events(more)) => {
-                            for event in more {
-                                if events.len() < proto::MAX_INPUT_BATCH {
-                                    events.push(event);
-                                }
-                            }
-                        }
-                        Ok(InputCmd::Control(on)) => {
-                            // A control change interrupts the batch: send what we have, then apply it.
-                            if controlling && !events.is_empty() {
-                                let batch = std::mem::take(&mut events);
-                                let _ = session.send_input(batch).await;
-                            }
-                            if let Ok(state) = session.set_control(on).await {
-                                controlling = state;
-                                println!("control: {}", if state { "ON" } else { "OFF" });
-                            }
-                            break;
-                        }
-                        Err(_) => break,
-                    }
+                    Err(_) => break,
                 }
-                if controlling
-                    && !events.is_empty()
-                    && let Err(err) = session.send_input(events).await
-                {
-                    eprintln!("input send failed: {err}");
-                }
+            }
+            if *controlling
+                && !events.is_empty()
+                && let Err(err) = session.send_input(events).await
+            {
+                eprintln!("input send failed: {err}");
             }
         }
     }
@@ -526,9 +584,11 @@ impl App {
             });
         }
         drop(guard);
-        // A green frame makes "you are driving this PC" unmistakable at a glance.
+        let buf: &mut [u32] = &mut buffer;
+        // A bottom strip always shows the control chord; a green frame makes "you are driving this
+        // PC" unmistakable at a glance.
+        draw_hint(buf, width, height, self.controlling);
         if self.controlling {
-            let buf: &mut [u32] = &mut buffer;
             let (c, t) = (0x00_2ECC71, 4);
             fill_rect(buf, width, height, (0, 0, width, t), c);
             fill_rect(buf, width, height, (0, height.saturating_sub(t), width, t), c);
@@ -609,18 +669,22 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn user_event(&mut self, _: &ActiveEventLoop, event: UserEvent) {
-        if let UserEvent::StreamEnded = event
-            && self.bounce.is_none()
-        {
-            // Watch stopped: start the bouncing "CO-WATCHER DISABLED" sign.
-            self.bounce = Some(Bounce {
-                x: 60.0,
-                y: 60.0,
-                vx: 240.0,
-                vy: 176.0,
-                color: PALETTE[0],
-            });
-            self.last_tick = std::time::Instant::now();
+        match event {
+            // A decoded frame means the signal is back — leave the bouncing sign and show the screen.
+            UserEvent::NewFrame => self.bounce = None,
+            UserEvent::StreamEnded => {
+                if self.bounce.is_none() {
+                    // Signal lost: start the bouncing "CO-WATCHER DISABLED" sign.
+                    self.bounce = Some(Bounce {
+                        x: 60.0,
+                        y: 60.0,
+                        vx: 240.0,
+                        vy: 176.0,
+                        color: PALETTE[0],
+                    });
+                    self.last_tick = std::time::Instant::now();
+                }
+            }
         }
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -783,25 +847,47 @@ fn fill_rect(buf: &mut [u32], w: u32, h: u32, rect: (u32, u32, u32, u32), color:
     }
 }
 
-/// Draws the sign: a dark box with the coloured 5x7 text inside.
-fn draw_sign(buf: &mut [u32], w: u32, h: u32, b: &Bounce) {
-    let (sw, sh) = sign_dims();
-    let (x0, y0) = (b.x.max(0.0) as u32, b.y.max(0.0) as u32);
-    fill_rect(buf, w, h, (x0, y0, sw, sh), 0x0F_1420); // dark plaque
-    let (mut cx, ty) = (x0 + PAD, y0 + PAD);
-    for ch in SIGN.chars() {
+/// Draws `text` in the 5x7 font at `at = (x, y)`, each dot `dot` pixels, in `color`.
+fn draw_text(buf: &mut [u32], w: u32, h: u32, at: (u32, u32), text: &str, dot: u32, color: u32) {
+    let (x, y) = at;
+    let mut cx = x;
+    for ch in text.chars() {
         let glyph = font(ch);
         for (row, bits) in glyph.iter().enumerate() {
             for col in 0..GLYPH_COLS {
                 if bits & (1 << (GLYPH_COLS - 1 - col)) != 0 {
-                    let px = cx + col * DOT;
-                    let py = ty + u32::try_from(row).unwrap_or(0) * DOT;
-                    fill_rect(buf, w, h, (px, py, DOT, DOT), b.color);
+                    let px = cx + col * dot;
+                    let py = y + u32::try_from(row).unwrap_or(0) * dot;
+                    fill_rect(buf, w, h, (px, py, dot, dot), color);
                 }
             }
         }
-        cx += (GLYPH_COLS + GAP) * DOT;
+        cx += (GLYPH_COLS + GAP) * dot;
     }
+}
+
+/// Draws the bouncing sign: a dark box with the coloured 5x7 text inside.
+fn draw_sign(buf: &mut [u32], w: u32, h: u32, b: &Bounce) {
+    let (sw, sh) = sign_dims();
+    let (x0, y0) = (b.x.max(0.0) as u32, b.y.max(0.0) as u32);
+    fill_rect(buf, w, h, (x0, y0, sw, sh), 0x0F_1420); // dark plaque
+    draw_text(buf, w, h, (x0 + PAD, y0 + PAD), SIGN, DOT, b.color);
+}
+
+/// Draws a one-line control hint along the bottom, on a dark strip, so the Ctrl+Alt+Esc chord is
+/// discoverable even with the window maximized and its title bar out of view.
+fn draw_hint(buf: &mut [u32], w: u32, h: u32, controlling: bool) {
+    const DOT: u32 = 2;
+    let text = if controlling {
+        "CONTROL ON - CTRL-ALT-ESC TO RELEASE"
+    } else {
+        "VIEW ONLY - CTRL-ALT-ESC TO CONTROL"
+    };
+    let strip = GLYPH_ROWS * DOT + 12;
+    let y = h.saturating_sub(strip);
+    fill_rect(buf, w, h, (0, y, w, strip), 0x0C_1018);
+    let color = if controlling { 0x2E_CC71 } else { 0x9A_A6B2 };
+    draw_text(buf, w, h, (10, y + 6), text, DOT, color);
 }
 
 /// A 5x7 uppercase bitmap font, just the glyphs the sign needs (others render blank).
