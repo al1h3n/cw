@@ -25,6 +25,9 @@
   // centered default to a fixed position, and CSS `resize` gives it a corner grip.
   let dialogEl = $state<HTMLDivElement>()
   let placed = $state<{ x: number; y: number } | null>(null)
+  // Close on a click that both starts and ends on the backdrop, so releasing a resize/drag over the
+  // backdrop never dismisses the window.
+  let downOnBackdrop = false
   let dragging = false
   let start = { px: 0, py: 0, x: 0, y: 0 }
 
@@ -54,9 +57,12 @@
     }
   }
 
+  const needle = $derived(filter.trim().toLowerCase())
   const matches = $derived(
-    apps.filter((a) => a.name.toLowerCase().includes(filter.trim().toLowerCase())).slice(0, 80),
+    apps.filter((a) => a.name.toLowerCase().includes(needle)).slice(0, 80),
   )
+  // The same search box also filters the running list, so a teacher can find a process by name.
+  const runningMatches = $derived(running.filter((r) => r.name.toLowerCase().includes(needle)))
 
   async function load() {
     loading = true
@@ -121,7 +127,14 @@
 
 <svelte:window on:keydown={onkey} />
 
-<div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose()}>
+<div
+  class="backdrop"
+  role="presentation"
+  onpointerdown={(e) => (downOnBackdrop = e.target === e.currentTarget)}
+  onclick={(e) => {
+    if (downOnBackdrop && e.target === e.currentTarget) onclose()
+  }}
+>
   <div
     class="dialog"
     class:placed
@@ -164,9 +177,9 @@
         </section>
 
         <section>
-          <h3>{t('appsRunning', running.length)}</h3>
+          <h3>{t('appsRunning', runningMatches.length)}</h3>
           <ul>
-            {#each running.slice(0, 80) as app (app.pid)}
+            {#each runningMatches.slice(0, 80) as app (app.pid)}
               <li>
                 <span class="name">{app.name}</span>
                 <button class="danger" onclick={() => close(app)} disabled={busy}>

@@ -42,9 +42,9 @@ use winit::{
     window::{Window, WindowId},
 };
 
-/// A decoded frame ready to blit: packed `0x00RRGGBB` pixels plus its size.
+/// A decoded frame ready to blit: packed BGRA pixels (as OpenH264 gives them) plus its size.
 struct Frame {
-    pixels: Vec<u32>,
+    bgra: Vec<u8>,
     width: u32,
     height: u32,
 }
@@ -62,6 +62,8 @@ struct ImageRect {
 /// Wakes the window when a new frame has been decoded.
 enum UserEvent {
     NewFrame,
+    /// The stream ended (teacher stopped watching) — switch to the bouncing "disabled" screen.
+    StreamEnded,
 }
 
 /// What the window asks the network task to do.
@@ -155,6 +157,7 @@ fn run(args: Args) -> Result<()> {
         .build()
         .context("create event loop")?;
     let proxy = event_loop.create_proxy();
+    let net_proxy = event_loop.create_proxy();
 
     let latest: Arc<Mutex<Option<Frame>>> = Arc::new(Mutex::new(None));
     let (packets_tx, packets_rx) = std::sync::mpsc::channel::<Vec<u8>>();
@@ -164,7 +167,8 @@ fn run(args: Args) -> Result<()> {
     // Network: connect, start the stream, pump encoded packets to the decoder, apply input.
     {
         thread::spawn(move || {
-            if let Err(err) = network_main(args, &packets_tx, input_rx, initial_control) {
+            if let Err(err) = network_main(args, &packets_tx, input_rx, initial_control, &net_proxy)
+            {
                 eprintln!("network: {err:#}");
                 std::process::exit(1);
             }
@@ -190,12 +194,14 @@ fn network_main(
     packets_tx: &std::sync::mpsc::Sender<Vec<u8>>,
     input_rx: UnboundedReceiver<InputCmd>,
     want_control: bool,
+    ended: &EventLoopProxy<UserEvent>,
 ) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("build runtime")?;
     let packets_tx = packets_tx.clone();
+    let ended = ended.clone();
     runtime.block_on(async move {
         let dir = console_dir();
         let identity = net::Identity::load_or_create(&dir.join("device.key"))
@@ -260,6 +266,9 @@ fn network_main(
                     }
                 }
             }
+            // The stream is over (the teacher stopped watching, or the PC went away): tell the window
+            // to switch to the bouncing "disabled" screen.
+            let _ = ended.send_event(UserEvent::StreamEnded);
         });
 
         if want_control {
@@ -345,17 +354,11 @@ fn decode_main(
     };
     while let Ok(packet) = packets.recv() {
         let frame = match decoder.decode(&packet) {
-            Ok(Some((bgra, width, height))) => {
-                let pixels = bgra
-                    .chunks_exact(4)
-                    .map(|p| (u32::from(p[2]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[0]))
-                    .collect();
-                Frame {
-                    pixels,
-                    width,
-                    height,
-                }
-            }
+            Ok(Some((bgra, width, height))) => Frame {
+                bgra,
+                width,
+                height,
+            },
             Ok(None) => continue, // parameter sets, no picture yet
             Err(err) => {
                 eprintln!("decode: {err}");
@@ -381,6 +384,19 @@ struct App {
     controlling: bool,
     ctrl_down: bool,
     alt_down: bool,
+    /// Once the stream ends, the window shows a bouncing "CO-WATCHER DISABLED" sign (a DVD-logo
+    /// easter egg) instead of frozen video.
+    bounce: Option<Bounce>,
+    last_tick: std::time::Instant,
+}
+
+/// The bouncing-sign animation state.
+struct Bounce {
+    x: f64,
+    y: f64,
+    vx: f64,
+    vy: f64,
+    color: u32,
 }
 
 impl App {
@@ -398,6 +414,8 @@ impl App {
             controlling,
             ctrl_down: false,
             alt_down: false,
+            bounce: None,
+            last_tick: std::time::Instant::now(),
         }
     }
 
@@ -433,6 +451,15 @@ impl App {
         };
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
+
+        // Advance the "disabled" easter egg (if active) before borrowing the surface.
+        let now = std::time::Instant::now();
+        let dt = (now - self.last_tick).as_secs_f64().min(0.1);
+        self.last_tick = now;
+        if let Some(bounce) = self.bounce.as_mut() {
+            advance_bounce(bounce, f64::from(width), f64::from(height), dt);
+        }
+
         let Some(surface) = self.surface.as_mut() else {
             return Ok(());
         };
@@ -440,7 +467,14 @@ impl App {
         let nz_h = NonZeroU32::new(height).context("zero height")?;
         surface.resize(nz_w, nz_h).map_err(|e| anyhow!("{e}"))?;
         let mut buffer = surface.buffer_mut().map_err(|e| anyhow!("{e}"))?;
-        buffer.fill(0); // black letterbox bars
+        buffer.fill(0); // black background / letterbox bars
+
+        if let Some(bounce) = &self.bounce {
+            let buf: &mut [u32] = &mut buffer;
+            draw_sign(buf, width, height, bounce);
+            buffer.present().map_err(|e| anyhow!("{e}"))?;
+            return Ok(());
+        }
 
         let guard = self.latest.lock().map_err(|_| anyhow!("frame lock"))?;
         if let Some(frame) = guard.as_ref()
@@ -453,15 +487,37 @@ impl App {
             let draw_h = ((f64::from(frame.height) * scale).round() as u32).clamp(1, height);
             let off_x = (width - draw_w) / 2;
             let off_y = (height - draw_h) / 2;
+            // Resample the frame to the drawn size. Shrinking with a plain nearest pick drops whole
+            // rows/columns of pixels, which is what made text look "half visible"; an area average
+            // keeps every glyph readable. At the same size we copy 1:1 (pixel-perfect text), and when
+            // enlarging we nearest-fill (upscaled screen text can't be sharper than its source).
+            let scaled: std::borrow::Cow<[u8]> = if draw_w == frame.width && draw_h == frame.height {
+                std::borrow::Cow::Borrowed(&frame.bgra)
+            } else if draw_w < frame.width || draw_h < frame.height {
+                std::borrow::Cow::Owned(media::resize::area_average(
+                    &frame.bgra,
+                    frame.width,
+                    frame.height,
+                    draw_w,
+                    draw_h,
+                ))
+            } else {
+                std::borrow::Cow::Owned(nearest_resample(
+                    &frame.bgra,
+                    frame.width,
+                    frame.height,
+                    draw_w,
+                    draw_h,
+                ))
+            };
             for dy in 0..draw_h {
-                let sy = ((u64::from(dy) * u64::from(frame.height)) / u64::from(draw_h)) as u32;
-                let sy = sy.min(frame.height - 1);
-                let src_row = (sy * frame.width) as usize;
+                let src_row = (dy * draw_w) as usize * 4;
                 let dst_row = ((off_y + dy) * width + off_x) as usize;
                 for dx in 0..draw_w {
-                    let sx = ((u64::from(dx) * u64::from(frame.width)) / u64::from(draw_w)) as u32;
-                    let sx = sx.min(frame.width - 1);
-                    buffer[dst_row + dx as usize] = frame.pixels[src_row + sx as usize];
+                    let p = src_row + dx as usize * 4;
+                    buffer[dst_row + dx as usize] = (u32::from(scaled[p + 2]) << 16)
+                        | (u32::from(scaled[p + 1]) << 8)
+                        | u32::from(scaled[p]);
                 }
             }
             self.image = Some(ImageRect {
@@ -519,7 +575,10 @@ impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attributes = Window::default_attributes()
             .with_title("Co-watcher viewer")
-            .with_inner_size(PhysicalSize::new(1280, 720));
+            .with_inner_size(PhysicalSize::new(1280, 720))
+            // Open large: at (or near) the student's own resolution the frame is drawn 1:1, so text
+            // is pixel-perfect instead of being scaled.
+            .with_maximized(true);
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Rc::new(window),
             Err(err) => {
@@ -542,9 +601,34 @@ impl ApplicationHandler<UserEvent> for App {
         self.retitle();
     }
 
-    fn user_event(&mut self, _: &ActiveEventLoop, _: UserEvent) {
+    fn user_event(&mut self, _: &ActiveEventLoop, event: UserEvent) {
+        if let UserEvent::StreamEnded = event
+            && self.bounce.is_none()
+        {
+            // Watch stopped: start the bouncing "CO-WATCHER DISABLED" sign.
+            self.bounce = Some(Bounce {
+                x: 60.0,
+                y: 60.0,
+                vx: 240.0,
+                vy: 176.0,
+                color: PALETTE[0],
+            });
+            self.last_tick = std::time::Instant::now();
+        }
         if let Some(window) = &self.window {
             window.request_redraw();
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // While the sign is bouncing, drive a ~30 fps animation loop.
+        if self.bounce.is_some() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                std::time::Instant::now() + Duration::from_millis(33),
+            ));
         }
     }
 
@@ -607,6 +691,130 @@ impl ApplicationHandler<UserEvent> for App {
             }
             _ => {}
         }
+    }
+}
+
+/// Nearest-neighbour resample of packed BGRA, used only when enlarging (screen text cannot be made
+/// sharper than its source, so averaging would only blur it).
+fn nearest_resample(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (dst_w as usize) * (dst_h as usize) * 4];
+    for dy in 0..dst_h {
+        let sy = (u64::from(dy) * u64::from(src_h) / u64::from(dst_h)).min(u64::from(src_h - 1));
+        for dx in 0..dst_w {
+            let sx = (u64::from(dx) * u64::from(src_w) / u64::from(dst_w)).min(u64::from(src_w - 1));
+            let s = ((sy * u64::from(src_w) + sx) as usize) * 4;
+            let d = ((dy * dst_w + dx) as usize) * 4;
+            out[d..d + 4].copy_from_slice(&src[s..s + 4]);
+        }
+    }
+    out
+}
+
+// --- The "disabled" easter egg: a DVD-logo-style bouncing sign shown when watching stops. ---
+
+/// The text on the sign.
+const SIGN: &str = "CO-WATCHER DISABLED";
+/// Pixels per font dot (the font is 5x7 dots per glyph).
+const DOT: u32 = 5;
+const GLYPH_COLS: u32 = 5;
+const GLYPH_ROWS: u32 = 7;
+/// Dot-columns of gap between glyphs, and the sign's inner padding in pixels.
+const GAP: u32 = 1;
+const PAD: u32 = 22;
+/// Colours the sign takes each time it bounces off a wall (0x00RRGGBB), like the old DVD logo.
+const PALETTE: [u32; 6] = [0x00_E5FF, 0xFF_3DC4, 0xFF_D500, 0x3D_FF7A, 0xFF_7A1A, 0xFF_FFFF];
+
+/// The sign's pixel size (box including padding).
+fn sign_dims() -> (u32, u32) {
+    let n = u32::try_from(SIGN.chars().count()).unwrap_or(0);
+    let text_w = n * (GLYPH_COLS + GAP) * DOT - GAP * DOT;
+    let text_h = GLYPH_ROWS * DOT;
+    (text_w + 2 * PAD, text_h + 2 * PAD)
+}
+
+/// Moves the sign by its velocity, bouncing off the window edges and changing colour on each hit.
+fn advance_bounce(b: &mut Bounce, w: f64, h: f64, dt: f64) {
+    let (sw, sh) = sign_dims();
+    let (sw, sh) = (f64::from(sw), f64::from(sh));
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    let mut hit = false;
+    if b.x <= 0.0 {
+        b.x = 0.0;
+        b.vx = b.vx.abs();
+        hit = true;
+    }
+    if b.y <= 0.0 {
+        b.y = 0.0;
+        b.vy = b.vy.abs();
+        hit = true;
+    }
+    if b.x + sw >= w {
+        b.x = (w - sw).max(0.0);
+        b.vx = -b.vx.abs();
+        hit = true;
+    }
+    if b.y + sh >= h {
+        b.y = (h - sh).max(0.0);
+        b.vy = -b.vy.abs();
+        hit = true;
+    }
+    if hit {
+        let idx = ((b.x + b.y) as u64 % PALETTE.len() as u64) as usize;
+        b.color = PALETTE[idx];
+    }
+}
+
+/// Fills an axis-aligned rectangle `(x, y, width, height)` in the framebuffer, clipped to its bounds.
+fn fill_rect(buf: &mut [u32], w: u32, h: u32, rect: (u32, u32, u32, u32), color: u32) {
+    let (x, y, rw, rh) = rect;
+    for py in y..(y + rh).min(h) {
+        let row = (py * w) as usize;
+        for px in x..(x + rw).min(w) {
+            buf[row + px as usize] = color;
+        }
+    }
+}
+
+/// Draws the sign: a dark box with the coloured 5x7 text inside.
+fn draw_sign(buf: &mut [u32], w: u32, h: u32, b: &Bounce) {
+    let (sw, sh) = sign_dims();
+    let (x0, y0) = (b.x.max(0.0) as u32, b.y.max(0.0) as u32);
+    fill_rect(buf, w, h, (x0, y0, sw, sh), 0x0F_1420); // dark plaque
+    let (mut cx, ty) = (x0 + PAD, y0 + PAD);
+    for ch in SIGN.chars() {
+        let glyph = font(ch);
+        for (row, bits) in glyph.iter().enumerate() {
+            for col in 0..GLYPH_COLS {
+                if bits & (1 << (GLYPH_COLS - 1 - col)) != 0 {
+                    let px = cx + col * DOT;
+                    let py = ty + u32::try_from(row).unwrap_or(0) * DOT;
+                    fill_rect(buf, w, h, (px, py, DOT, DOT), b.color);
+                }
+            }
+        }
+        cx += (GLYPH_COLS + GAP) * DOT;
+    }
+}
+
+/// A 5x7 uppercase bitmap font, just the glyphs the sign needs (others render blank).
+fn font(ch: char) -> [u8; 7] {
+    match ch.to_ascii_uppercase() {
+        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
+        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
+        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+        'I' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
+        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        '-' => [0, 0, 0, 0b01110, 0, 0, 0],
+        _ => [0; 7],
     }
 }
 
