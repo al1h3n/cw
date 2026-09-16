@@ -1,6 +1,10 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
-  import { onDestroy, onMount } from 'svelte'
+  import { onDestroy, onMount, untrack } from 'svelte'
+  import { flip } from 'svelte/animate'
+  import { slide, fade } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
+  import { groups, UNCAT } from './lib/groups.svelte'
   import DeviceTile from './lib/DeviceTile.svelte'
   import PairDialog from './lib/PairDialog.svelte'
   import Focused from './lib/Focused.svelte'
@@ -36,6 +40,103 @@
 
   const live = $derived(devices.filter((d) => d.status === 'live').length)
   const focusedDevice = $derived(devices.find((d) => d.device_id === focused) ?? null)
+
+  // --- Grouping: arrange tiles into named groups, drag to reorder / move, persisted locally. ---
+  const byId = $derived(new Map(devices.map((d) => [d.device_id, d])))
+
+  // Keep the arrangement in step with the real device list without re-triggering itself.
+  $effect(() => {
+    const ids = devices.map((d) => d.device_id)
+    untrack(() => groups.sync(ids))
+  })
+
+  function tilesOf(groupId: string): Device[] {
+    return groups
+      .members(groupId)
+      .map((id) => byId.get(id))
+      .filter((d): d is Device => d !== undefined)
+  }
+
+  let draggingId = $state<string | null>(null)
+  let tileMenu = $state<{ id: string; x: number; y: number } | null>(null)
+  let groupMenu = $state<{ id: string; x: number; y: number } | null>(null)
+  let editingGroup = $state<string | null>(null)
+
+  function dragStart(event: DragEvent, id: string) {
+    draggingId = id
+    const cell = (event.currentTarget as HTMLElement).closest('.cell') as HTMLElement | null
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('text/plain', id)
+      if (cell) event.dataTransfer.setDragImage(cell, 24, 24)
+    }
+  }
+  function dragEnd() {
+    draggingId = null
+    groups.save()
+  }
+  function onCellDragOver(event: DragEvent, groupId: string, index: number) {
+    if (!draggingId) return
+    event.preventDefault()
+    // Live reorder: only move when the target slot actually differs, so it does not thrash.
+    const members = groups.members(groupId)
+    if (members[index] !== draggingId) groups.move(draggingId, groupId, index)
+  }
+  function onGroupDragOver(event: DragEvent, groupId: string) {
+    if (!draggingId) return
+    event.preventDefault()
+    // Over the group's own area (not a tile): drop at the end.
+    const members = groups.members(groupId)
+    if (!members.includes(draggingId)) groups.move(draggingId, groupId, members.length)
+  }
+  function onDrop(event: DragEvent) {
+    event.preventDefault()
+    dragEnd()
+  }
+
+  function menuPos(event: MouseEvent) {
+    return {
+      x: Math.min(event.clientX, window.innerWidth - 190),
+      y: Math.min(event.clientY, window.innerHeight - 240),
+    }
+  }
+  function openTileMenu(event: MouseEvent, id: string) {
+    event.preventDefault()
+    event.stopPropagation()
+    groupMenu = null
+    tileMenu = { id, ...menuPos(event) }
+  }
+  function openGroupMenu(event: MouseEvent, id: string) {
+    event.preventDefault()
+    event.stopPropagation()
+    tileMenu = null
+    groupMenu = { id, ...menuPos(event) }
+  }
+  function closeMenus() {
+    tileMenu = null
+    groupMenu = null
+  }
+  function moveToGroup(id: string, groupId: string) {
+    groups.move(id, groupId, groups.members(groupId).length)
+    groups.save()
+    closeMenus()
+  }
+  function createGroup() {
+    const id = groups.addGroup()
+    editingGroup = id
+    closeMenus()
+  }
+  function moveToNewGroup(id: string) {
+    const gid = groups.addGroup()
+    groups.move(id, gid, 0)
+    groups.save()
+    editingGroup = gid
+    closeMenus()
+  }
+  function focusInput(node: HTMLInputElement) {
+    node.focus()
+    node.select()
+  }
 
   async function refresh() {
     try {
@@ -197,17 +298,96 @@
         <button class="primary" onclick={() => (pairing = true)}>{t('addPc')}</button>
       </div>
     {:else}
-      <div class="grid">
-        {#each devices as device (device.device_id)}
-          <DeviceTile
-            {device}
-            {watching}
-            onopen={() => open(device.device_id)}
-            onmonitor={(index) => chooseMonitor(device.device_id, index)}
-            onwake={() => wake(device.device_id)}
-            onrename={(name) => rename(device.device_id, name)}
-          />
+      <div class="board">
+        {#each groups.groups as group (group.id)}
+          <section
+            class="group"
+            animate:flip={{ duration: 200, easing: cubicOut }}
+            ondragover={(e) => onGroupDragOver(e, group.id)}
+            ondrop={onDrop}
+            role="group"
+          >
+            <header class="ghead">
+              <button
+                class="chev"
+                onclick={() => groups.toggle(group.id)}
+                aria-label={group.collapsed ? t('expand') : t('collapse')}
+              >
+                {group.collapsed ? '▸' : '▾'}
+              </button>
+              {#if editingGroup === group.id}
+                <input
+                  class="gname-edit"
+                  value={group.name}
+                  use:focusInput
+                  onblur={(e) => {
+                    groups.rename(group.id, e.currentTarget.value)
+                    editingGroup = null
+                  }}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                    else if (e.key === 'Escape') editingGroup = null
+                  }}
+                />
+              {:else}
+                <button
+                  class="gname"
+                  ondblclick={() => group.id !== UNCAT && (editingGroup = group.id)}
+                  title={group.id === UNCAT ? '' : t('renameGroupHint')}
+                >
+                  {group.name}
+                </button>
+              {/if}
+              <span class="gcount">{tilesOf(group.id).length}</span>
+              <span class="gspace"></span>
+              <button class="dots" onclick={(e) => openGroupMenu(e, group.id)} aria-label={t('groupMenu')}
+                >⋯</button
+              >
+            </header>
+
+            {#if !group.collapsed}
+              <div class="grid" transition:slide={{ duration: 180, easing: cubicOut }}>
+                {#each tilesOf(group.id) as device, index (device.device_id)}
+                  <div
+                    class="cell"
+                    class:dragging={draggingId === device.device_id}
+                    animate:flip={{ duration: 200, easing: cubicOut }}
+                    ondragover={(e) => onCellDragOver(e, group.id, index)}
+                    ondrop={onDrop}
+                    oncontextmenu={(e) => openTileMenu(e, device.device_id)}
+                    role="presentation"
+                  >
+                    <button
+                      class="grip"
+                      draggable="true"
+                      ondragstart={(e) => dragStart(e, device.device_id)}
+                      ondragend={dragEnd}
+                      title={t('dragHint')}
+                      aria-label={t('dragHint')}>⠿</button
+                    >
+                    <button
+                      class="dots tiledots"
+                      onclick={(e) => openTileMenu(e, device.device_id)}
+                      aria-label={t('moveTo')}>⋯</button
+                    >
+                    <DeviceTile
+                      {device}
+                      {watching}
+                      onopen={() => open(device.device_id)}
+                      onmonitor={(i) => chooseMonitor(device.device_id, i)}
+                      onwake={() => wake(device.device_id)}
+                      onrename={(name) => rename(device.device_id, name)}
+                    />
+                  </div>
+                {/each}
+                {#if tilesOf(group.id).length === 0}
+                  <p class="gempty">{t('groupEmpty')}</p>
+                {/if}
+              </div>
+            {/if}
+          </section>
         {/each}
+        <button class="addgroup" onclick={createGroup}>+ {t('newGroup')}</button>
       </div>
     {/if}
   </main>
@@ -231,6 +411,65 @@
     </span>
   </footer>
 </div>
+{/if}
+
+{#if tileMenu || groupMenu}
+  <!-- Invisible scrim: a click anywhere else closes the menu. -->
+  <div
+    class="menuscrim"
+    role="presentation"
+    onclick={closeMenus}
+    oncontextmenu={(e) => (e.preventDefault(), closeMenus())}
+  ></div>
+{/if}
+
+{#if tileMenu}
+  {@const currentGroup = groups.groupOf(tileMenu.id)}
+  <div class="popover" style="left:{tileMenu.x}px; top:{tileMenu.y}px" transition:fade={{ duration: 90 }}>
+    <p class="pop-label">{t('moveTo')}</p>
+    {#each groups.groups as g (g.id)}
+      <button
+        class="pop-item"
+        class:current={g.id === currentGroup}
+        onclick={() => moveToGroup(tileMenu?.id ?? '', g.id)}
+      >
+        {g.name}
+      </button>
+    {/each}
+    <button class="pop-item new" onclick={() => moveToNewGroup(tileMenu?.id ?? '')}
+      >+ {t('newGroup')}</button
+    >
+  </div>
+{/if}
+
+{#if groupMenu}
+  <div class="popover" style="left:{groupMenu.x}px; top:{groupMenu.y}px" transition:fade={{ duration: 90 }}>
+    {#if groupMenu.id !== UNCAT}
+      <button
+        class="pop-item"
+        onclick={() => {
+          editingGroup = groupMenu?.id ?? null
+          closeMenus()
+        }}>{t('rename')}</button
+      >
+    {/if}
+    <button
+      class="pop-item"
+      onclick={() => {
+        groups.toggle(groupMenu?.id ?? '')
+        closeMenus()
+      }}>{groups.groups.find((g) => g.id === groupMenu?.id)?.collapsed ? t('expand') : t('collapse')}</button
+    >
+    {#if groupMenu.id !== UNCAT}
+      <button
+        class="pop-item danger"
+        onclick={() => {
+          groups.remove(groupMenu?.id ?? '')
+          closeMenus()
+        }}>{t('deleteGroup')}</button
+      >
+    {/if}
+  </div>
 {/if}
 
 {#if pairing}
@@ -326,6 +565,207 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 14px;
+  }
+
+  /* Groups: spacing and a light header do the grouping, not heavy cards. */
+  .board {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .ghead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .chev {
+    width: 22px;
+    padding: 2px;
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .gname {
+    padding: 2px 4px;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: default;
+  }
+
+  .gname-edit {
+    padding: 3px 7px;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .gcount {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .gspace {
+    flex: 1;
+  }
+
+  .dots {
+    width: 26px;
+    padding: 2px;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .dots:hover {
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .cell {
+    position: relative;
+  }
+
+  .cell.dragging {
+    opacity: 0.35;
+  }
+
+  .grip,
+  .tiledots {
+    position: absolute;
+    top: 6px;
+    z-index: 3;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: rgba(8, 11, 16, 0.7);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+
+  .grip {
+    left: 6px;
+    cursor: grab;
+  }
+
+  .grip:active {
+    cursor: grabbing;
+  }
+
+  .tiledots {
+    right: 6px;
+  }
+
+  .cell:hover .grip,
+  .cell:hover .tiledots {
+    opacity: 0.85;
+  }
+
+  .gempty {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding: 10px 4px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .addgroup {
+    align-self: flex-start;
+    padding: 6px 12px;
+    font-size: 12.5px;
+    color: var(--muted);
+    border-style: dashed;
+  }
+
+  .addgroup:hover {
+    color: var(--text);
+    border-color: var(--accent);
+  }
+
+  .menuscrim {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+  }
+
+  .popover {
+    position: fixed;
+    z-index: 60;
+    min-width: 176px;
+    max-width: 240px;
+    padding: 6px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+  }
+
+  .pop-label {
+    margin: 2px 6px 4px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .pop-item {
+    display: block;
+    width: 100%;
+    padding: 6px 8px;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pop-item:hover {
+    background: var(--bg);
+  }
+
+  .pop-item.current {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .pop-item.new {
+    margin-top: 4px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+  }
+
+  .pop-item.danger:hover {
+    color: var(--danger);
   }
 
   .empty,
