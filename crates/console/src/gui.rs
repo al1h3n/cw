@@ -329,17 +329,63 @@ fn send_input(state: State<'_, AppState>, events: Vec<UiInput>) -> Result<(), St
 
 /// Starts recording one PC's screen. Returns what it is actually recording after clamping.
 #[tauri::command]
+#[expect(clippy::too_many_arguments, reason = "a flat command over the recording options")]
 async fn start_recording(
     state: State<'_, AppState>,
     device_id: String,
     max_width: u32,
     max_height: u32,
     fps: u32,
+    codec: String,
+    preset: String,
+    quality: u8,
+    bframes: u8,
+    scaler: String,
+    two_pass: bool,
 ) -> Result<proto::RecordingInfo, String> {
-    state
-        .manager
-        .start_recording(&device_id, max_width, max_height, fps)
-        .await
+    let options = proto::RecordOptions {
+        max_width,
+        max_height,
+        fps,
+        codec: parse_codec(&codec),
+        preset: parse_preset(&preset),
+        quality,
+        bframes,
+        scaler: parse_scaler(&scaler),
+        two_pass,
+    };
+    state.manager.start_recording(&device_id, options).await
+}
+
+fn parse_codec(s: &str) -> proto::Codec {
+    match s {
+        "h265" => proto::Codec::H265,
+        "av1" => proto::Codec::Av1,
+        _ => proto::Codec::H264,
+    }
+}
+
+fn parse_preset(s: &str) -> proto::Preset {
+    match s {
+        "ultrafast" => proto::Preset::Ultrafast,
+        "superfast" => proto::Preset::Superfast,
+        "veryfast" => proto::Preset::Veryfast,
+        "faster" => proto::Preset::Faster,
+        "fast" => proto::Preset::Fast,
+        "slow" => proto::Preset::Slow,
+        "slower" => proto::Preset::Slower,
+        "veryslow" => proto::Preset::Veryslow,
+        _ => proto::Preset::Medium,
+    }
+}
+
+fn parse_scaler(s: &str) -> proto::Scaler {
+    match s {
+        "bilinear" => proto::Scaler::Bilinear,
+        "bicubic" => proto::Scaler::Bicubic,
+        "neighbor" => proto::Scaler::Neighbor,
+        _ => proto::Scaler::Lanczos,
+    }
 }
 
 /// Stops the recording on one PC.

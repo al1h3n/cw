@@ -154,6 +154,98 @@ pub enum InputEvent {
 
 /// The shape of a live video stream.
 ///
+/// The video codec a recording is encoded with (when ffmpeg is available on the student PC).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Codec {
+    /// H.264 — the compatible default, plays everywhere.
+    #[default]
+    H264,
+    /// H.265/HEVC — smaller files, needs a newer player.
+    H265,
+    /// AV1 — smallest, slowest to encode.
+    Av1,
+}
+
+/// The encoder speed/efficiency trade-off (x264/x265 names; mapped for AV1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Preset {
+    /// Fastest, largest files.
+    Ultrafast,
+    /// Very fast.
+    Superfast,
+    /// Faster than realtime on most PCs.
+    Veryfast,
+    /// A little faster than default.
+    Faster,
+    /// Fast.
+    Fast,
+    /// A balanced default.
+    #[default]
+    Medium,
+    /// Slower, smaller.
+    Slow,
+    /// Slower still.
+    Slower,
+    /// Slowest, smallest files.
+    Veryslow,
+}
+
+/// How frames are scaled to the recording size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Scaler {
+    /// Fast, softer.
+    Bilinear,
+    /// Sharper than bilinear.
+    Bicubic,
+    /// Sharpest downscale for text — the default.
+    #[default]
+    Lanczos,
+    /// Nearest-neighbour, blocky.
+    Neighbor,
+}
+
+/// Everything the teacher chose about how to record: size, rate and encoding.
+///
+/// Applied by ffmpeg on the student PC when it is present; if it is not, the Agent falls back to its
+/// built-in MJPEG recorder and only `max_width`/`max_height`/`fps` apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordOptions {
+    /// Widest the saved video may be; the real size keeps the screen's aspect ratio.
+    pub max_width: u32,
+    /// Tallest the saved video may be.
+    pub max_height: u32,
+    /// Frames per second to capture.
+    pub fps: u32,
+    /// Which codec.
+    pub codec: Codec,
+    /// Encoder preset.
+    pub preset: Preset,
+    /// Constant-quality value (CRF): lower is better quality and a bigger file. 0..=51.
+    pub quality: u8,
+    /// Maximum consecutive B-frames (compression; 0 disables). Defaults high ("each").
+    pub bframes: u8,
+    /// Scaling filter.
+    pub scaler: Scaler,
+    /// Two-pass encode for the best size/quality (a post-record re-encode; ignored by MJPEG).
+    pub two_pass: bool,
+}
+
+impl Default for RecordOptions {
+    fn default() -> Self {
+        Self {
+            max_width: 1920,
+            max_height: 1080,
+            fps: 15,
+            codec: Codec::H264,
+            preset: Preset::Medium,
+            quality: 23,
+            bframes: 8,
+            scaler: Scaler::Lanczos,
+            two_pass: false,
+        }
+    }
+}
+
 /// Separate from [`RecordingInfo`] because they answer different questions: a recording is written
 /// to the student's disk, a stream is watched now. Both are clamped by the Agent, never trusted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -483,12 +575,8 @@ pub enum Control {
     StartRecording {
         /// Which monitor to record.
         monitor: u8,
-        /// Widest the saved video may be; the real size keeps the screen's aspect ratio.
-        max_width: u32,
-        /// Tallest the saved video may be.
-        max_height: u32,
-        /// Frames per second to capture.
-        fps: u32,
+        /// How to encode the recording (codec, preset, quality, size, rate).
+        options: RecordOptions,
     },
     /// Console → Agent: stop recording and close the file.
     StopRecording,

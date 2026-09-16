@@ -158,11 +158,9 @@ pub trait AgentDevice {
         &self,
         from: &PeerInfo,
         monitor: u8,
-        max_width: u32,
-        max_height: u32,
-        fps: u32,
+        options: proto::RecordOptions,
     ) -> proto::RecordingInfo {
-        let _ = (from, monitor, max_width, max_height, fps);
+        let _ = (from, monitor, options);
         proto::RecordingInfo {
             active: false,
             file: String::new(),
@@ -176,7 +174,7 @@ pub trait AgentDevice {
 
     /// Stops any recording and reports the final state.
     fn stop_recording(&self, from: &PeerInfo) -> proto::RecordingInfo {
-        self.start_recording(from, 0, 0, 0, 0)
+        self.start_recording(from, 0, proto::RecordOptions::default())
     }
 
     /// How the current recording is going.
@@ -535,18 +533,11 @@ impl ControlSession {
     pub async fn start_recording(
         &mut self,
         monitor: u8,
-        max_width: u32,
-        max_height: u32,
-        fps: u32,
+        options: proto::RecordOptions,
     ) -> Result<proto::RecordingInfo, EndpointError> {
         write_message(
             &mut self.send,
-            &Control::StartRecording {
-                monitor,
-                max_width,
-                max_height,
-                fps,
-            },
+            &Control::StartRecording { monitor, options },
         )
         .await?;
         self.read_recording_state().await
@@ -828,14 +819,8 @@ impl ControlSession {
                     )
                     .await?;
                 }
-                Control::StartRecording {
-                    monitor,
-                    max_width,
-                    max_height,
-                    fps,
-                } => {
-                    let info =
-                        source.start_recording(&self.peer, monitor, max_width, max_height, fps);
+                Control::StartRecording { monitor, options } => {
+                    let info = source.start_recording(&self.peer, monitor, options);
                     write_message(&mut self.send, &Control::RecordingState(info)).await?;
                 }
                 Control::StopRecording => {

@@ -109,12 +109,10 @@ pub fn parse_action(name: &str, delay_seconds: u16) -> Option<proto::Action> {
 /// answers. The same pattern serves recordings and the app launcher, and it keeps a slow or offline
 /// PC from ever blocking the window.
 enum DeviceRequest {
-    /// Start recording, with the size and rate the teacher asked for.
+    /// Start recording, with the codec/size/rate the teacher chose.
     StartRecording {
         monitor: u8,
-        max_width: u32,
-        max_height: u32,
-        fps: u32,
+        options: proto::RecordOptions,
         reply: tokio::sync::oneshot::Sender<proto::RecordingInfo>,
     },
     /// Stop the recording and report the final state.
@@ -615,9 +613,7 @@ impl DeviceManager {
     pub async fn start_recording(
         &self,
         device_id: &str,
-        max_width: u32,
-        max_height: u32,
-        fps: u32,
+        options: proto::RecordOptions,
     ) -> Result<proto::RecordingInfo, String> {
         let monitor = self
             .devices
@@ -627,9 +623,7 @@ impl DeviceManager {
             .map_or(0, |s| s.monitor);
         self.ask(device_id, |reply| DeviceRequest::StartRecording {
             monitor,
-            max_width,
-            max_height,
-            fps,
+            options,
             reply,
         })
         .await
@@ -966,13 +960,11 @@ impl DeviceManager {
                 match request {
                     DeviceRequest::StartRecording {
                         monitor,
-                        max_width,
-                        max_height,
-                        fps,
+                        options,
                         reply,
                     } => {
                         let info = session
-                            .start_recording(monitor, max_width, max_height, fps)
+                            .start_recording(monitor, options)
                             .await
                             .map_err(|e| e.to_string())?;
                         let _ = reply.send(info);

@@ -401,19 +401,12 @@ impl AgentDevice for ScreenCapture {
         &self,
         from: &PeerInfo,
         monitor: u8,
-        max_width: u32,
-        max_height: u32,
-        fps: u32,
+        options: proto::RecordOptions,
     ) -> proto::RecordingInfo {
-        let settings = media::recorder::RecordingSettings {
-            max_width,
-            max_height,
-            fps,
-        };
         let mut slot = self.recording.lock().unwrap_or_else(|e| e.into_inner());
         // Dropping the old recording closes its file tidily before a new one starts.
         *slot = None;
-        let recording = crate::recording::Recording::start(&self.recordings_dir, monitor, settings);
+        let recording = crate::recording::Recording::start(&self.recordings_dir, monitor, options);
         let info = to_wire_recording(&recording.status());
         println!("console {} started recording", from.device_id);
         let _ = self

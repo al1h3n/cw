@@ -18,7 +18,7 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 /// added remote mouse/keyboard input; version 2 added remote actions. Each shifted the later
 /// `Control` discriminants, so a peer on an older version would decode them as the wrong message and
 /// the handshake refuses it outright.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 mod device_id;
 mod pairing;
@@ -29,8 +29,8 @@ pub use device_id::{DeviceId, DeviceIdParseError};
 pub use pairing::{MAX_ROOM_NAME, MAX_ROOM_SECRET, PairMessage, PairRejection, Welcome};
 pub use record_id::{RecordId, RecordIdParseError};
 pub use wire::{
-    Action, ActionFailure, ActionOutcome, AppEntry, AudioFormat, Capabilities, Control,
+    Action, ActionFailure, ActionOutcome, AppEntry, AudioFormat, Capabilities, Codec, Control,
     DecodeError, Hello, InputEvent, MAX_BLOCKLIST, MAX_INPUT_BATCH, Monitor, PointerButton,
-    ProtocolError, RecordingInfo, Role, RunningApp, StoredRecording, VideoSettings, decode, encode,
-    version_compatible,
+    Preset, ProtocolError, RecordOptions, RecordingInfo, Role, RunningApp, Scaler, StoredRecording,
+    VideoSettings, decode, encode, version_compatible,
 };

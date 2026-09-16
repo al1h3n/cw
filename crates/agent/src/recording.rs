@@ -20,9 +20,11 @@ use std::{
 };
 
 use media::{
+    ffmpeg::{FfmpegOptions, FfmpegRecorder, find_ffmpeg},
     recorder::{Recorder, RecordingSettings},
     resize,
 };
+use proto::RecordOptions;
 
 /// How long `start` waits for the worker to report the size it settled on.
 const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
@@ -61,16 +63,19 @@ impl Recording {
     /// Settings are clamped before use, and the clamped values are what the status reports — so a
     /// teacher who asks for 144 fps sees that they are getting 30, rather than being quietly ignored.
     #[must_use]
-    pub fn start(dir: &Path, monitor: u8, settings: RecordingSettings) -> Self {
-        let settings = settings.clamped();
+    pub fn start(dir: &Path, monitor: u8, options: RecordOptions) -> Self {
+        let options = clamp_options(options);
+        // Prefer ffmpeg (real codecs/presets/quality) when it is present; else the built-in MJPEG.
+        let ffmpeg = find_ffmpeg();
         let id = crate::record_id::now();
-        let file = format!("recording-{}.avi", id.to_compact());
+        let ext = if ffmpeg.is_some() { "mp4" } else { "avi" };
+        let file = format!("recording-{}.{ext}", id.to_compact());
         let path = dir.join(&file);
 
         let status = Arc::new(Mutex::new(RecordingStatus {
             active: true,
             file,
-            fps: settings.fps,
+            fps: options.fps,
             ..RecordingStatus::default()
         }));
         let stop = Arc::new(AtomicBool::new(false));
@@ -78,7 +83,7 @@ impl Recording {
         let worker = {
             let status = Arc::clone(&status);
             let stop = Arc::clone(&stop);
-            std::thread::spawn(move || run(&path, monitor, settings, &status, &stop))
+            std::thread::spawn(move || run(&path, monitor, options, ffmpeg, &status, &stop))
         };
 
         // Wait briefly for the worker to publish the real output size, so the Console is told
@@ -136,11 +141,12 @@ impl Drop for Recording {
     }
 }
 
-/// The recording loop: capture, resize, encode, append, wait for the next frame time.
+/// The recording loop: capture, feed the sink, wait for the next frame time.
 fn run(
     path: &Path,
     monitor: u8,
-    settings: RecordingSettings,
+    options: RecordOptions,
+    ffmpeg: Option<PathBuf>,
     status: &Arc<Mutex<RecordingStatus>>,
     stop: &Arc<AtomicBool>,
 ) {
@@ -162,11 +168,11 @@ fn run(
         Ok(frame) => frame,
         Err(err) => return fail(status, format!("capture failed: {err}")),
     };
-    let (width, height) = resize::fit_within(src_w, src_h, settings.max_width, settings.max_height);
+    let (width, height) = resize::fit_within(src_w, src_h, options.max_width, options.max_height);
 
-    let mut recorder = match Recorder::create(path, width, height, settings.fps) {
-        Ok(recorder) => recorder,
-        Err(err) => return fail(status, format!("cannot write the recording: {err}")),
+    let mut sink = match make_sink(ffmpeg.as_deref(), path, src_w, src_h, width, height, &options) {
+        Ok(sink) => sink,
+        Err(err) => return fail(status, err),
     };
     {
         let mut status = status.lock().unwrap_or_else(|e| e.into_inner());
@@ -174,7 +180,7 @@ fn run(
         status.height = height;
     }
 
-    let interval = settings.frame_interval();
+    let interval = frame_interval(options.fps);
     let mut frame = Some((first, src_w, src_h));
     let started_at = Instant::now();
     let mut next_frame_at = Instant::now();
@@ -186,16 +192,12 @@ fn run(
         };
         match captured {
             Ok((pixels, w, h)) => {
-                let scaled = resize::area_average(&pixels, w, h, width, height);
-                if !scaled.is_empty()
-                    && let Ok(jpeg) = media::encode_bgra(&scaled, width, height)
-                    && let Err(err) = recorder.push_jpeg(&jpeg)
-                {
+                if let Err(err) = sink.push(&pixels, w, h) {
                     return fail(status, format!("writing the recording failed: {err}"));
                 }
                 let mut status = status.lock().unwrap_or_else(|e| e.into_inner());
-                status.frames = recorder.frame_count();
-                status.seconds = recorder.seconds();
+                status.frames = sink.frames();
+                status.seconds = sink.seconds();
             }
             Err(err) => {
                 // A single failed grab (a UAC prompt, a mode change) must not end the lesson's
@@ -220,28 +222,184 @@ fn run(
         }
     }
 
-    // Write the rate we actually achieved, so the file plays back in real time even when the PC
-    // could not keep up with the requested rate.
-    recorder.set_measured_fps(started_at.elapsed().as_secs_f32());
-    let real_fps = recorder.fps();
-    let frames = recorder.frame_count();
-    let finished = recorder.finish();
+    let elapsed = started_at.elapsed().as_secs_f32();
+    let (real_fps, frames, finished) = sink.finalize(elapsed, options.fps);
 
     let mut status = status.lock().unwrap_or_else(|e| e.into_inner());
     status.active = false;
     status.fps = real_fps;
     status.frames = frames;
     status.seconds = frames as f32 / real_fps.max(1) as f32;
-    if real_fps < settings.fps {
+    if real_fps < options.fps {
         status.problem = format!(
-            "this PC managed {real_fps} fps, not {}; the file is written at {real_fps} fps so it \
-             plays at the right speed",
-            settings.fps
+            "this PC managed {real_fps} fps, not {}; the file plays at {real_fps} fps so it is \
+             the right speed",
+            options.fps
         );
     }
     if let Err(err) = finished {
         status.problem = format!("closing the recording failed: {err}");
     }
+}
+
+/// The frame interval for a target rate (at least 1 fps).
+fn frame_interval(fps: u32) -> std::time::Duration {
+    std::time::Duration::from_secs_f64(1.0 / f64::from(fps.max(1)))
+}
+
+/// Clamps the teacher's choices into ranges the recorder can deliver.
+fn clamp_options(mut o: RecordOptions) -> RecordOptions {
+    o.max_width = o.max_width.clamp(RecordingSettings::MIN_WIDTH, RecordingSettings::MAX_WIDTH) & !1;
+    o.max_height =
+        o.max_height.clamp(RecordingSettings::MIN_WIDTH, RecordingSettings::MAX_HEIGHT) & !1;
+    o.fps = o.fps.clamp(RecordingSettings::MIN_FPS, RecordingSettings::MAX_FPS);
+    o.quality = o.quality.min(51);
+    o.bframes = o.bframes.min(16);
+    o
+}
+
+/// Where finished frames go: ffmpeg (real codecs) if present, else the built-in MJPEG writer.
+enum Sink {
+    Ffmpeg(FfmpegRecorder),
+    Mjpeg {
+        recorder: Recorder,
+        out_w: u32,
+        out_h: u32,
+    },
+}
+
+impl Sink {
+    fn push(&mut self, native: &[u8], src_w: u32, src_h: u32) -> Result<(), String> {
+        match self {
+            Sink::Ffmpeg(rec) => rec.push_bgra(native),
+            Sink::Mjpeg {
+                recorder,
+                out_w,
+                out_h,
+            } => {
+                let scaled = resize::area_average(native, src_w, src_h, *out_w, *out_h);
+                if scaled.is_empty() {
+                    return Ok(());
+                }
+                let jpeg = media::encode_bgra(&scaled, *out_w, *out_h).map_err(|e| e.to_string())?;
+                recorder.push_jpeg(&jpeg).map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    fn frames(&self) -> u32 {
+        match self {
+            Sink::Ffmpeg(rec) => rec.frame_count(),
+            Sink::Mjpeg { recorder, .. } => recorder.frame_count(),
+        }
+    }
+
+    fn seconds(&self) -> f32 {
+        match self {
+            Sink::Ffmpeg(rec) => rec.seconds(),
+            Sink::Mjpeg { recorder, .. } => recorder.seconds(),
+        }
+    }
+
+    /// Closes the file and returns `(fps written, frame count, result)`.
+    fn finalize(self, elapsed: f32, target_fps: u32) -> (u32, u32, Result<(), String>) {
+        match self {
+            // ffmpeg tags at the requested rate; the loop paces to it, so it is real-time when the
+            // PC keeps up (and slightly fast if it cannot — a known limit of a live pipe).
+            Sink::Ffmpeg(rec) => {
+                let frames = rec.frame_count();
+                (target_fps, frames, rec.finish())
+            }
+            Sink::Mjpeg { mut recorder, .. } => {
+                recorder.set_measured_fps(elapsed);
+                let (fps, frames) = (recorder.fps(), recorder.frame_count());
+                let result = recorder.finish().map(|_| ()).map_err(|e| e.to_string());
+                (fps, frames, result)
+            }
+        }
+    }
+}
+
+/// Builds the sink, translating the wire options into ffmpeg arguments.
+fn make_sink(
+    ffmpeg: Option<&Path>,
+    path: &Path,
+    src_w: u32,
+    src_h: u32,
+    out_w: u32,
+    out_h: u32,
+    options: &RecordOptions,
+) -> Result<Sink, String> {
+    if let Some(ffmpeg) = ffmpeg {
+        let (codec_lib, preset, use_bframes, scaler) = ffmpeg_params(options);
+        let opts = FfmpegOptions {
+            out_width: out_w,
+            out_height: out_h,
+            fps: options.fps,
+            codec_lib: &codec_lib,
+            preset: &preset,
+            crf: options.quality,
+            bframes: options.bframes,
+            use_bframes,
+            scaler: &scaler,
+        };
+        let rec = FfmpegRecorder::create(ffmpeg, path, src_w, src_h, &opts)
+            .map_err(|e| format!("ffmpeg: {e}"))?;
+        Ok(Sink::Ffmpeg(rec))
+    } else {
+        let rec = Recorder::create(path, out_w, out_h, options.fps)
+            .map_err(|e| format!("cannot write the recording: {e}"))?;
+        Ok(Sink::Mjpeg {
+            recorder: rec,
+            out_w,
+            out_h,
+        })
+    }
+}
+
+/// Maps the wire codec/preset/scaler to the ffmpeg encoder library, preset string, whether `-bf`
+/// applies, and the scale filter name.
+fn ffmpeg_params(o: &RecordOptions) -> (String, String, bool, String) {
+    use proto::{Codec, Preset, Scaler};
+    let codec_lib = match o.codec {
+        Codec::H264 => "libx264",
+        Codec::H265 => "libx265",
+        Codec::Av1 => "libsvtav1",
+    };
+    let x264_preset = match o.preset {
+        Preset::Ultrafast => "ultrafast",
+        Preset::Superfast => "superfast",
+        Preset::Veryfast => "veryfast",
+        Preset::Faster => "faster",
+        Preset::Fast => "fast",
+        Preset::Medium => "medium",
+        Preset::Slow => "slow",
+        Preset::Slower => "slower",
+        Preset::Veryslow => "veryslow",
+    };
+    // libsvtav1 presets are numbers, 0 (slowest) .. 13 (fastest).
+    let av1_preset = match o.preset {
+        Preset::Ultrafast => "12",
+        Preset::Superfast => "11",
+        Preset::Veryfast => "10",
+        Preset::Faster => "9",
+        Preset::Fast => "8",
+        Preset::Medium => "7",
+        Preset::Slow => "5",
+        Preset::Slower => "3",
+        Preset::Veryslow => "1",
+    };
+    let (preset, use_bframes) = match o.codec {
+        Codec::Av1 => (av1_preset.to_string(), false),
+        _ => (x264_preset.to_string(), true),
+    };
+    let scaler = match o.scaler {
+        Scaler::Bilinear => "bilinear",
+        Scaler::Bicubic => "bicubic",
+        Scaler::Lanczos => "lanczos",
+        Scaler::Neighbor => "neighbor",
+    };
+    (codec_lib.to_string(), preset, use_bframes, scaler.to_string())
 }
 
 /// Where recordings are kept on this PC.

@@ -38,6 +38,7 @@ impl CaptureError {
 }
 
 pub mod audio;
+pub mod ffmpeg;
 pub mod h264;
 pub mod jpeg;
 pub mod recorder;

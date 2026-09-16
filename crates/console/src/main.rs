@@ -483,9 +483,15 @@ async fn cmd_record(args: Vec<String>) -> Result<(), String> {
     let height: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1080);
     let fps: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(30);
 
+    let options = proto::RecordOptions {
+        max_width: width,
+        max_height: height,
+        fps,
+        ..proto::RecordOptions::default()
+    };
     let (endpoint, mut session) = connect_paired(agent_key).await?;
     let started = session
-        .start_recording(0, width, height, fps)
+        .start_recording(0, options)
         .await
         .map_err(|e| e.to_string())?;
     if !started.active {
