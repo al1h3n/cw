@@ -59,6 +59,11 @@ export interface RecordingInfo {
   problem: string
 }
 
+export interface StoredRecording {
+  file: string
+  bytes: number
+}
+
 export interface AppEntry {
   id: number
   name: string

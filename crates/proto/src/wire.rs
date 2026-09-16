@@ -588,6 +588,18 @@ pub enum Control {
     ListRecordings,
     /// Agent → Console: the recordings it has kept.
     Recordings(Vec<StoredRecording>),
+    /// Console → Agent: send me this stored recording (a bare file name from `Recordings`).
+    FetchRecording {
+        /// The file to send — validated as a bare name inside the Agent's recordings folder.
+        file: String,
+    },
+    /// Agent → Console: the recording is coming on a uni-stream (or `problem` says why not).
+    RecordingTransfer {
+        /// Total bytes to expect on the uni-stream.
+        size: u64,
+        /// Non-empty when the file cannot be sent (unknown name, gone).
+        problem: String,
+    },
     /// Console → Agent: what programs can this PC start?
     ListApps,
     /// Agent → Console: the programs it offers, as `(id, name)` pairs.

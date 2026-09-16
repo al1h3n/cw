@@ -388,6 +388,25 @@ fn parse_scaler(s: &str) -> proto::Scaler {
     }
 }
 
+/// Lists the recordings stored on one PC.
+#[tauri::command]
+async fn list_recordings(
+    state: State<'_, AppState>,
+    device_id: String,
+) -> Result<Vec<proto::StoredRecording>, String> {
+    state.manager.list_recordings(&device_id).await
+}
+
+/// Downloads one recording to this teacher's PC, returning where it was saved.
+#[tauri::command]
+async fn download_recording(
+    state: State<'_, AppState>,
+    device_id: String,
+    file: String,
+) -> Result<String, String> {
+    state.manager.download_recording(&device_id, &file).await
+}
+
 /// Stops the recording on one PC.
 #[tauri::command]
 async fn stop_recording(
@@ -572,6 +591,8 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             start_recording,
             stop_recording,
             recording_status,
+            list_recordings,
+            download_recording,
             list_apps,
             launch_app,
             list_running,

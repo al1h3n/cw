@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
   import { t } from './i18n.svelte'
-  import type { RecordingInfo } from './types'
+  import type { RecordingInfo, StoredRecording } from './types'
 
   /** Start/stop recording for one PC, with the codec, size, rate and quality the teacher picks. */
   let { deviceId, onerror }: { deviceId: string; onerror: (message: string) => void } = $props()
@@ -28,6 +28,35 @@
   let quality = $state(23)
   let bframes = $state(8)
   let scaler = $state('lanczos')
+
+  // Recordings stored on the student PC, so the teacher can pull them to their own PC.
+  let stored = $state<StoredRecording[]>([])
+  let downloading = $state('')
+  let saved = $state('')
+
+  async function loadStored() {
+    try {
+      stored = await invoke<StoredRecording[]>('list_recordings', { deviceId })
+    } catch {
+      stored = []
+    }
+  }
+
+  async function download(file: string) {
+    downloading = file
+    saved = ''
+    try {
+      saved = await invoke<string>('download_recording', { deviceId, file })
+    } catch (e) {
+      onerror(String(e))
+    } finally {
+      downloading = ''
+    }
+  }
+
+  function mb(bytes: number) {
+    return `${(bytes / 1048576).toFixed(1)} MB`
+  }
 
   const recording = $derived(info?.active === true)
 
@@ -97,7 +126,14 @@
       {t('recStop', info?.frames ?? 0)}
     </button>
   {:else}
-    <button class="rec" onclick={() => (open = !open)} disabled={busy}>{t('recStart')}</button>
+    <button
+      class="rec"
+      onclick={() => {
+        open = !open
+        if (open) loadStored()
+      }}
+      disabled={busy}>{t('recStart')}</button
+    >
   {/if}
 
   {#if open && !recording}
@@ -169,6 +205,24 @@
         <button class="primary" onclick={start} disabled={busy}>{t('recStart')}</button>
         <button onclick={() => (open = false)}>{t('cancel')}</button>
       </div>
+
+      {#if stored.length > 0}
+        <p class="label">{t('recSaved')}</p>
+        <ul class="saved">
+          {#each [...stored].reverse().slice(0, 8) as r (r.file)}
+            <li>
+              <span class="fname" title={r.file}>{r.file}</span>
+              <span class="sz">{mb(r.bytes)}</span>
+              <button onclick={() => download(r.file)} disabled={downloading === r.file}>
+                {downloading === r.file ? '…' : t('recDownload')}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      {#if saved}
+        <p class="ok">{t('recSavedTo', saved)}</p>
+      {/if}
     </div>
   {/if}
 </span>
@@ -303,5 +357,47 @@
 
   .primary {
     flex: 1;
+  }
+
+  .saved {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 4px;
+    max-height: 30vh;
+    overflow: auto;
+  }
+
+  .saved li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+
+  .fname {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sz {
+    color: var(--muted);
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  .ok {
+    margin: 6px 2px 0;
+    color: var(--live);
+    font-size: 11px;
+    word-break: break-all;
   }
 </style>

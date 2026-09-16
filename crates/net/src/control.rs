@@ -195,6 +195,14 @@ pub trait AgentDevice {
         Vec::new()
     }
 
+    /// Resolves a stored recording's **bare file name** to a full path, but only if it is a real
+    /// file inside this device's recordings folder — the trust boundary that keeps "fetch a
+    /// recording" from becoming "read any file". The default has none.
+    fn recording_path(&self, file: &str) -> Option<std::path::PathBuf> {
+        let _ = file;
+        None
+    }
+
     /// The programs this PC offers to start.
     ///
     /// The Agent publishes its own catalogue; a Console can only pick from it. The default offers
@@ -574,6 +582,61 @@ impl ControlSession {
         }
     }
 
+    /// Console side: download a stored recording from this PC into `dest_dir`, returning the saved
+    /// path. The bytes arrive on their own uni-stream, so a large file never blocks the control
+    /// channel.
+    ///
+    /// # Errors
+    /// Stream failure, an unexpected reply, or the Agent cannot send that file.
+    pub async fn fetch_recording(
+        &mut self,
+        file: &str,
+        dest_dir: &std::path::Path,
+    ) -> Result<std::path::PathBuf, EndpointError> {
+        use tokio::io::AsyncWriteExt;
+        write_message(
+            &mut self.send,
+            &Control::FetchRecording {
+                file: file.to_string(),
+            },
+        )
+        .await?;
+        let size = match read_message::<Control>(&mut self.recv).await? {
+            Control::RecordingTransfer { size, problem } if problem.is_empty() => size,
+            Control::RecordingTransfer { problem, .. } => {
+                return Err(EndpointError::Capture(problem));
+            }
+            Control::Error(err) => return Err(EndpointError::ControlRefused(err)),
+            _ => return Err(EndpointError::Protocol),
+        };
+        let mut recv = tokio::time::timeout(VIDEO_START_TIMEOUT, self.conn.accept_uni())
+            .await
+            .map_err(|_| EndpointError::Connection("the recording did not start in time".into()))?
+            .map_err(|e| EndpointError::Connection(e.to_string()))?;
+
+        std::fs::create_dir_all(dest_dir).map_err(|e| EndpointError::Stream(e.to_string()))?;
+        let dest = dest_dir.join(sanitize_file_name(file));
+        let mut out = tokio::fs::File::create(&dest)
+            .await
+            .map_err(|e| EndpointError::Stream(e.to_string()))?;
+        let mut remaining = size;
+        let mut buf = vec![0u8; 64 * 1024];
+        while remaining > 0 {
+            let want = buf.len().min(usize::try_from(remaining).unwrap_or(buf.len()));
+            recv.read_exact(&mut buf[..want])
+                .await
+                .map_err(|e| EndpointError::Stream(e.to_string()))?;
+            out.write_all(&buf[..want])
+                .await
+                .map_err(|e| EndpointError::Stream(e.to_string()))?;
+            remaining -= want as u64;
+        }
+        out.flush()
+            .await
+            .map_err(|e| EndpointError::Stream(e.to_string()))?;
+        Ok(dest)
+    }
+
     /// Reads the one reply every recording request produces.
     async fn read_recording_state(&mut self) -> Result<proto::RecordingInfo, EndpointError> {
         match read_message::<Control>(&mut self.recv).await? {
@@ -835,6 +898,48 @@ impl ControlSession {
                     let list = source.list_recordings();
                     write_message(&mut self.send, &Control::Recordings(list)).await?;
                 }
+                Control::FetchRecording { file } => match source.recording_path(&file) {
+                    Some(path) => {
+                        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                        write_message(
+                            &mut self.send,
+                            &Control::RecordingTransfer {
+                                size,
+                                problem: String::new(),
+                            },
+                        )
+                        .await?;
+                        // The bytes ride their own uni-stream so a big file never stalls control.
+                        let conn = self.conn.clone();
+                        tokio::spawn(async move {
+                            use tokio::io::AsyncReadExt;
+                            let Ok(mut uni) = conn.open_uni().await else {
+                                return;
+                            };
+                            if let Ok(mut file) = tokio::fs::File::open(&path).await {
+                                let mut buf = vec![0u8; 64 * 1024];
+                                loop {
+                                    match file.read(&mut buf).await {
+                                        Ok(0) => break,
+                                        Ok(n) if uni.write_all(&buf[..n]).await.is_ok() => {}
+                                        _ => break,
+                                    }
+                                }
+                            }
+                            let _ = uni.finish();
+                        });
+                    }
+                    None => {
+                        write_message(
+                            &mut self.send,
+                            &Control::RecordingTransfer {
+                                size: 0,
+                                problem: "no such recording on this PC".into(),
+                            },
+                        )
+                        .await?;
+                    }
+                },
                 Control::ListApps => {
                     write_message(&mut self.send, &Control::Apps(source.list_apps())).await?;
                 }
@@ -893,6 +998,16 @@ const VIDEO_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// The largest single encoded video frame we will accept, as a trust boundary. A 4K keyframe is a
 /// few hundred kilobytes; 8 MiB is far above anything legitimate and far below anything dangerous.
 const MAX_VIDEO_FRAME: u32 = 8 * 1024 * 1024;
+
+/// Reduces a name to its last path component, so a name from a peer can never write outside the
+/// chosen folder (`..\..\evil` becomes `evil`).
+fn sanitize_file_name(name: &str) -> String {
+    std::path::Path::new(name)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "recording.bin".to_string())
+}
 
 /// Writes one length-prefixed encoded frame to the video uni-stream.
 async fn write_video_frame(send: &mut SendStream, packet: &[u8]) -> Result<(), EndpointError> {
@@ -986,5 +1101,21 @@ async fn read_hello(recv: &mut RecvStream) -> Result<Hello, EndpointError> {
             Ok(hello)
         }
         _ => Err(EndpointError::Protocol),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_file_name;
+
+    #[test]
+    fn a_recording_name_can_never_escape_its_folder() {
+        // Whatever a peer sends, only the final component survives, so a download can never be
+        // written outside the chosen directory.
+        assert_eq!(sanitize_file_name("recording-abc.mp4"), "recording-abc.mp4");
+        assert_eq!(sanitize_file_name(r"..\..\Windows\system32\evil.dll"), "evil.dll");
+        assert_eq!(sanitize_file_name("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_file_name(""), "recording.bin");
+        assert_eq!(sanitize_file_name("/"), "recording.bin");
     }
 }

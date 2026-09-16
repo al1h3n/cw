@@ -123,6 +123,15 @@ enum DeviceRequest {
     RecordingStatus {
         reply: tokio::sync::oneshot::Sender<proto::RecordingInfo>,
     },
+    /// What recordings are stored on this PC.
+    ListRecordings {
+        reply: tokio::sync::oneshot::Sender<Vec<proto::StoredRecording>>,
+    },
+    /// Download one recording to the teacher's PC; the reply is the saved path or an error.
+    FetchRecording {
+        file: String,
+        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
     /// What this PC can start.
     ListApps {
         reply: tokio::sync::oneshot::Sender<Vec<proto::AppEntry>>,
@@ -642,6 +651,32 @@ impl DeviceManager {
     ///
     /// # Errors
     /// See [`DeviceManager::ask`].
+    /// Lists the recordings stored on one PC.
+    ///
+    /// # Errors
+    /// The PC is unknown or not connected.
+    pub async fn list_recordings(
+        &self,
+        device_id: &str,
+    ) -> Result<Vec<proto::StoredRecording>, String> {
+        self.ask(device_id, |reply| DeviceRequest::ListRecordings { reply })
+            .await
+    }
+
+    /// Downloads one recording from a PC to this teacher's `recordings` folder, returning the saved
+    /// path.
+    ///
+    /// # Errors
+    /// The PC is unknown, not connected, or the file could not be transferred.
+    pub async fn download_recording(&self, device_id: &str, file: &str) -> Result<String, String> {
+        let file = file.to_string();
+        self.ask(device_id, move |reply| DeviceRequest::FetchRecording {
+            file,
+            reply,
+        })
+        .await?
+    }
+
     pub async fn recording_status(&self, device_id: &str) -> Result<proto::RecordingInfo, String> {
         self.ask(device_id, |reply| DeviceRequest::RecordingStatus { reply })
             .await
@@ -979,6 +1014,19 @@ impl DeviceManager {
                             .await
                             .map_err(|e| e.to_string())?;
                         let _ = reply.send(info);
+                    }
+                    DeviceRequest::ListRecordings { reply } => {
+                        let list = session.list_recordings().await.map_err(|e| e.to_string())?;
+                        let _ = reply.send(list);
+                    }
+                    DeviceRequest::FetchRecording { file, reply } => {
+                        let dest = self.data_dir.join("recordings");
+                        let result = session
+                            .fetch_recording(&file, &dest)
+                            .await
+                            .map(|p| p.display().to_string())
+                            .map_err(|e| e.to_string());
+                        let _ = reply.send(result);
                     }
                     DeviceRequest::ListApps { reply } => {
                         let apps = session.request_apps().await.map_err(|e| e.to_string())?;

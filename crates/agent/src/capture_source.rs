@@ -462,6 +462,20 @@ impl AgentDevice for ScreenCapture {
         out
     }
 
+    fn recording_path(&self, file: &str) -> Option<std::path::PathBuf> {
+        // Trust boundary: a bare file name only, that really exists in our recordings folder — never
+        // a path with separators or `..`, so a Console can never pull an arbitrary file off the PC.
+        if file.is_empty()
+            || file.contains('/')
+            || file.contains('\\')
+            || file.contains("..")
+        {
+            return None;
+        }
+        let path = self.recordings_dir.join(file);
+        path.is_file().then_some(path)
+    }
+
     fn list_apps(&self) -> Vec<proto::AppEntry> {
         platform::apps::list_apps()
             .into_iter()
