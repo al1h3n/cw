@@ -28,6 +28,21 @@
   } = $props()
 
   let showApps = $state(false)
+  let examOn = $state(false)
+
+  async function toggleExam() {
+    try {
+      const [locked, problem] = await invoke<[boolean, string]>('set_exam', {
+        deviceId: device.device_id,
+        on: !examOn,
+        message: t('examMessage'),
+      })
+      examOn = locked
+      if (!locked && problem) onerror(problem)
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
 
   // Full-resolution native viewer (ADR D12): the small JPEG below is the grid preview; this opens a
   // real window that decodes the live H.264 stream and can drive the PC. Resolution and rate are the
@@ -222,6 +237,9 @@
         <button onclick={() => openViewer(true)} title={t('liveControlHint')}>{t('liveControl')}</button>
       </span>
       <button onclick={() => (showApps = true)}>{t('appsButton')}</button>
+      <button class="listen" class:on={examOn} onclick={toggleExam} title={t('examHint')}>
+        {examOn ? t('examStop') : t('examStart')}
+      </button>
       <RecordButton deviceId={device.device_id} {onerror} />
       <ActionResult report={device.last_action} />
       <ActionMenu deviceId={device.device_id} liveCount={device.status === 'live' ? 1 : 0} {onerror} />

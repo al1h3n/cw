@@ -9,6 +9,7 @@ pub mod apps;
 pub mod console;
 pub mod input;
 pub mod power;
+pub mod examlock;
 pub mod present;
 pub mod process;
 pub mod secret;

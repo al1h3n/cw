@@ -388,6 +388,17 @@ fn parse_scaler(s: &str) -> proto::Scaler {
     }
 }
 
+/// Starts or ends exam lockdown on one PC. Returns `[locked, problem]`.
+#[tauri::command]
+async fn set_exam(
+    state: State<'_, AppState>,
+    device_id: String,
+    on: bool,
+    message: String,
+) -> Result<(bool, String), String> {
+    state.manager.set_exam(&device_id, on, &message).await
+}
+
 /// Lists the recordings stored on one PC.
 #[tauri::command]
 async fn list_recordings(
@@ -593,6 +604,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             recording_status,
             list_recordings,
             download_recording,
+            set_exam,
             list_apps,
             launch_app,
             list_running,

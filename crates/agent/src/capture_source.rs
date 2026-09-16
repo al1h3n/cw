@@ -29,6 +29,8 @@ pub struct ScreenCapture {
     recording: Mutex<Option<crate::recording::Recording>>,
     /// The full-screen broadcast window, while a teacher is presenting. Dropping it closes it.
     broadcast: Mutex<Option<platform::present::Presenter>>,
+    /// The exam lock, while the PC is locked down for an exam. Dropping it restores the desktop.
+    exam: Mutex<Option<platform::examlock::ExamLock>>,
     /// Where recordings are written.
     recordings_dir: std::path::PathBuf,
     /// True while a teacher is watching and the wallpaper is blacked out (D11).
@@ -82,6 +84,7 @@ impl ScreenCapture {
             controlled: Mutex::new(false),
             recording: Mutex::new(None),
             broadcast: Mutex::new(None),
+            exam: Mutex::new(None),
             recordings_dir: recordings_dir.to_path_buf(),
             watched: Mutex::new(false),
             stream: Mutex::new(None),
@@ -395,6 +398,34 @@ impl AgentDevice for ScreenCapture {
                 .note(net::endpoint::now_ms(), from.device_id, "broadcast-stop");
         }
         (false, String::new())
+    }
+
+    fn set_exam(&self, from: &PeerInfo, on: bool, message: &str) -> (bool, String) {
+        let mut slot = self.exam.lock().unwrap_or_else(|e| e.into_inner());
+        if on {
+            // Replacing any current lock with a fresh one keeps a single lock desktop at a time.
+            *slot = None;
+            match platform::examlock::ExamLock::start(message) {
+                Ok(lock) => {
+                    *slot = Some(lock);
+                    println!("console {} started exam lock", from.device_id);
+                    let _ = self
+                        .audit
+                        .note(net::endpoint::now_ms(), from.device_id, "exam-start");
+                    (true, String::new())
+                }
+                Err(err) => (false, err.to_string()),
+            }
+        } else {
+            // Dropping the lock switches the desktop back and closes the lock desktop.
+            if slot.take().is_some() {
+                println!("console {} ended exam lock", from.device_id);
+                let _ = self
+                    .audit
+                    .note(net::endpoint::now_ms(), from.device_id, "exam-stop");
+            }
+            (false, String::new())
+        }
     }
 
     fn start_recording(

@@ -568,6 +568,20 @@ pub enum Control {
         /// Empty unless something went wrong.
         problem: String,
     },
+    /// Console → Agent: start (or end) exam lockdown — a fullscreen lock on a separate desktop.
+    SetExam {
+        /// True to lock the PC, false to release it.
+        on: bool,
+        /// The message shown on the lock (ignored when `on` is false).
+        message: String,
+    },
+    /// Agent → Console: whether the PC is locked, and why not if the request failed.
+    ExamState {
+        /// True while the exam lock is up.
+        active: bool,
+        /// Empty unless the lock could not be started.
+        problem: String,
+    },
     /// Console → Agent: start recording this PC's screen to a file on that PC.
     ///
     /// The Agent clamps every value and reports back what it is *actually* recording, so a teacher

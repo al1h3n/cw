@@ -150,6 +150,13 @@ pub trait AgentDevice {
         (false, String::new())
     }
 
+    /// Starts or ends exam lockdown (a fullscreen lock on a separate desktop). Returns whether the
+    /// PC is now locked, and a reason if it could not be. The default cannot lock.
+    fn set_exam(&self, from: &PeerInfo, on: bool, message: &str) -> (bool, String) {
+        let _ = (from, on, message);
+        (false, "this device cannot lock for an exam".to_string())
+    }
+
     /// Starts recording this PC's screen, returning what it is actually recording.
     ///
     /// The default refuses by reporting an inactive recording, so a device that cannot record simply
@@ -523,6 +530,23 @@ impl ControlSession {
         self.read_broadcast_state().await
     }
 
+    /// Console side: start or end exam lockdown on this PC. Returns `(locked, problem)`.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn set_exam(
+        &mut self,
+        on: bool,
+        message: String,
+    ) -> Result<(bool, String), EndpointError> {
+        write_message(&mut self.send, &Control::SetExam { on, message }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::ExamState { active, problem } => Ok((active, problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Reads the reply both broadcast requests produce.
     async fn read_broadcast_state(&mut self) -> Result<(bool, String), EndpointError> {
         match read_message::<Control>(&mut self.recv).await? {
@@ -881,6 +905,10 @@ impl ControlSession {
                         &Control::BroadcastState { showing, problem },
                     )
                     .await?;
+                }
+                Control::SetExam { on, message } => {
+                    let (active, problem) = source.set_exam(&self.peer, on, &message);
+                    write_message(&mut self.send, &Control::ExamState { active, problem }).await?;
                 }
                 Control::StartRecording { monitor, options } => {
                     let info = source.start_recording(&self.peer, monitor, options);

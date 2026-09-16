@@ -20,7 +20,7 @@ see [Impossible, and deliberately refused](#impossible-and-deliberately-refused)
 | 1 | Screen share, pin other monitors, virtual desktops | **done** | Every monitor is enumerated and selectable per PC. The grid uses change-only JPEG thumbnails at a teacher-chosen width; opening one screen now gives a real **H.264 video stream** on its own QUIC uni-stream. Measured on the dev PC: 720p30 and 1080p30 both at a true 30.2 fps, every packet decoded, and about 57–78 kbit/s on a near-idle screen — a full 1080p stream for roughly what one 320×180 JPEG thumbnail used to cost. Inactive virtual desktops cannot be captured by anyone — see *Impossible*. |
 | 2 | Audio share, on/off switch | **done** | WASAPI loopback of what the student hears, downmixed to mono and decimated to ~16 kHz (~256 kbit/s). Off until asked for, and exclusive: one PC at a time. Verified end to end — 16 kHz mono, 64 000 samples for 4.0 s, loud while a tone played and exactly 0 in silence. Raw PCM for now; Opus would cut it to ~32 kbit/s when several PCs need listening at once. |
 | 3 | Remote mouse and keyboard, Win key captured, exit chord | **done** | Move, click, scroll, keys and direct Unicode. Positions travel as screen *fractions*, so a teacher on 1080p driving a student on 1440p (or a scaled display, or a second monitor) lands where they meant. Input is dropped unless the teacher has explicitly taken control, and taking or releasing it is audit-logged. Win goes to the remote PC; plain Esc still reaches the remote program; **Ctrl+Alt+Esc** hands the keyboard back; every held modifier is released when control ends. Verified live: refused before consent, then a click focused Notepad and the typed text read back exactly. Still missing: the low-level hook that stops the *local* PC reacting too (the decision function is written and unit-tested; the hook needs a physical-keyboard check). |
-| 4 | Lock screen like parental controls | **partial** | One PC or the whole room can be locked now — the standard Windows lock, as Win+L. The full-screen *custom* lock (separate Win32 desktop, spike 0.8) that the student cannot unlock without the teacher is #10. |
+| 4 | Lock screen like parental controls | **partial** (built, unverified) | Two locks now: the standard Windows lock (Win+L), and **exam lockdown** — a fullscreen message window on a **separate Win32 desktop** (`CreateDesktopW` + `SwitchDesktop`, spike 0.8) that the student cannot Alt+Tab or Win-key away from; the teacher starts/ends it. Built but not yet verified live (it seizes the desktop, so it needs a VM/second machine). Honest limits: **Ctrl+Alt+Del** always reaches Winlogon, and Task Manager is not yet disabled — locking those down needs the policy engine (`DisableTaskMgr`). A per-PC custom lock UI (#10) builds on this. |
 | 5 | Shut down / power off all or one PC | **done** | Shut down, restart, sign out and cancel, for one PC or the whole room, with a Now / 1 min / 5 min warning. Windows shows its own localised countdown; an immediate shutdown force-closes programs. Offline PCs are never queued. Every action is audit-logged (D3). **Wake-on-LAN** is built too: the Console (or an awake Agent in the same room) broadcasts a magic packet for a PC's stored MAC; the PC wakes if its BIOS/UEFI has WoL enabled (a one-time IT setting). Verified live: countdown started+cancelled; a wake packet broadcast on the LAN. |
 | 6 | Constant wallpaper nobody can change | **built, needs the service (which now exists)** | The `NoChangingWallPaper` policy is now enforced by the Agent **service** (`cowatcher-agent install` / `run`), which runs as LocalSystem and so can write the admin-only Policies hive. Installing the service needs one elevated command; verifying the whole install→boot→enforce path needs an admin machine or VM (the elevation gate is unchanged). A *specific* school image still needs file transfer. |
 | 7 | Keep student files temporarily, wipe with one button, host can browse | planned | Baseline + diff design; wipe must be scope-proven by tests. |
@@ -136,13 +136,13 @@ interface now is what keeps that door open, and costs nothing today.
 
 ## What to build next, in value order
 
-1. **The exam lock screen** (#4, #10): a separate Win32 desktop the student cannot escape. Spike 0.8
-   already proved it works; it is what turns broadcast into presentation mode and lock into a real
-   lock, and it unblocks the single biggest gap in the product.
+1. **Verify + harden exam lockdown** (#4/#10): the separate-desktop lock is built — verify it on a VM,
+   then disable Task Manager (`DisableTaskMgr` policy) and add an allow-list of apps that may run on
+   the lock desktop, turning "freeze the PC" into a real exam environment.
 2. **Policy engine** (2.1) so lock, power and wallpaper survive a reboot the way blocking already
    does, signed and enforced offline (#24, #6).
-3. **Two-pass recording** (#12): a small post-record re-encode pass for the best size/quality, the one
-   recording option currently stubbed but not applied (a live pipe cannot do 2-pass).
+3. **The D3 indicator trio**: tray icon, "being viewed" badge, un-disable-able login notice — a
+   release blocker (legal notice + lower antivirus/RAT flagging), currently entirely missing.
 4. **Exam mode** on top of the lock screen: collect and wipe student files (#7), play media once (#14).
 5. Then updates (#15), installer and role picker (#17), other platforms (#23), AI (#18–20).
 

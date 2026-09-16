@@ -150,6 +150,12 @@ enum DeviceRequest {
         pid: u32,
         reply: tokio::sync::oneshot::Sender<bool>,
     },
+    /// Start or end exam lockdown; the reply is `(locked, problem)`.
+    SetExam {
+        on: bool,
+        message: String,
+        reply: tokio::sync::oneshot::Sender<(bool, String)>,
+    },
 }
 
 /// Connection state of one device, in the order the UI colours them.
@@ -651,6 +657,25 @@ impl DeviceManager {
     ///
     /// # Errors
     /// See [`DeviceManager::ask`].
+    /// Starts or ends exam lockdown on one PC. Returns `(locked, problem)`.
+    ///
+    /// # Errors
+    /// The PC is unknown or not connected.
+    pub async fn set_exam(
+        &self,
+        device_id: &str,
+        on: bool,
+        message: &str,
+    ) -> Result<(bool, String), String> {
+        let message = message.to_string();
+        self.ask(device_id, move |reply| DeviceRequest::SetExam {
+            on,
+            message,
+            reply,
+        })
+        .await
+    }
+
     /// Lists the recordings stored on one PC.
     ///
     /// # Errors
@@ -1043,6 +1068,13 @@ impl DeviceManager {
                     DeviceRequest::CloseApp { pid, reply } => {
                         let closed = session.close_app(pid).await.map_err(|e| e.to_string())?;
                         let _ = reply.send(closed);
+                    }
+                    DeviceRequest::SetExam { on, message, reply } => {
+                        let state = session
+                            .set_exam(on, message)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let _ = reply.send(state);
                     }
                 }
             }
