@@ -189,6 +189,91 @@ impl Drop for FfmpegRecorder {
     }
 }
 
+/// Encoder settings for a two-pass re-encode.
+pub struct TwoPass<'a> {
+    /// The encoder library, e.g. `libx264`.
+    pub codec_lib: &'a str,
+    /// The encoder preset.
+    pub preset: &'a str,
+    /// Maximum consecutive B-frames.
+    pub bframes: u8,
+    /// Whether to pass `-bf`.
+    pub use_bframes: bool,
+    /// Target average bitrate in kbit/s.
+    pub target_kbps: u32,
+}
+
+/// Re-encodes an already-recorded file with a **two-pass** ABR encode, for the best size at a target
+/// bitrate. A live capture pipe cannot do this (pass 1 must see the whole input first), so it runs
+/// after recording, off the finished file.
+///
+/// # Errors
+/// A message if either ffmpeg pass fails.
+pub fn reencode_two_pass(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    opts: &TwoPass,
+) -> Result<(), String> {
+    let (codec_lib, preset, bframes, use_bframes) =
+        (opts.codec_lib, opts.preset, opts.bframes, opts.use_bframes);
+    // A unique log prefix so concurrent 2-pass jobs never clash.
+    let passlog = std::env::temp_dir().join(format!("cw-2pass-{}", std::process::id()));
+    let bitrate = format!("{}k", opts.target_kbps);
+
+    let run = |pass: &str, out_args: &[&str]| -> Result<(), String> {
+        let mut command = Command::new(ffmpeg);
+        command
+            .arg("-y")
+            .arg("-i")
+            .arg(input)
+            .args(["-c:v", codec_lib, "-b:v", &bitrate])
+            .args(["-pass", pass])
+            .arg("-passlogfile")
+            .arg(&passlog)
+            .args(["-preset", preset]);
+        if use_bframes {
+            command.args(["-bf", &bframes.to_string()]);
+        }
+        command
+            .args(out_args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let status = command
+            .status()
+            .map_err(|e| format!("run ffmpeg pass {pass}: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("ffmpeg pass {pass} exited with {status}"))
+        }
+    };
+
+    // Pass 1 analyses; pass 2 encodes to the output. The `-` is the null muxer's ignored target.
+    let pass1 = run("1", &["-an", "-f", "null", "-"]);
+    let result = pass1.and_then(|()| {
+        run(
+            "2",
+            &["-pix_fmt", "yuv420p", output.to_str().unwrap_or("out.mp4")],
+        )
+    });
+
+    // Clean up ffmpeg's pass-log files whatever happened.
+    for suffix in ["-0.log", "-0.log.mbtree", "-0.log.temp"] {
+        let mut p = passlog.clone().into_os_string();
+        p.push(suffix);
+        let _ = std::fs::remove_file(p);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +309,21 @@ mod tests {
         let bytes = std::fs::read(&out).expect("the mp4 exists");
         assert!(bytes.len() > 100, "the mp4 should not be empty");
         assert_eq!(&bytes[4..8], b"ftyp", "a real mp4 begins with an ftyp box");
+
+        // And a two-pass re-encode of it produces another valid mp4.
+        let two = std::env::temp_dir().join(format!("cw-2pass-out-{}.mp4", std::process::id()));
+        let params = TwoPass {
+            codec_lib: "libx264",
+            preset: "ultrafast",
+            bframes: 3,
+            use_bframes: true,
+            target_kbps: 800,
+        };
+        reencode_two_pass(&ffmpeg, &out, &two, &params).expect("two-pass should succeed");
+        let re = std::fs::read(&two).expect("the 2-pass mp4 exists");
+        assert_eq!(&re[4..8], b"ftyp", "the 2-pass output is a real mp4");
+
         let _ = std::fs::remove_file(&out);
+        let _ = std::fs::remove_file(&two);
     }
 }

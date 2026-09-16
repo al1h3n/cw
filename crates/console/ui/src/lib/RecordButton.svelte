@@ -28,6 +28,7 @@
   let quality = $state(23)
   let bframes = $state(8)
   let scaler = $state('lanczos')
+  let twoPass = $state(false)
 
   // Recordings stored on the student PC, so the teacher can pull them to their own PC.
   let stored = $state<StoredRecording[]>([])
@@ -95,7 +96,7 @@
         quality: Math.max(0, Math.min(51, Math.round(quality))),
         bframes: Math.max(0, Math.min(16, Math.round(bframes))),
         scaler,
-        twoPass: false,
+        twoPass,
       })
       if (!info.active) onerror(info.problem || t('recFailed'))
       open = false
@@ -200,6 +201,11 @@
         </label>
       </div>
 
+      <label class="check">
+        <input type="checkbox" bind:checked={twoPass} />
+        {t('recTwoPass')}
+      </label>
+
       <p class="note">{t('recNote')}</p>
       <div class="row">
         <button class="primary" onclick={start} disabled={busy}>{t('recStart')}</button>
@@ -292,6 +298,20 @@
 
   input[type='range'] {
     padding: 0;
+  }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 2px 0;
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+
+  .check input {
+    width: auto;
+    margin: 0;
   }
 
   .note {

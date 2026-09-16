@@ -225,6 +225,39 @@ fn run(
     let elapsed = started_at.elapsed().as_secs_f32();
     let (real_fps, frames, finished) = sink.finalize(elapsed, options.fps);
 
+    // Two-pass: a live pipe cannot do it, so re-encode the finished ffmpeg file in the background for
+    // a smaller file at the same quality. It replaces the file in place when done; a teacher who
+    // downloads before then simply gets the single-pass version, which is already valid.
+    if finished.is_ok()
+        && options.two_pass
+        && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
+        && let Some(ffmpeg) = ffmpeg
+    {
+        let (codec_lib, preset, use_bframes, _) = ffmpeg_params(&options);
+        let target = two_pass_kbps(width, height, options.fps);
+        let path = path.to_path_buf();
+        std::thread::spawn(move || {
+            let temp = path.with_extension("2pass.mp4");
+            let opts = media::ffmpeg::TwoPass {
+                codec_lib: &codec_lib,
+                preset: &preset,
+                bframes: options.bframes,
+                use_bframes,
+                target_kbps: target,
+            };
+            match media::ffmpeg::reencode_two_pass(&ffmpeg, &path, &temp, &opts) {
+                Ok(()) => {
+                    let _ = std::fs::rename(&temp, &path);
+                    println!("two-pass re-encode done: {}", path.display());
+                }
+                Err(err) => {
+                    eprintln!("two-pass re-encode failed: {err}");
+                    let _ = std::fs::remove_file(&temp);
+                }
+            }
+        });
+    }
+
     let mut status = status.lock().unwrap_or_else(|e| e.into_inner());
     status.active = false;
     status.fps = real_fps;
@@ -240,6 +273,12 @@ fn run(
     if let Err(err) = finished {
         status.problem = format!("closing the recording failed: {err}");
     }
+}
+
+/// A two-pass target bitrate (kbit/s) for screen content: ~0.07 bits per pixel per frame, clamped.
+fn two_pass_kbps(width: u32, height: u32, fps: u32) -> u32 {
+    let bits = f64::from(width) * f64::from(height) * f64::from(fps) * 0.07;
+    ((bits / 1000.0) as u32).clamp(500, 20_000)
 }
 
 /// The frame interval for a target rate (at least 1 fps).
