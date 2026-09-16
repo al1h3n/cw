@@ -6,7 +6,19 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
-**Status (2026-09-15):** first real two-machine test done, and it drove two fixes. The capture
+**Status (2026-09-16):** recording is now real video, not just MJPEG. When an `ffmpeg.exe` sits next
+to the Agent (or on PATH) the recorder pipes raw BGRA to it and encodes H.264/H.265/AV1 with a chosen
+preset, CRF quality, B-frames and the lanczos scaler at a custom size/rate (verified end-to-end by a
+test that produces a real mp4); without ffmpeg it falls back to the built-in MJPEG writer. Recordings
+can now be **downloaded to the teacher's PC** (`FetchRecording` over a QUIC uni-stream, path-traversal
+guarded). Also fixed this session: the grid+stream two-duplication contention (thumbnails go GDI while
+streaming), viewer control (was never forwarding input; green border now shows control), the wallpaper
+black-out is tied to the live-preview stream and restores on close (the service no longer auto-locks
+the wallpaper), PC renaming, the footer floating mid-screen, a resize-safe layout, a draggable/resizable
+Programs window with process search, and a DVD-style "disabled" easter egg. `PROTOCOL_VERSION` is 12.
+182 tests pass. **Next: two-pass recording, then the exam/lockdown mode.**
+
+**Earlier status (2026-09-15):** first real two-machine test done, and it drove two fixes. The capture
 storm — a student locking their PC made DXGI report `ACCESS_LOST` (shown as the misleading "keyed
 mutex was abandoned"), and *both* sides tore the session down and reconnected forever — is fixed:
 `ProtocolError::ScreenUnavailable` (transient) keeps the session alive on both sides, and the
