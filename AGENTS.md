@@ -6,6 +6,13 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-16, later):** **exam lockdown** exists — `platform::examlock` puts a fullscreen
+message window on a **separate Win32 desktop** (`CreateDesktopW` + `SwitchDesktop`) the student can't
+Alt+Tab or Win-key away from, toggled from the focused view (`Control::SetExam`, `PROTOCOL_VERSION`
+13). It is **built but unverified** — running it seizes the desktop, so it needs a VM/second machine;
+Ctrl+Alt+Del and Task Manager are not yet blocked (policy engine, next). Recording also gained
+**two-pass** (a background re-encode after capture, since a live pipe can't 2-pass). 183 tests pass.
+
 **Status (2026-09-16):** recording is now real video, not just MJPEG. When an `ffmpeg.exe` sits next
 to the Agent (or on PATH) the recorder pipes raw BGRA to it and encodes H.264/H.265/AV1 with a chosen
 preset, CRF quality, B-frames and the lanczos scaler at a custom size/rate (verified end-to-end by a
