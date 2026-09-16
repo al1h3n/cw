@@ -9,13 +9,32 @@
     onopen,
     onmonitor,
     onwake,
+    onrename,
   }: {
     device: Device
     watching: boolean
     onopen: () => void
     onmonitor: (index: number) => void
     onwake: () => void
+    onrename: (name: string) => void
   } = $props()
+
+  let editing = $state(false)
+  let draft = $state('')
+
+  function startEdit() {
+    draft = device.name ?? ''
+    editing = true
+  }
+  function commit() {
+    if (!editing) return
+    editing = false
+    onrename(draft.trim())
+  }
+  function focusInput(node: HTMLInputElement) {
+    node.focus()
+    node.select()
+  }
 
   const label = $derived(
     device.status === 'live'
@@ -39,7 +58,26 @@
   </button>
 
   <div class="bar">
-    <span class="id">{device.device_id}</span>
+    {#if editing}
+      <input
+        class="rename"
+        bind:value={draft}
+        use:focusInput
+        placeholder={t('renamePlaceholder')}
+        aria-label={t('rename')}
+        onkeydown={(e) => {
+          if (e.key === 'Enter') commit()
+          else if (e.key === 'Escape') editing = false
+        }}
+        onblur={commit}
+      />
+    {:else}
+      <button class="title" onclick={startEdit} title={t('rename')}>
+        <span class="primary">{device.name ?? device.device_id}</span>
+        {#if device.name}<span class="idsub">{device.device_id}</span>{/if}
+        <span class="pencil" aria-hidden="true">✎</span>
+      </button>
+    {/if}
     <span class="status">
       <ActionResult report={device.last_action} />
       {#if device.status === 'offline' && device.macs.length > 0}
@@ -121,10 +159,59 @@
     padding: 8px 10px;
   }
 
-  .id {
-    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  .title {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
+    padding: 2px 4px;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    color: var(--text);
+    cursor: text;
+  }
+
+  .title:hover {
+    background: var(--bg);
+  }
+
+  .title:hover .pencil {
+    opacity: 0.7;
+  }
+
+  .primary {
     font-size: 13px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .idsub {
+    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+    font-size: 11px;
     letter-spacing: 0.4px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+
+  .pencil {
+    font-size: 11px;
+    color: var(--muted);
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+
+  .rename {
+    flex: 1;
+    min-width: 0;
+    padding: 3px 7px;
+    font-size: 13px;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    color: var(--text);
   }
 
   .status {

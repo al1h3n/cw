@@ -76,6 +76,15 @@
     }
   }
 
+  async function rename(deviceId: string, name: string) {
+    try {
+      await invoke('rename_device', { deviceId, name })
+      await refresh()
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
   async function chooseMonitor(deviceId: string, index: number) {
     try {
       await invoke('set_monitor', { deviceId, monitor: index })
@@ -196,6 +205,7 @@
             onopen={() => open(device.device_id)}
             onmonitor={(index) => chooseMonitor(device.device_id, index)}
             onwake={() => wake(device.device_id)}
+            onrename={(name) => rename(device.device_id, name)}
           />
         {/each}
       </div>

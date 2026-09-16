@@ -33,6 +33,8 @@ pub const DEFAULT_FOCUSED_WIDTH: u16 = 1280;
 pub struct DeviceView {
     /// The six-character handle a teacher sees.
     pub device_id: String,
+    /// The teacher's own name for this PC, if they set one. Shown above the id.
+    pub name: Option<String>,
     /// The endpoint public key, hex encoded (used to dial).
     pub key: String,
     /// Connection state.
@@ -162,6 +164,8 @@ pub enum DeviceStatus {
 /// Not `Debug`: it holds one-shot reply channels, which have nothing useful to print.
 struct DeviceState {
     key: [u8; 32],
+    /// The teacher's own name for this PC (e.g. "Row 3, seat 2"), shown above the id. Persisted.
+    name: Option<String>,
     status: DeviceStatus,
     screen: Option<String>,
     detail: Option<String>,
@@ -183,6 +187,7 @@ impl DeviceState {
     fn new(key: [u8; 32]) -> Self {
         Self {
             key,
+            name: None,
             status: DeviceStatus::Idle,
             screen: None,
             detail: None,
@@ -281,11 +286,14 @@ impl DeviceManager {
             })
             .unwrap_or_default();
 
+        let names = load_names(&dir.join("names.txt"));
         let devices = trust
             .keys()
             .map(|key| {
                 let id = DeviceId::from_public_key(key).to_string();
-                (id, DeviceState::new(*key))
+                let mut state = DeviceState::new(*key);
+                state.name = names.get(&id).cloned();
+                (id, state)
             })
             .collect();
 
@@ -333,6 +341,37 @@ impl DeviceManager {
             .map_err(|e| e.to_string())
     }
 
+    /// Sets (or clears, with an empty name) the teacher's custom name for one PC, and saves it.
+    ///
+    /// # Errors
+    /// The device is unknown, or the names file cannot be written.
+    pub fn rename(&self, device_id: &str, name: &str) -> Result<(), String> {
+        let trimmed = name.trim();
+        {
+            let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+            let state = devices.get_mut(device_id).ok_or("unknown device")?;
+            state.name = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        self.save_names()
+    }
+
+    /// Writes every custom name to `names.txt`, one `id = name` per line.
+    fn save_names(&self) -> Result<(), String> {
+        let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        let mut out = String::new();
+        for (id, state) in devices.iter() {
+            if let Some(name) = &state.name {
+                out.push_str(&format!("{id} = {}\n", name.replace('\n', " ")));
+            }
+        }
+        drop(devices);
+        std::fs::write(self.data_dir.join("names.txt"), out).map_err(|e| e.to_string())
+    }
+
     /// A snapshot of every paired device for the UI.
     #[must_use]
     pub fn devices(&self) -> Vec<DeviceView> {
@@ -341,6 +380,7 @@ impl DeviceManager {
             .iter()
             .map(|(id, state)| DeviceView {
                 device_id: id.clone(),
+                name: state.name.clone(),
                 key: hex(&state.key),
                 status: state.status,
                 screen: state.screen.clone(),
@@ -1147,6 +1187,22 @@ impl DeviceManager {
 /// Lowercase hex, for showing and re-parsing keys.
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Loads the teacher's custom PC names from `names.txt` (`id = name` per line). Missing file is fine.
+fn load_names(path: &std::path::Path) -> std::collections::HashMap<String, String> {
+    let mut names = std::collections::HashMap::new();
+    if let Ok(text) = std::fs::read_to_string(path) {
+        for line in text.lines() {
+            if let Some((id, name)) = line.split_once(" = ") {
+                let (id, name) = (id.trim(), name.trim());
+                if !id.is_empty() && !name.is_empty() {
+                    names.insert(id.to_string(), name.to_string());
+                }
+            }
+        }
+    }
+    names
 }
 
 /// Minimal base64 (standard alphabet, padded) so screens can go straight into an `<img src>`.

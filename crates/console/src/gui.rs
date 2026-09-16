@@ -193,6 +193,12 @@ fn wake(state: State<'_, AppState>, device_id: String) -> Result<usize, String> 
     state.manager.wake(&device_id)
 }
 
+/// Sets a teacher's own name for one PC (empty clears it back to just the id).
+#[tauri::command]
+fn rename_device(state: State<'_, AppState>, device_id: String, name: String) -> Result<(), String> {
+    state.manager.rename(&device_id, &name)
+}
+
 /// Opens the native full-resolution viewer window for one PC (ADR D12).
 ///
 /// The viewer is a separate binary that decodes the H.264 stream in Rust; the WebView cannot. It
@@ -515,6 +521,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             controlling,
             send_input,
             wake,
+            rename_device,
             open_viewer,
             start_recording,
             stop_recording,

@@ -280,6 +280,11 @@ impl AgentDevice for ScreenCapture {
         let mut slot = self.stream.lock().unwrap_or_else(|e| e.into_inner());
         *slot = None; // dropping the old stream stops its encoder before a new one starts
         let (stream, actual, packets) = crate::streaming::Stream::start(monitor, settings)?;
+        // Hand the sole Desktop Duplication of this output to the stream: drop the thumbnail
+        // capturer's duplication so the grid's thumbnails switch to GDI instead of fighting it.
+        if let Ok(mut capturer) = self.capturer.lock() {
+            capturer.release();
+        }
         println!(
             "console {} started a {}x{} @ {} fps stream ({} kbit/s)",
             from.device_id, actual.width, actual.height, actual.fps, actual.kbps
@@ -570,12 +575,24 @@ impl AgentDevice for ScreenCapture {
     }
 
     fn capture_thumbnail(&self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
+        // While a full-resolution stream is running it owns the one Desktop Duplication this output
+        // allows, so the grid's thumbnails take the GDI path meanwhile — otherwise the two duplications
+        // fight and both fail every frame (E_INVALIDARG). Read the flag and release the lock before
+        // taking the capturer lock, keeping a single, consistent lock order (stream then capturer).
+        let streaming = self
+            .stream
+            .lock()
+            .map(|slot| slot.is_some())
+            .unwrap_or(false);
         let mut capturer = self
             .capturer
             .lock()
             .map_err(|_| CaptureError("capture lock poisoned".into()))?;
-        capturer
-            .capture_jpeg(monitor, max_width)
-            .map_err(|e| CaptureError(e.to_string()))
+        let result = if streaming {
+            capturer.capture_jpeg_gdi(monitor, max_width)
+        } else {
+            capturer.capture_jpeg(monitor, max_width)
+        };
+        result.map_err(|e| CaptureError(e.to_string()))
     }
 }

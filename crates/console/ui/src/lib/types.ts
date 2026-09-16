@@ -9,6 +9,8 @@ export interface Monitor {
 
 export interface Device {
   device_id: string
+  /** The teacher's own name for this PC, if set; shown above the id. */
+  name: string | null
   key: string
   status: DeviceStatus
   /** Latest screen as a data: URL, or null before the first frame arrives. */

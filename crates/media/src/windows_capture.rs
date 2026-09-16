@@ -274,6 +274,32 @@ impl ThumbnailCapturer {
         Ok(())
     }
 
+    /// Releases the live Desktop Duplication so another capturer can own this output.
+    ///
+    /// Windows lets only one Desktop Duplication cleanly own an output at a time. When the
+    /// full-resolution stream starts its own duplication, the thumbnail path must let go of its one
+    /// (and fall back to GDI, see [`Self::capture_jpeg_gdi`]) or the two fight and both fail with
+    /// `E_INVALIDARG` every frame.
+    pub fn release(&mut self) {
+        self.active = None;
+        self.primed = false;
+        self.last = None;
+    }
+
+    /// A thumbnail taken with **GDI only**, never touching Desktop Duplication.
+    ///
+    /// Used while the full-resolution stream owns the DXGI duplication of this output, so the grid's
+    /// thumbnails and the stream do not contend for the one duplication an output allows.
+    ///
+    /// # Errors
+    /// Returns [`CaptureError`] if the monitor is missing or the GDI grab fails.
+    pub fn capture_jpeg_gdi(&mut self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
+        if usize::from(monitor) >= self.monitors.len() {
+            return Err(CaptureError(format!("monitor {monitor} not attached")));
+        }
+        self.gdi_fallback(monitor, max_width)
+    }
+
     /// Grabs this monitor with GDI, downscaled to at most `max_width`, as raw BGRA.
     ///
     /// Used to seed the first frame of a stream when Desktop Duplication has nothing to report yet.

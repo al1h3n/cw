@@ -77,6 +77,9 @@
 <div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose()}>
   <div class="frame" role="dialog" aria-modal="true" aria-label={t('screenOf', device.device_id)}>
     <header>
+      {#if device.name}
+        <span class="name">{device.name}</span>
+      {/if}
       <span class="id">{device.device_id}</span>
       <span class="status"><i class="dot {device.status}"></i>{device.detail ?? device.status}</span>
 
@@ -178,9 +181,15 @@
     border-bottom: 1px solid var(--line);
   }
 
+  .name {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
   .id {
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
     font-size: 14px;
+    color: var(--muted);
   }
 
   .liveview {
