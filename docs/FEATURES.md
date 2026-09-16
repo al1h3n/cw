@@ -150,3 +150,30 @@ interface now is what keeps that door open, and costs nothing today.
 installs as an auto-start service that launches a capture helper into the logged-in student's session;
 and ffmpeg-based recording with download-to-teacher (#12). Elevation paths still need VM verification
 (`docs/TEST-CHECKLIST.md §8`).
+
+### Reported from live testing, queued (2026-09-16)
+
+Fresh from two-machine use; not yet built unless noted.
+
+- **Exam + Win+L leaves a bare desktop** (bug, part of #4). When a student presses Win+L during exam
+  mode, Windows switches to the secure Winlogon desktop and on unlock does not reliably return to the
+  `CowatcherExam` desktop; teardown then switches to a desktop handle captured at start whose
+  `SwitchDesktop` result is ignored, so the session can be left on a desktop with no `explorer.exe`
+  ("wallpaper, no UI"). Fix: on teardown re-resolve the **Default** desktop by name and retry the
+  switch until it takes, plus a watchdog. Unverifiable without a VM (do not test on the dev machine).
+- **Lazy-loaded app icons** in the program picker: the Agent extracts each executable's icon
+  (`SHGetFileInfo` / `ExtractIconEx` → PNG, cached by path) and the Console requests them per visible
+  row, so a teacher can recognise programs by icon, not just name.
+- **Per-window live previews in the grid** (harder): show individual application windows as thumbnails.
+  DWM live thumbnails (`DwmRegisterThumbnail`) cannot be copied to a bitmap for streaming; the workable
+  path is `PrintWindow(PW_RENDERFULLCONTENT)` per top-level window on an interval, sent as small JPEGs.
+  Its own capture path — scope as a separate round.
+- **A Co-watcher MCP server** exposing the existing typed remote actions (screen check, launch/block
+  apps, etc.) as MCP tools, for the future paid AI features. Must reuse the same signed-action enum in
+  `proto` — no arbitrary command execution (D-rules). Its own crate and milestone.
+
+### Fixed 2026-09-16 (this session)
+
+- Pairing panel would not open — Tauri denied the frontend `event|listen` because the Console shipped
+  with no capabilities file. Added `capabilities/default.json` (`core:default`).
+- Focused-view toolbar overflowed with long localized labels, pushing buttons off-screen; it now wraps.
