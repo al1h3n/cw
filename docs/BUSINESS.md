@@ -54,6 +54,38 @@ Draft headlines (Russian first, since that's the market; no product name yet):
 **Most important competitor data we don't have yet:** what client #1's school uses *today*. Ask on day
 one. That product is the one we take the client from.
 
+### 3b. The wedge vs Veyon — AI + Rust + design (founder's direction, 2026-09-16)
+
+Veyon exists, is free, and is mature — so we do **not** win on the checklist of things it already does
+(watch, control, lock, broadcast). We win on the three things it structurally *can't* copy cheaply, and
+we say so plainly in every pitch:
+
+1. **Works beyond the LAN, by ID.** Veyon is LAN-bound (VNC + a master on the same subnet); ours dials
+   by device id over iroh, so a teacher reaches a lab from home or across sites with no VPN or port
+   forwarding. This is the single biggest concrete gap and stays our headline (BUSINESS.md §1).
+2. **AI nobody in this category ships.** The differentiators to build first, chosen because they are
+   novel, demoable in 30 seconds, and privacy-defensible (run on-device where possible, per D16):
+   - **Off-task / attention report** — classify each student's foreground app/site as on- or off-task
+     and give the teacher a live "who's drifting" view plus an end-of-lesson summary. The flagship demo.
+   - **Screen-safety flagging** — detect explicit/harmful content on a student screen and alert the
+     teacher. Directly answers the "student sets a nudity wallpaper / opens something" worry and is a
+     duty-of-care selling point for schools, not a gimmick.
+   - **Natural-language control** — "lock everyone except row 3", "open the exam on all PCs" — a typed
+     command the Console turns into the existing typed actions. Cheap to build on top of the action
+     enum, and it *looks* like the future in a demo.
+3. **Design and onboarding as the product.** Veyon is Qt, dated, and has no first-run guidance; being
+   Svelte + modern + a built-in tutorial is itself the reason a teacher chooses us — the founder's
+   Notion-over-Obsidian point: a proprietary-backed tool with great UX beats a free one that is hard to
+   learn. Treat "a teacher succeeds in 5 minutes with no manual" as a release requirement, not polish.
+
+**Rust backend** is a supporting proof point (fast on weak school PCs, low RAM, one static binary, no
+runtime to install), not a headline — teachers don't buy a language. Use it in the technical/IT-buyer
+conversation, not the teacher pitch.
+
+**Build order this implies:** exam/lockdown mode (table stakes we still lack) → the off-task report
+(flagship AI) → screen-safety flagging → natural-language control. Defer URL filtering and file
+collect until a pilot actually asks; they are slow and not differentiators.
+
 ## 4. Client #0 — the founder (Phase 1, milestone M1)
 
 Use it every day on your own 2+ PCs: view, control, lock yourself out, block your own games. If
