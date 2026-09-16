@@ -117,6 +117,12 @@ impl PairingSession {
         Self::with_ttl(code, CODE_TTL_MS, now_ms)
     }
 
+    /// The code this session is showing.
+    #[must_use]
+    pub fn code(&self) -> PairingCode {
+        self.code
+    }
+
     /// Starts a session with an explicit time-to-live (used by tests and future configuration).
     #[must_use]
     pub fn with_ttl(code: PairingCode, ttl_ms: u64, now_ms: u64) -> Self {

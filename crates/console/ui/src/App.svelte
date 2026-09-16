@@ -14,6 +14,7 @@
   import RoomCard from './lib/RoomCard.svelte'
   import LanguagePicker from './lib/LanguagePicker.svelte'
   import QualityPicker from './lib/QualityPicker.svelte'
+  import Toasts from './lib/Toasts.svelte'
   import { i18n, t } from './lib/i18n.svelte'
   import type { ConsoleInfo, Device } from './lib/types'
 
@@ -501,6 +502,8 @@
     onerror={(m) => (error = m)}
   />
 {/if}
+
+<Toasts />
 
 <style>
   /* A flex column, not a fixed grid: the footer stays pinned to the bottom whether or not the error

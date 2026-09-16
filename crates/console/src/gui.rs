@@ -15,6 +15,8 @@ struct AppState {
     manager: Arc<DeviceManager>,
     /// The pairing code currently on screen, if the teacher opened "Add a PC".
     pairing_code: Mutex<Option<PairingCode>>,
+    /// Stops the current continuous-pairing loop when the teacher closes the panel.
+    pairing_stop: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// Where per-user files live: the trust store, the device key and `languages/`.
     data_dir: std::path::PathBuf,
 }
@@ -538,9 +540,33 @@ struct PairingInvite {
 }
 
 #[tauri::command]
-fn begin_pairing(state: State<'_, AppState>) -> PairingInvite {
+fn begin_pairing(state: State<'_, AppState>, window: tauri::Window) -> PairingInvite {
+    use tauri::Emitter;
+
     let code = PairingCode::generate();
     *state.pairing_code.lock().unwrap_or_else(|e| e.into_inner()) = Some(code);
+
+    // Stop any earlier loop, then start a fresh one that accepts PC after PC until the panel closes.
+    if let Some(previous) = state.pairing_stop.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        previous.notify_waiters();
+    }
+    let stop = Arc::new(tokio::sync::Notify::new());
+    *state.pairing_stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&stop));
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<String, String>>();
+    let manager = Arc::clone(&state.manager);
+    tauri::async_runtime::spawn(async move { manager.pair_loop(code, stop, tx).await });
+    // Forward each pairing result to the window as an event, so the panel can stay open and list
+    // every PC that joins without blocking on a single call.
+    tauri::async_runtime::spawn(async move {
+        while let Some(result) = rx.recv().await {
+            let _ = match result {
+                Ok(id) => window.emit("cowatcher://paired", id),
+                Err(err) => window.emit("cowatcher://pair-error", err),
+            };
+        }
+    });
+
     PairingInvite {
         code: code.to_string(),
         command: format!(
@@ -551,16 +577,12 @@ fn begin_pairing(state: State<'_, AppState>) -> PairingInvite {
     }
 }
 
-/// Waits for a student PC to dial in with the shown code. Resolves with its device id.
+/// Stops the continuous-pairing loop (the teacher closed the "Add a PC" panel).
 #[tauri::command]
-async fn await_pairing(state: State<'_, AppState>) -> Result<String, String> {
-    let code = state
-        .pairing_code
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .ok_or_else(|| "no pairing code is showing".to_string())?;
-    let manager = Arc::clone(&state.manager);
-    manager.pair_once(code).await
+fn stop_pairing(state: State<'_, AppState>) {
+    if let Some(stop) = state.pairing_stop.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        stop.notify_waiters();
+    }
 }
 
 /// Opens the console window.
@@ -574,6 +596,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             app.manage(AppState {
                 manager: Arc::clone(&manager),
                 pairing_code: Mutex::new(None),
+                pairing_stop: Mutex::new(None),
                 data_dir: data_dir.clone(),
             });
             Ok(())
@@ -615,7 +638,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             set_language,
             export_language_template,
             begin_pairing,
-            await_pairing,
+            stop_pairing,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| e.to_string())

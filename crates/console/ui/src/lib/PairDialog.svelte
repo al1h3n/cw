@@ -1,24 +1,45 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
-  import { onMount } from 'svelte'
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+  import { onMount, onDestroy } from 'svelte'
+  import { fly } from 'svelte/transition'
+  import { flip } from 'svelte/animate'
   import { t } from './i18n.svelte'
+  import { toasts } from './toast-store.svelte'
   import type { PairingInvite } from './types'
 
   let { onclose }: { onclose: () => void } = $props()
 
   let invite = $state<PairingInvite | null>(null)
-  let added = $state<string | null>(null)
+  let joined = $state<string[]>([])
   let error = $state<string | null>(null)
   let copied = $state(false)
+  let unlisten: UnlistenFn[] = []
 
   onMount(async () => {
     try {
+      // One code, one open panel: PCs keep joining until the teacher clicks Done.
+      unlisten.push(
+        await listen<string>('cowatcher://paired', (e) => {
+          if (!joined.includes(e.payload)) joined.unshift(e.payload)
+          toasts.push(t('pairJoined', e.payload), 'ok')
+        }),
+      )
+      unlisten.push(
+        await listen<string>('cowatcher://pair-error', (e) => {
+          // A wrong code from one PC should not stop the panel; surface it quietly.
+          toasts.push(e.payload, 'error')
+        }),
+      )
       invite = await invoke<PairingInvite>('begin_pairing')
-      // Resolves when a student PC dials in with the code, or rejects on timeout/refusal.
-      added = await invoke<string>('await_pairing')
     } catch (e) {
       error = String(e)
     }
+  })
+
+  onDestroy(() => {
+    for (const un of unlisten) un()
+    invoke('stop_pairing').catch(() => {})
   })
 
   async function copyCommand() {
@@ -29,19 +50,12 @@
   }
 </script>
 
-<div
-  class="backdrop"
-  role="presentation"
-  onclick={(e) => e.target === e.currentTarget && onclose()}
->
+<div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose()}>
   <div class="dialog" role="dialog" aria-modal="true" aria-label={t('pairTitle')}>
     <h2>{t('pairTitle')}</h2>
 
     {#if error}
       <p class="error">{error}</p>
-      <div class="row"><button class="primary" onclick={onclose}>{t('close')}</button></div>
-    {:else if added}
-      <p class="done">{t('pairDone', added)}</p>
       <div class="row"><button class="primary" onclick={onclose}>{t('close')}</button></div>
     {:else if invite}
       <p class="step">{t('pairStep1')}</p>
@@ -52,11 +66,23 @@
 
       <p class="step">{t('pairStep2')}</p>
       <p class="code">{invite.code}</p>
+      <p class="hint">{t('pairKeepOpen')}</p>
+
+      {#if joined.length > 0}
+        <ul class="joined">
+          {#each joined as id (id)}
+            <li in:fly={{ y: -6, duration: 150 }} animate:flip={{ duration: 160 }}>
+              <i class="ok"></i>
+              <code>{id}</code>
+            </li>
+          {/each}
+        </ul>
+      {/if}
 
       <div class="row waiting">
         <span class="spinner" aria-hidden="true"></span>
-        <span>{t('pairWaiting')}</span>
-        <button onclick={onclose}>{t('cancel')}</button>
+        <span>{joined.length > 0 ? t('pairAddMore', joined.length) : t('pairWaiting')}</span>
+        <button class="primary" onclick={onclose}>{t('done')}</button>
       </div>
     {:else}
       <p class="step">{t('loading')}</p>
@@ -76,6 +102,8 @@
 
   .dialog {
     width: min(560px, 100%);
+    max-height: 90vh;
+    overflow: auto;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 14px;
@@ -119,6 +147,46 @@
     padding: 10px 0 4px;
   }
 
+  .hint {
+    margin: 0 0 6px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .joined {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 8px;
+    max-height: 30vh;
+    overflow: auto;
+    display: grid;
+    gap: 5px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+
+  .joined li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+  }
+
+  .joined code {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    letter-spacing: 1px;
+  }
+
+  .joined .ok {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--live);
+    flex-shrink: 0;
+  }
+
   .row {
     display: flex;
     align-items: center;
@@ -133,11 +201,6 @@
 
   .waiting button {
     margin-left: auto;
-  }
-
-  .done {
-    color: var(--live);
-    margin: 10px 0 0;
   }
 
   .error {

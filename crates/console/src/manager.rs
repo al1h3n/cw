@@ -1216,29 +1216,59 @@ impl DeviceManager {
         }
     }
 
-    /// Shows a pairing code and enrols the one device that dials in with it.
-    ///
-    /// # Errors
-    /// Returns a message if the endpoint fails or the device is refused.
-    pub async fn pair_once(&self, code: net::PairingCode) -> Result<String, String> {
-        let endpoint = self.endpoint().await?;
+    /// Keeps accepting student PCs that dial in with `code`, sending each one's device id on
+    /// `events`, until `stop` is signalled. This is what lets a teacher enrol a whole lab from one
+    /// open "Add a PC" panel with a single code — every connection gets a fresh session, so the code
+    /// never goes stale while the panel is open.
+    pub async fn pair_loop(
+        &self,
+        code: net::PairingCode,
+        stop: std::sync::Arc<tokio::sync::Notify>,
+        events: tokio::sync::mpsc::UnboundedSender<Result<String, String>>,
+    ) {
+        let endpoint = match self.endpoint().await {
+            Ok(endpoint) => endpoint,
+            Err(err) => {
+                let _ = events.send(Err(err));
+                return;
+            }
+        };
         endpoint.online().await;
-        let mut session = net::PairingSession::new(code, net::endpoint::now_ms());
-        let mut trust = self.trust.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let welcome = match self.welcome() {
+            Ok(welcome) => welcome,
+            Err(err) => {
+                let _ = events.send(Err(err));
+                return;
+            }
+        };
 
-        let welcome = self.welcome()?;
-        let peer = net::console_accept_pairing(&endpoint, &mut session, &mut trust, &welcome)
-            .await
-            .map_err(|e| e.to_string())?;
-        trust.save(&self.trust_path).map_err(|e| e.to_string())?;
-
-        let id = peer.device_id.to_string();
-        *self.trust.lock().unwrap_or_else(|e| e.into_inner()) = trust;
-        self.devices
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id.clone(), DeviceState::new(peer.public_key));
-        Ok(id)
+        loop {
+            tokio::select! {
+                biased;
+                () = stop.notified() => break,
+                incoming = endpoint.accept() => {
+                    let Some(incoming) = incoming else { break }; // endpoint closed
+                    let mut trust = self.trust.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    // A wrong code or a dropped handshake just falls through — keep waiting.
+                    if let Ok(peer) =
+                        net::console_pair_connection(incoming, code, &mut trust, &welcome).await
+                    {
+                        if let Err(err) = trust.save(&self.trust_path) {
+                            let _ = events.send(Err(err.to_string()));
+                            continue;
+                        }
+                        let id = peer.device_id.to_string();
+                        *self.trust.lock().unwrap_or_else(|e| e.into_inner()) = trust;
+                        self.devices
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .entry(id.clone())
+                            .or_insert_with(|| DeviceState::new(peer.public_key));
+                        let _ = events.send(Ok(id));
+                    }
+                }
+            }
+        }
     }
 }
 

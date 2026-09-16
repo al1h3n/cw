@@ -130,6 +130,27 @@ pub async fn console_accept_pairing(
     welcome: &proto::Welcome,
 ) -> Result<PairedPeer, EndpointError> {
     let incoming = endpoint.accept().await.ok_or(EndpointError::NoConnection)?;
+    console_pair_connection(incoming, session.code(), trust, welcome).await
+}
+
+/// Handles one incoming pairing connection, verifying `code` against a **fresh** session created for
+/// this connection.
+///
+/// Creating the session here — not when the code was first shown — is what makes the code valid
+/// whenever a device actually dials in, however long the teacher has had the "Add a PC" panel open.
+/// The [`crate::CODE_TTL_MS`] window then only bounds the handshake itself, which takes milliseconds,
+/// so a code shown for twenty minutes still works. The caller can accept connection after connection
+/// with the same code to enrol a whole lab without regenerating it.
+///
+/// # Errors
+/// [`EndpointError`] on a connection/stream failure, or [`EndpointError::Rejected`] if the device
+/// offered the wrong code.
+pub async fn console_pair_connection(
+    incoming: iroh::endpoint::Incoming,
+    code: PairingCode,
+    trust: &mut TrustStore,
+    welcome: &proto::Welcome,
+) -> Result<PairedPeer, EndpointError> {
     let conn = incoming
         .await
         .map_err(|e| EndpointError::Connection(e.to_string()))?;
@@ -139,6 +160,7 @@ pub async fn console_accept_pairing(
         .await
         .map_err(|e| EndpointError::Connection(e.to_string()))?;
 
+    let mut session = PairingSession::new(code, now_ms());
     let outcome = match read_message::<PairMessage>(&mut recv).await? {
         PairMessage::Request { code } => match PairingCode::from_u32(code) {
             Some(attempt) => session.verify(attempt, now_ms()),
