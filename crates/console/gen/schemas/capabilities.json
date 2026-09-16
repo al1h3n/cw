@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Core permissions for the main Console window: our own invoke commands plus the core event channel (listen/unlisten/emit), which continuous pairing uses to stream 'a PC joined' notifications to the UI.","local":true,"windows":["main"],"permissions":["core:default"]}}

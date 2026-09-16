@@ -292,10 +292,20 @@
 
   header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
+    gap: 8px 10px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--line);
+  }
+
+  /* Localization-proof: a longer label (e.g. Russian) never clips or pushes a control off-screen —
+     buttons keep their whole label on one line and the row wraps to a second line instead. */
+  header :global(button),
+  header select,
+  header input {
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .name {
@@ -340,7 +350,6 @@
   .monitors {
     display: inline-flex;
     gap: 6px;
-    margin-left: auto;
   }
 
   .chip {
@@ -357,19 +366,11 @@
     font-weight: 600;
   }
 
-  .listen {
-    margin-left: auto;
-  }
-
   .listen.on {
     background: var(--live);
     border-color: var(--live);
     color: #04150d;
     font-weight: 600;
-  }
-
-  .monitors ~ .listen {
-    margin-left: 0;
   }
 
   .dot {

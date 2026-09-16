@@ -541,8 +541,8 @@
 
   .actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
-    flex-shrink: 0;
   }
 
   .banner {
