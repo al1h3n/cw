@@ -155,15 +155,18 @@ and ffmpeg-based recording with download-to-teacher (#12). Elevation paths still
 
 Fresh from two-machine use; not yet built unless noted.
 
-- **Exam + Win+L leaves a bare desktop** (bug, part of #4). When a student presses Win+L during exam
-  mode, Windows switches to the secure Winlogon desktop and on unlock does not reliably return to the
-  `CowatcherExam` desktop; teardown then switches to a desktop handle captured at start whose
-  `SwitchDesktop` result is ignored, so the session can be left on a desktop with no `explorer.exe`
-  ("wallpaper, no UI"). Fix: on teardown re-resolve the **Default** desktop by name and retry the
-  switch until it takes, plus a watchdog. Unverifiable without a VM (do not test on the dev machine).
-- **Lazy-loaded app icons** in the program picker: the Agent extracts each executable's icon
-  (`SHGetFileInfo` / `ExtractIconEx` → PNG, cached by path) and the Console requests them per visible
-  row, so a teacher can recognise programs by icon, not just name.
+- **Full-screen broadcast of the teacher's screen or one app, with student lockdown** (not built).
+  A Zoom/Teams-style source picker (pick a monitor or a specific window), streamed to students and
+  shown **full-screen on a locked desktop** so Alt+Tab, Ctrl+Esc, Win+D and the like are unavailable
+  while it runs — no launching other apps, no cheating. Reuses the existing broadcast plus the
+  exam-desktop lock (`platform::examlock`); the window-source path needs `PrintWindow` /
+  duplication-of-one-window capture. Needs new protocol messages. Its own delivery.
+- **AI chat panel** (not built): a button in the bottom-right of the Console opens a chat with
+  **sessions** (multiple saved conversations), rendering text and an attachment tray like
+  WhatsApp/Telegram — a small grid of files with icons, image previews, and a video's first frame,
+  shown before sending. Talks to a **user-supplied OpenAI/Anthropic-compatible endpoint** (see D22):
+  the request is proxied through Rust (keeps the key off the web layer and dodges CORS/CSP). Its own
+  delivery — the biggest of the queued items.
 - **Per-window live previews in the grid** (harder): show individual application windows as thumbnails.
   DWM live thumbnails (`DwmRegisterThumbnail`) cannot be copied to a bitmap for streaming; the workable
   path is `PrintWindow(PW_RENDERFULLCONTENT)` per top-level window on an interval, sent as small JPEGs.
@@ -171,6 +174,16 @@ Fresh from two-machine use; not yet built unless noted.
 - **A Co-watcher MCP server** exposing the existing typed remote actions (screen check, launch/block
   apps, etc.) as MCP tools, for the future paid AI features. Must reuse the same signed-action enum in
   `proto` — no arbitrary command execution (D-rules). Its own crate and milestone.
+
+### Done 2026-09-20 (this session)
+
+- **Exam + Win+L no longer leaves a bare desktop.** `platform::examlock` now restores the student's
+  desktop by resolving **Default** by name with a retry loop (not the possibly-stale captured handle),
+  and a watchdog timer re-asserts the lock after a Win+L/unlock. Verified with a live start/stop smoke
+  test (`crates/platform/examples/examlock_smoke.rs`); the watchdog path is by inspection.
+- **Lazy program icons** ship: `Control::FetchAppIcon`/`AppIcon` carry raw BGRA (no image crate on the
+  Agent), `platform::apps::icon_bgra` reads the shell icon via `SHGetFileInfoW` + GDI, and the Console
+  paints them to a canvas, requested per visible row (IntersectionObserver). `PROTOCOL_VERSION` = 14.
 
 ### Fixed 2026-09-16 (this session)
 
