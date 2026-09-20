@@ -156,16 +156,145 @@ pub fn launch(id: u32) -> Result<String, AppError> {
     Ok(app.name)
 }
 
+/// The icon for a catalogue entry, as `(width, height, top-down BGRA)`.
+///
+/// Resolves the id locally exactly as [`launch`] does — the caller supplies only a number — then asks
+/// the shell for the shortcut's icon. Returns `None` when the id is unknown or the PC has no icon for
+/// it, so a missing icon is never an error, just an absent picture.
+#[must_use]
+pub fn icon_bgra(id: u32) -> Option<(u16, u16, Vec<u8>)> {
+    let app = list_apps().into_iter().find(|a| a.id == id)?;
+    imp::icon_bgra(&app.path)
+}
+
 #[cfg(windows)]
 mod imp {
     use std::{os::windows::ffi::OsStrExt, path::Path};
 
     use windows::{
-        Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+        Win32::{
+            Graphics::Gdi::{
+                BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
+                GetObjectW, HGDIOBJ, ReleaseDC,
+            },
+            UI::{
+                Shell::{SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGetFileInfoW, ShellExecuteW},
+                WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO, SW_SHOWNORMAL},
+            },
+        },
         core::PCWSTR,
     };
 
     use super::AppError;
+
+    /// The largest icon we will read; a shortcut icon is at most 256×256 and usually 32–48.
+    const MAX_ICON: i32 = 256;
+
+    /// Reads a shortcut's icon into top-down BGRA pixels.
+    ///
+    /// Uses `SHGetFileInfoW` to get the shell icon, then GDI (`GetIconInfo` + `GetDIBits`) to read its
+    /// pixels. Returns `None` on any failure, so a program without an icon simply has none.
+    pub fn icon_bgra(path: &Path) -> Option<(u16, u16, Vec<u8>)> {
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut info = SHFILEINFOW::default();
+        // SAFETY: `wide` is NUL-terminated and outlives the call; `info` is a valid out-param sized
+        // correctly. On success `info.hIcon` is an icon we own and destroy below.
+        let got = unsafe {
+            SHGetFileInfoW(
+                PCWSTR(wide.as_ptr()),
+                Default::default(),
+                Some(&mut info),
+                u32::try_from(std::mem::size_of::<SHFILEINFOW>()).unwrap_or(0),
+                SHGFI_ICON | SHGFI_LARGEICON,
+            )
+        };
+        if got == 0 || info.hIcon.is_invalid() {
+            return None;
+        }
+        // SAFETY: `info.hIcon` is a valid icon handle from the call above; it is destroyed here.
+        let result = unsafe { hicon_to_bgra(info.hIcon) };
+        // SAFETY: destroying the icon we were handed.
+        unsafe {
+            let _ = DestroyIcon(info.hIcon);
+        }
+        result
+    }
+
+    /// Converts an `HICON` to top-down BGRA. Every GDI object created here is freed before returning.
+    ///
+    /// # Safety
+    /// `hicon` must be a valid icon handle owned by the caller.
+    unsafe fn hicon_to_bgra(
+        hicon: windows::Win32::UI::WindowsAndMessaging::HICON,
+    ) -> Option<(u16, u16, Vec<u8>)> {
+        // SAFETY: standard GDI calls; each handle obtained is deleted, and the pixel buffer is sized
+        // to width*height*4 before GetDIBits writes into it.
+        unsafe {
+            let mut icon = ICONINFO::default();
+            GetIconInfo(hicon, &mut icon).ok()?;
+            let color = icon.hbmColor;
+            let mask = icon.hbmMask;
+
+            let mut bitmap = BITMAP::default();
+            let read = GetObjectW(
+                HGDIOBJ(color.0),
+                i32::try_from(std::mem::size_of::<BITMAP>()).unwrap_or(0),
+                Some((&mut bitmap as *mut BITMAP).cast()),
+            );
+            let (w, h) = (bitmap.bmWidth, bitmap.bmHeight);
+            let out = if read != 0 && w > 0 && h > 0 && w <= MAX_ICON && h <= MAX_ICON {
+                let mut bmi = BITMAPINFO {
+                    bmiHeader: BITMAPINFOHEADER {
+                        biSize: u32::try_from(std::mem::size_of::<BITMAPINFOHEADER>()).unwrap_or(0),
+                        biWidth: w,
+                        biHeight: -h, // negative height => top-down rows, matching the wire format
+                        biPlanes: 1,
+                        biBitCount: 32,
+                        biCompression: 0, // BI_RGB
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
+                let dc = GetDC(None);
+                let lines = GetDIBits(
+                    dc,
+                    color,
+                    0,
+                    u32::try_from(h).unwrap_or(0),
+                    Some(pixels.as_mut_ptr().cast()),
+                    &mut bmi,
+                    DIB_RGB_COLORS,
+                );
+                ReleaseDC(None, dc);
+                if lines != 0 {
+                    // Some icons come back fully transparent (they carry a 1-bit mask, not alpha).
+                    // If every alpha byte is zero, treat the icon as opaque so it is visible.
+                    if pixels.iter().skip(3).step_by(4).all(|&a| a == 0) {
+                        for a in pixels.iter_mut().skip(3).step_by(4) {
+                            *a = 255;
+                        }
+                    }
+                    u16::try_from(w)
+                        .ok()
+                        .zip(u16::try_from(h).ok())
+                        .map(|(w, h)| (w, h, pixels))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let _ = DeleteObject(HGDIOBJ(color.0));
+            let _ = DeleteObject(HGDIOBJ(mask.0));
+            out
+        }
+    }
 
     /// Asks the shell to open a shortcut the Agent itself found.
     ///
@@ -212,6 +341,10 @@ mod imp {
     // ponytail: Linux reads .desktop files and launches with gio/xdg-open; Phase 5.
     pub fn open(_path: &Path) -> Result<(), AppError> {
         Err(AppError::NotSupported)
+    }
+
+    pub fn icon_bgra(_path: &Path) -> Option<(u16, u16, Vec<u8>)> {
+        None
     }
 }
 

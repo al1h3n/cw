@@ -65,15 +65,15 @@ mod imp {
                 PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
             },
             System::StationsAndDesktops::{
-                CloseDesktop, CreateDesktopW, DESKTOP_ACCESS_FLAGS, OpenInputDesktop,
-                SetThreadDesktop, SwitchDesktop,
+                CloseDesktop, CreateDesktopW, DESKTOP_ACCESS_FLAGS, HDESK, OpenDesktopW,
+                OpenInputDesktop, SetThreadDesktop, SwitchDesktop,
             },
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
-                GetSystemMetrics, HMENU, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
-                SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, ShowWindow,
-                TranslateMessage, WM_CLOSE, WM_DESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_TOPMOST,
-                WS_POPUP, WS_VISIBLE,
+                GetSystemMetrics, HMENU, KillTimer, MSG, PostMessageW, PostQuitMessage,
+                RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, SetTimer,
+                ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_PAINT, WM_TIMER, WNDCLASSEXW,
+                WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
             },
         },
         core::{PCWSTR, w},
@@ -83,6 +83,14 @@ mod imp {
 
     /// The message shown on the lock, read by the paint handler.
     static MESSAGE: Mutex<String> = Mutex::new(String::new());
+
+    /// The lock desktop (as an `isize`), so the watchdog timer can re-assert it. Zero means "not
+    /// locked / stopping": the timer then does nothing and the message loop is free to exit.
+    static EXAM_DESKTOP: AtomicIsize = AtomicIsize::new(0);
+
+    /// The watchdog timer id and how often (ms) it re-checks that the lock desktop still has input.
+    const WATCHDOG_TIMER: usize = 1;
+    const WATCHDOG_MS: u32 = 250;
 
     pub struct ExamLock {
         window: Arc<AtomicIsize>,
@@ -131,6 +139,9 @@ mod imp {
 
     impl Drop for ExamLock {
         fn drop(&mut self) {
+            // Tell the watchdog to stop re-asserting the lock desktop, so the teardown switch back to
+            // the student's real desktop is not immediately undone.
+            EXAM_DESKTOP.store(0, Ordering::SeqCst);
             let handle = HWND(self.window.load(Ordering::SeqCst) as *mut std::ffi::c_void);
             if !handle.is_invalid() {
                 // DestroyWindow only works on the creating thread; WM_CLOSE is thread-safe and the
@@ -186,19 +197,58 @@ mod imp {
                 }
             };
             window.store(handle.0 as isize, Ordering::SeqCst);
+            // Publish the lock desktop so the watchdog timer can re-assert it (e.g. after the student
+            // hits Win+L: Windows returns input to the Default desktop on unlock, and without this the
+            // student would be sitting on their real desktop mid-exam — the escape we must close).
+            EXAM_DESKTOP.store(exam.0 as isize, Ordering::SeqCst);
             ready.store(true, Ordering::SeqCst);
 
             // Make the lock desktop the one that receives input, then pump until the window closes.
             let _ = SwitchDesktop(exam);
             pump_messages();
 
-            // Ended: give the student's real desktop back, detach, and close both handles.
-            let _ = SwitchDesktop(original);
+            // Ended: give the student's real desktop back. The captured `original` handle can be a
+            // poor target after a lock/unlock cycle (its SwitchDesktop is silently rejected, leaving a
+            // desktop with no shell — "wallpaper, no UI"), so switch to the Default desktop resolved
+            // by name, retrying until it takes, and fall back to the captured handle.
+            restore_real_desktop(original, access);
             let _ = SetThreadDesktop(original);
             let _ = CloseDesktop(exam);
             let _ = CloseDesktop(original);
         }
         Ok(())
+    }
+
+    /// Switches input back to the student's ordinary ("Default") desktop, retrying briefly because a
+    /// switch right after a Winlogon lock/unlock can be rejected until the session settles.
+    ///
+    /// # Safety
+    /// Callers pass a valid `original` desktop handle; every desktop opened here is closed before
+    /// returning.
+    unsafe fn restore_real_desktop(original: HDESK, access: DESKTOP_ACCESS_FLAGS) {
+        // SAFETY: standard station/desktop calls; the by-name handle is closed in this function and
+        // `original` is owned and closed by the caller.
+        unsafe {
+            let by_name = OpenDesktopW(w!("Default"), Default::default(), false, access.0).ok();
+            for _ in 0..40 {
+                if let Some(desktop) = by_name
+                    && SwitchDesktop(desktop).is_ok()
+                {
+                    let _ = CloseDesktop(desktop);
+                    return;
+                }
+                if SwitchDesktop(original).is_ok() {
+                    if let Some(desktop) = by_name {
+                        let _ = CloseDesktop(desktop);
+                    }
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if let Some(desktop) = by_name {
+                let _ = CloseDesktop(desktop);
+            }
+        }
     }
 
     fn create_window() -> Result<HWND, String> {
@@ -234,6 +284,8 @@ mod imp {
             .map_err(|e| e.message())?;
             let _ = ShowWindow(window, SW_SHOW);
             let _ = SetForegroundWindow(window);
+            // The watchdog: on each tick, re-assert the lock desktop if the exam is still running.
+            let _ = SetTimer(Some(window), WATCHDOG_TIMER, WATCHDOG_MS, None);
             Ok(window)
         }
     }
@@ -304,9 +356,24 @@ mod imp {
                 }
                 LRESULT(0)
             }
+            WM_TIMER => {
+                // Re-assert the lock: if the student escaped to their real desktop (e.g. Win+L then
+                // unlock), pull input back to the exam desktop. Zero means the exam is ending.
+                let exam = EXAM_DESKTOP.load(Ordering::SeqCst);
+                if exam != 0 {
+                    // SAFETY: a desktop handle we created and still own until teardown.
+                    unsafe {
+                        let _ = SwitchDesktop(HDESK(exam as *mut std::ffi::c_void));
+                    }
+                }
+                LRESULT(0)
+            }
             WM_DESTROY => {
-                // SAFETY: ends this thread's message loop.
-                unsafe { PostQuitMessage(0) };
+                // SAFETY: stop the watchdog, then end this thread's message loop.
+                unsafe {
+                    let _ = KillTimer(Some(window), WATCHDOG_TIMER);
+                    PostQuitMessage(0);
+                }
                 LRESULT(0)
             }
             // SAFETY: the documented default handler for everything else.

@@ -136,6 +136,11 @@ enum DeviceRequest {
     ListApps {
         reply: tokio::sync::oneshot::Sender<Vec<proto::AppEntry>>,
     },
+    /// One program's icon (lazy), as `(width, height, top-down BGRA)` or `None`.
+    AppIcon {
+        id: u32,
+        reply: tokio::sync::oneshot::Sender<Option<(u16, u16, Vec<u8>)>>,
+    },
     /// Start one published program.
     LaunchApp {
         id: u32,
@@ -716,6 +721,19 @@ impl DeviceManager {
             .await
     }
 
+    /// One program's icon, as `(width, height, top-down BGRA)` or `None` if the PC has none.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn app_icon(
+        &self,
+        device_id: &str,
+        id: u32,
+    ) -> Result<Option<(u16, u16, Vec<u8>)>, String> {
+        self.ask(device_id, |reply| DeviceRequest::AppIcon { id, reply })
+            .await
+    }
+
     /// Starts one published program on a PC.
     ///
     /// # Errors
@@ -1056,6 +1074,13 @@ impl DeviceManager {
                     DeviceRequest::ListApps { reply } => {
                         let apps = session.request_apps().await.map_err(|e| e.to_string())?;
                         let _ = reply.send(apps);
+                    }
+                    DeviceRequest::AppIcon { id, reply } => {
+                        let icon = session
+                            .request_app_icon(id)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let _ = reply.send(icon);
                     }
                     DeviceRequest::LaunchApp { id, reply } => {
                         let result = session.launch_app(id).await.map_err(|e| e.to_string())?;

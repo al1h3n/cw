@@ -218,6 +218,15 @@ pub trait AgentDevice {
         Vec::new()
     }
 
+    /// The icon for a published catalogue entry, as `(width, height, top-down BGRA)`.
+    ///
+    /// Resolved by id the same way [`AgentDevice::launch_app`] resolves one — the Console never sends
+    /// a path. The default has none, so a device without icons simply shows names only.
+    fn app_icon(&self, id: u32) -> Option<(u16, u16, Vec<u8>)> {
+        let _ = id;
+        None
+    }
+
     /// Starts a published program by id, returning its name and whether it started.
     ///
     /// An id this PC did not publish must not resolve — that is what keeps "launch an app" from
@@ -683,6 +692,35 @@ impl ControlSession {
         }
     }
 
+    /// Console side: ask for one program's icon (lazy — call only for rows on screen).
+    ///
+    /// Returns `(width, height, top-down BGRA)`, or `None` if the PC has no icon for that id.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn request_app_icon(
+        &mut self,
+        id: u32,
+    ) -> Result<Option<(u16, u16, Vec<u8>)>, EndpointError> {
+        write_message(&mut self.send, &Control::FetchAppIcon { id }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::AppIcon {
+                width,
+                height,
+                bgra,
+                ..
+            } => {
+                if bgra.is_empty() || width == 0 || height == 0 {
+                    Ok(None)
+                } else {
+                    Ok(Some((width, height, bgra)))
+                }
+            }
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Console side: start one of the programs this PC published.
     ///
     /// # Errors
@@ -970,6 +1008,21 @@ impl ControlSession {
                 },
                 Control::ListApps => {
                     write_message(&mut self.send, &Control::Apps(source.list_apps())).await?;
+                }
+                Control::FetchAppIcon { id } => {
+                    let (width, height, bgra) = source
+                        .app_icon(id)
+                        .unwrap_or((0, 0, Vec::new()));
+                    write_message(
+                        &mut self.send,
+                        &Control::AppIcon {
+                            id,
+                            width,
+                            height,
+                            bgra,
+                        },
+                    )
+                    .await?;
                 }
                 Control::LaunchApp { id } => {
                     let (name, started) = source.launch_app(&self.peer, id);

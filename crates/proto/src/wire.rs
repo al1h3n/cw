@@ -621,6 +621,26 @@ pub enum Control {
     /// The **path is deliberately absent**: a Console names an app by id and never by location, so
     /// there is no way to ask a PC to run something it did not itself publish (AGENTS.md §5).
     Apps(Vec<AppEntry>),
+    /// Console → Agent: send the icon for this catalogue entry. Lazy — the Console asks only for the
+    /// rows a teacher can actually see, so a long program list costs nothing until scrolled to.
+    FetchAppIcon {
+        /// An id from a previous [`Control::Apps`] reply.
+        id: u32,
+    },
+    /// Agent → Console: the entry's icon as raw top-down BGRA pixels (empty when the PC has none).
+    ///
+    /// Raw pixels, not PNG, keep the Agent free of an image-encoding dependency: the Console paints
+    /// the bytes onto a canvas. Icons are tiny (≤ 64×64), so the extra bytes are negligible.
+    AppIcon {
+        /// Echoes the requested id so the Console can match the image to its row.
+        id: u32,
+        /// Icon width in pixels, or 0 when unavailable.
+        width: u16,
+        /// Icon height in pixels, or 0 when unavailable.
+        height: u16,
+        /// `width * height * 4` bytes of top-down BGRA, or empty if unavailable.
+        bgra: Vec<u8>,
+    },
     /// Console → Agent: start the catalogue entry with this id.
     LaunchApp {
         /// An id from a previous [`Control::Apps`] reply.

@@ -19,3 +19,6 @@
 
 # Built AIO binaries staged for packaging (the .exe are large; docs are kept)
 /dist/*.exe
+
+# NodeJS
+/node_modules/

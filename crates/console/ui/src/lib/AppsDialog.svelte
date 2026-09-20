@@ -57,6 +57,56 @@
     }
   }
 
+  // Lazily fetched program icons: id -> data URL. An empty string means "asked, none available", so
+  // a PC without an icon for one program is never asked again.
+  let icons = $state<Record<number, string>>({})
+  const requested = new Set<number>()
+
+  async function fetchIcon(id: number) {
+    if (id in icons || requested.has(id)) return
+    requested.add(id)
+    try {
+      const icon = await invoke<{ width: number; height: number; bgra: number[] } | null>(
+        'app_icon',
+        { deviceId, id },
+      )
+      icons = { ...icons, [id]: icon ? bgraToUrl(icon.width, icon.height, icon.bgra) : '' }
+    } catch {
+      icons = { ...icons, [id]: '' } // one failure shouldn't make us hammer the PC
+    }
+  }
+
+  // The Agent sends raw top-down BGRA; the browser's canvas is the encoder (no image lib on the Rust
+  // side). BGRA -> RGBA is a per-pixel red/blue swap.
+  function bgraToUrl(width: number, height: number, bgra: number[]): string {
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx || bgra.length < width * height * 4) return ''
+    const img = ctx.createImageData(width, height)
+    for (let i = 0; i < width * height; i++) {
+      img.data[i * 4] = bgra[i * 4 + 2]
+      img.data[i * 4 + 1] = bgra[i * 4 + 1]
+      img.data[i * 4 + 2] = bgra[i * 4]
+      img.data[i * 4 + 3] = bgra[i * 4 + 3]
+    }
+    ctx.putImageData(img, 0, 0)
+    return canvas.toDataURL('image/png')
+  }
+
+  // Fetch a row's icon only once it scrolls into view — that is what makes the list cheap.
+  function lazyIcon(node: HTMLElement, id: number) {
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        fetchIcon(id)
+        io.disconnect()
+      }
+    })
+    io.observe(node)
+    return { destroy: () => io.disconnect() }
+  }
+
   const needle = $derived(filter.trim().toLowerCase())
   const matches = $derived(
     apps.filter((a) => a.name.toLowerCase().includes(needle)).slice(0, 80),
@@ -166,6 +216,11 @@
           <ul>
             {#each matches as app (app.id)}
               <li>
+                <span class="ico" use:lazyIcon={app.id}>
+                  {#if icons[app.id]}
+                    <img src={icons[app.id]} alt="" />
+                  {/if}
+                </span>
                 <span class="name">{app.name}</span>
                 <button onclick={() => launch(app)} disabled={busy}>{t('appsLaunch')}</button>
               </li>
@@ -310,6 +365,20 @@
   li.muted {
     background: transparent;
     border-color: transparent;
+  }
+
+  .ico {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+  }
+
+  .ico img {
+    max-width: 18px;
+    max-height: 18px;
+    image-rendering: -webkit-optimize-contrast;
   }
 
   .name {

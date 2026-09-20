@@ -447,6 +447,33 @@ async fn list_apps(
     state.manager.list_apps(&device_id).await
 }
 
+/// One program's icon: raw top-down BGRA pixels the UI paints onto a canvas. `None` when the PC has
+/// no icon for it. Called lazily, one row at a time, so a long list stays cheap.
+#[derive(serde::Serialize)]
+struct IconReply {
+    width: u16,
+    height: u16,
+    bgra: Vec<u8>,
+}
+
+/// Fetches one program's icon (lazy — the UI asks per visible row).
+#[tauri::command]
+async fn app_icon(
+    state: State<'_, AppState>,
+    device_id: String,
+    id: u32,
+) -> Result<Option<IconReply>, String> {
+    Ok(state
+        .manager
+        .app_icon(&device_id, id)
+        .await?
+        .map(|(width, height, bgra)| IconReply {
+            width,
+            height,
+            bgra,
+        }))
+}
+
 /// Starts one of the programs a PC published.
 #[tauri::command]
 async fn launch_app(
@@ -629,6 +656,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             download_recording,
             set_exam,
             list_apps,
+            app_icon,
             launch_app,
             list_running,
             close_app,

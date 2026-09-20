@@ -517,6 +517,10 @@ impl AgentDevice for ScreenCapture {
             .collect()
     }
 
+    fn app_icon(&self, id: u32) -> Option<(u16, u16, Vec<u8>)> {
+        platform::apps::icon_bgra(id)
+    }
+
     fn launch_app(&self, from: &PeerInfo, id: u32) -> (String, bool) {
         match platform::apps::launch(id) {
             Ok(name) => {
