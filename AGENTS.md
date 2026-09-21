@@ -17,10 +17,19 @@ validated) — ready to point at the hosted endpoint when it exists. **Broadcast
 capture thread **skips frames identical to the last one** (re-sending only every 1.5 s so late joiners
 catch up), and the fan-out now pushes each frame to all targets **in parallel** (a `JoinSet`) instead
 of target-by-target — the ~25 s-to-update-a-class problem, down to ~1–2 s. Dependencies: **base64 →
-0.23**, **zip → 8.6**; transitive deps updated; `cargo deny check advisories` is clean (no CVEs).
-**argon2 held at 0.5** on purpose — 0.6 is a breaking migration (password-hash 0.6 / rand_core 0.9) to
-security-critical room-password hashing (D10), to be done as a focused, separately-tested change. 209
+0.23**, **zip → 8.6**; transitive deps updated; `cargo deny check advisories` is clean (no CVEs). 209
 tests pass.
+
+**Dependency update (2026-09-21):** **argon2 0.5 → 0.6** migrated in `crates/net/src/room.rs`. In
+password-hash 0.6 the salt is generated inside `PasswordHasher::hash_password(password)` (via
+`getrandom`), so the explicit `SaltString`/`OsRng` is gone; `PasswordHash`/`PasswordVerifier` now live
+under `argon2::password_hash::phc`. All 11 room-password tests pass (round-trip, wrong-password,
+corrupt-hash, unique salt per hash). The remaining flagged transitive crates **cannot** move under the
+current graph: **generic-array is hard-pinned to `=0.14.7` by `crypto-common 0.1.7`** (a foundational
+RustCrypto dep of both iroh's crypto and argon2), and **toml / toml_datetime / toml_edit** come only
+from the Linux GTK/WebKit stack under tauri (`system-deps → gdk-sys → webkit2gtk`) and conflict with
+tauri's other toml versions — they move when iroh's crypto stack / tauri's Linux deps do, not from our
+manifests.
 
 **Status (2026-09-21, latest):** **Surey**, the in-Console AI assistant (D22), landed. A bottom-right
 **Ask Surey** button opens a **floating, draggable, dockable** panel (`SureyPanel.svelte`, float /

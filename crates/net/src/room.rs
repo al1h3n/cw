@@ -19,7 +19,7 @@
 
 use argon2::{
     Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+    password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},
 };
 
 /// How many characters a generated room password has.
@@ -91,9 +91,11 @@ impl RoomPassword {
     /// # Errors
     /// [`RoomError::HashFailed`] if Argon2 cannot allocate.
     pub fn hash(&self) -> Result<RoomSecret, RoomError> {
-        let salt = SaltString::generate(&mut OsRng);
+        // password-hash 0.6: `hash_password` generates a large random salt itself (via `getrandom`),
+        // so there is no separate `SaltString` to build. `Argon2` only implements
+        // `PasswordHasher<PasswordHash>`, so the output type is inferred.
         let hash = Argon2::default()
-            .hash_password(self.0.as_bytes(), &salt)
+            .hash_password(self.0.as_bytes())
             .map_err(|_| RoomError::HashFailed)?;
         Ok(RoomSecret(hash.to_string()))
     }
