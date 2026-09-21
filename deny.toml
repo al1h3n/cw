@@ -6,6 +6,11 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# Security vulnerabilities in anything are still denied. "Unmaintained" advisories, however, are only
+# actionable for crates WE pull directly — the noise here is all deep transitive deps of iroh/tauri/
+# winit (postcard->heapless->atomic-polyfill, netwatch->paste, tauri->unic-*, winit->ttf-parser, …)
+# for which "no safe upgrade is available". Restrict the unmaintained lint to first-party deps.
+unmaintained = "workspace"
 
 [licenses]
 version = 2
@@ -26,6 +31,8 @@ allow = [
     "Unicode-3.0",
     "Zlib",
     "0BSD",
+    "Unlicense",   # public-domain-equivalent; pulled in transitively (e.g. via the tauri/iroh tree)
+    "IJG",         # jpeg-encoder is "(MIT OR Apache-2.0) AND IJG"; the IJG part is permissive
 ]
 
 [licenses.private]
@@ -33,7 +40,10 @@ ignore = true
 
 [bans]
 multiple-versions = "warn"
+# Our own crates are path deps with no version ("*"), which reads as a wildcard. Allow that for path
+# deps only; a real crates.io wildcard is still denied.
 wildcards = "deny"
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

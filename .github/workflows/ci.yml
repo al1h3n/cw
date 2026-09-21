@@ -55,12 +55,11 @@ jobs:
       - name: Tests
         run: cargo nextest run --workspace
 
-  # cargo-deny is advisory for now: the tree has pre-existing licence/wildcard findings
-  # (path deps, jpeg-encoder's IJG licence, an Unlicense crate in the tauri/iroh tree).
-  # Kept visible but non-blocking until that debt is cleaned up.
+  # Licences, security advisories, dependency sources. deny.toml narrows the "unmaintained" lint to
+  # our own crates and allows path-dep wildcards, so this is a real gate: a genuine vulnerability
+  # (or a yanked/GPL-incompatible dep) fails CI.
   deny:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
