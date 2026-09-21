@@ -1,6 +1,5 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
-  import { onDestroy } from 'svelte'
   import { t } from './i18n.svelte'
   import type { Device } from './types'
 
@@ -22,8 +21,23 @@
   let locked = $state(false)
   let running = $state(false)
   let busy = $state(false)
+  // What to do if the shared *window* is closed (or minimized too long): keep presenting the host
+  // desktop, or stop the broadcast. Ignored for a whole-monitor source.
+  let onClose = $state<'desktop' | 'stop'>('desktop')
   // Default: broadcast to every paired PC. Deselect to present to a subset.
   let targets = $state<Set<string>>(new Set(devices.map((d) => d.device_id)))
+
+  // A broadcast started earlier keeps running even though this dialog was closed and reopened, so
+  // reflect that on open: show it as live with a Stop button rather than a fresh Start.
+  async function loadStatus() {
+    try {
+      const s = await invoke<{ running: boolean; targets: number }>('broadcast_status')
+      running = s.running
+    } catch {
+      // No status is not fatal — the dialog just opens in its idle state.
+    }
+  }
+  loadStatus()
 
   async function loadSources() {
     loading = true
@@ -67,8 +81,10 @@
       await invoke('start_broadcast', {
         sourceKind: selected.kind,
         sourceId: selected.id,
+        sourceTitle: label(selected),
         width: 1600,
         locked,
+        onClose: selected.kind === 'window' ? onClose : 'desktop',
         targets: [...targets],
       })
       running = true
@@ -91,11 +107,9 @@
     }
   }
 
-  // Closing the panel ends the broadcast, so a presentation is never left running invisibly.
-  onDestroy(() => {
-    if (running) invoke('stop_broadcast').catch(() => {})
-  })
-
+  // Closing the panel does NOT end the broadcast: a teacher can present and keep working in the
+  // console, or close this picker entirely, while the class still sees the screen. The header shows a
+  // persistent "presenting…" banner with its own Stop, and Stop here also ends it.
   function onkey(event: KeyboardEvent) {
     if (event.key === 'Escape') onclose()
   }
@@ -126,7 +140,22 @@
               {#if source.thumb}
                 <img src={source.thumb} alt="" />
               {:else}
-                <span class="noimg">{source.kind === 'monitor' ? '🖥' : '🪟'}</span>
+                <!-- No thumbnail: a minimized or hidden window cannot be captured by Windows, so we
+                     draw a clean placeholder icon rather than a broken emoji box, and say why. -->
+                <span class="noimg">
+                  {#if source.kind === 'monitor'}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                      <rect x="2" y="4" width="20" height="13" rx="2" />
+                      <path d="M8 21h8M12 17v4" />
+                    </svg>
+                  {:else}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                      <rect x="3" y="4" width="18" height="16" rx="2" />
+                      <path d="M3 8h18" />
+                    </svg>
+                    <span class="minlabel">{t('broadcastMinimized')}</span>
+                  {/if}
+                </span>
               {/if}
             </span>
             <span class="cap">{label(source)}</span>
@@ -168,6 +197,16 @@
         <span class="hint">{t('broadcastLockHint')}</span>
       </span>
     </label>
+
+    {#if selected?.kind === 'window'}
+      <label class="onclose">
+        <span class="lbl">{t('broadcastOnClose')}</span>
+        <select bind:value={onClose} disabled={running}>
+          <option value="desktop">{t('broadcastOnCloseDesktop')}</option>
+          <option value="stop">{t('broadcastOnCloseStop')}</option>
+        </select>
+      </label>
+    {/if}
 
     <footer>
       <button onclick={loadSources} disabled={running || busy}>{t('broadcastRefresh')}</button>
@@ -268,8 +307,24 @@
   }
 
   .noimg {
-    font-size: 28px;
-    opacity: 0.6;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    color: var(--muted);
+  }
+
+  .noimg svg {
+    width: 30px;
+    height: 30px;
+    opacity: 0.7;
+  }
+
+  .minlabel {
+    font-size: 10px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    opacity: 0.75;
   }
 
   .cap {
@@ -333,6 +388,27 @@
   .lock .hint {
     color: var(--muted);
     font-size: 12px;
+  }
+
+  .onclose {
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+  }
+
+  .onclose .lbl {
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .onclose select {
+    padding: 5px 8px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
   }
 
   footer {

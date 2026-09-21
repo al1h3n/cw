@@ -61,8 +61,8 @@ mod imp {
             Graphics::Gdi::{
                 BeginPaint, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
                 DEFAULT_QUALITY, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW,
-                EndPaint, FF_SWISS, FW_SEMIBOLD, FillRect, HBRUSH, HFONT, OUT_TT_PRECIS,
-                PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+                EndPaint, FF_SWISS, FW_SEMIBOLD, FillRect, HBRUSH, HFONT, InvalidateRect,
+                OUT_TT_PRECIS, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
             },
             System::StationsAndDesktops::{
                 CloseDesktop, CreateDesktopW, DESKTOP_ACCESS_FLAGS, HDESK, OpenDesktopW,
@@ -160,13 +160,23 @@ mod imp {
 
     /// Creates the lock desktop, shows the window on it, runs the loop, then restores the desktop.
     fn run_lock(window: &Arc<AtomicIsize>, ready: &Arc<AtomicBool>) -> Result<(), String> {
-        // Broad access so we can create windows on it and switch to it (create/switch/read/write).
-        let access = DESKTOP_ACCESS_FLAGS(0x01FF);
+        // Access to create windows on the desktop and switch to it (read/write/create/enumerate/
+        // hook/switch), but **not** the two journal-record/playback bits (0x0010 | 0x0020). Requesting
+        // those from `OpenInputDesktop` needs a privilege the per-session helper does not hold, and the
+        // whole open then fails with "Access is denied" — the error seen when starting exam mode. We
+        // never journal, so dropping them costs nothing and fixes the open. (0x01FF & !0x0030 = 0x01CF.)
+        let access = DESKTOP_ACCESS_FLAGS(0x01CF);
         // SAFETY: standard station/desktop calls; every handle is closed before returning, and the
         // window is created only after this thread is attached to the new desktop.
         unsafe {
-            let original = OpenInputDesktop(Default::default(), false, access)
-                .map_err(|e| format!("open current desktop: {}", e.message()))?;
+            // Prefer the desktop that currently owns input; if that cannot be opened (e.g. the secure
+            // Winlogon desktop is up for a UAC prompt), fall back to the ordinary "Default" desktop by
+            // name so exam mode still starts instead of erroring out.
+            let original = match OpenInputDesktop(Default::default(), false, access) {
+                Ok(desktop) => desktop,
+                Err(_) => OpenDesktopW(w!("Default"), Default::default(), false, access.0)
+                    .map_err(|e| format!("open current desktop: {}", e.message()))?,
+            };
             let exam = CreateDesktopW(
                 w!("CowatcherExam"),
                 PCWSTR::null(),
@@ -374,9 +384,16 @@ mod imp {
                 // unlock), pull input back to the exam desktop. Zero means the exam is ending.
                 let exam = EXAM_DESKTOP.load(Ordering::SeqCst);
                 if exam != 0 {
-                    // SAFETY: a desktop handle we created and still own until teardown.
+                    // SAFETY: a desktop handle we created and still own until teardown; `window` is our
+                    // valid lock window.
                     unsafe {
                         let _ = SwitchDesktop(HDESK(exam as *mut std::ffi::c_void));
+                        // After a Win+L / unlock cycle the desktop comes back but our window can lose
+                        // the foreground and its client area is not repainted — it showed as a blank
+                        // black screen with no message. Pull it back to the front and force a repaint
+                        // so the "exam in progress" text is visible again.
+                        let _ = SetForegroundWindow(window);
+                        let _ = InvalidateRect(Some(window), None, true);
                     }
                 }
                 LRESULT(0)

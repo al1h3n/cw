@@ -50,6 +50,14 @@ pub fn capture_window_bgra(id: u64) -> Result<(Vec<u8>, u32, u32), CaptureError>
     imp::capture_window_bgra(id)
 }
 
+/// Whether the window still exists (as opposed to being merely minimized). The broadcaster uses this
+/// to tell "the teacher closed the shared app" (act on it) from "the app is minimized" (keep the last
+/// frame). Always `false` off Windows.
+#[must_use]
+pub fn window_alive(id: u64) -> bool {
+    imp::window_alive(id)
+}
+
 #[cfg(windows)]
 mod imp {
     use super::{CaptureError, WindowInfo};
@@ -65,7 +73,7 @@ mod imp {
             Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow},
             UI::WindowsAndMessaging::{
                 EnumWindows, GA_ROOTOWNER, GWL_EXSTYLE, GetAncestor, GetWindowLongW, GetWindowRect,
-                GetWindowTextLengthW, GetWindowTextW, IsIconic, IsWindowVisible,
+                GetWindowTextLengthW, GetWindowTextW, IsIconic, IsWindow, IsWindowVisible,
                 PW_RENDERFULLCONTENT, WS_EX_TOOLWINDOW,
             },
         },
@@ -129,6 +137,12 @@ mod imp {
             });
         }
         BOOL(1)
+    }
+
+    pub fn window_alive(id: u64) -> bool {
+        let window = HWND(id as *mut std::ffi::c_void);
+        // SAFETY: IsWindow tolerates any handle value and simply reports whether it is a live window.
+        unsafe { IsWindow(Some(window)).as_bool() }
     }
 
     pub fn capture_window_bgra(id: u64) -> Result<(Vec<u8>, u32, u32), CaptureError> {
@@ -259,6 +273,10 @@ mod imp {
     // ponytail: Linux/macOS window capture (XComposite / CGWindowList) lands with the rest of Phase 5.
     pub fn list_windows() -> Vec<WindowInfo> {
         Vec::new()
+    }
+
+    pub fn window_alive(_id: u64) -> bool {
+        false
     }
 
     pub fn capture_window_bgra(_id: u64) -> Result<(Vec<u8>, u32, u32), CaptureError> {

@@ -15,10 +15,22 @@ use tauri::{Manager, State};
 use crate::manager::{DeviceManager, DeviceView};
 
 /// A running broadcast: the stop flag its capture thread watches, and who is receiving it (so it can
-/// be taken off exactly those screens when it ends).
+/// be taken off exactly those screens when it ends). The broadcast keeps running independently of the
+/// picker dialog, so `label` lets the UI show a small "presenting…" banner while it does.
 struct BroadcastHandle {
     stop: Arc<AtomicBool>,
     targets: Vec<String>,
+    /// A short human label for the source ("Display 1", a window title) for the status banner.
+    label: String,
+}
+
+/// What the front end shows in its persistent "you are presenting" banner. `running` is false when no
+/// broadcast is live.
+#[derive(serde::Serialize)]
+struct BroadcastStatus {
+    running: bool,
+    targets: usize,
+    label: String,
 }
 
 /// Everything the window needs, shared across commands.
@@ -163,23 +175,29 @@ fn stop_watching(state: State<'_, AppState>) {
     state.manager.stop_watching();
 }
 
-/// The preview widths in use, so the UI can show the current choice.
+/// The preview settings in use, so the UI can show the current choice.
 #[derive(serde::Serialize)]
 struct PreviewWidths {
     grid: u16,
     focused: u16,
+    quality: u8,
 }
 
 #[tauri::command]
 fn preview_widths(state: State<'_, AppState>) -> PreviewWidths {
-    let (grid, focused) = state.manager.preview_widths();
-    PreviewWidths { grid, focused }
+    let (grid, focused, quality) = state.manager.preview_widths();
+    PreviewWidths {
+        grid,
+        focused,
+        quality,
+    }
 }
 
-/// Sets how sharp the previews are: the grid tiles and the opened screen separately.
+/// Sets how sharp the previews are: the grid width, the opened-screen width, and the JPEG compression
+/// quality (all independent).
 #[tauri::command]
-fn set_preview_widths(state: State<'_, AppState>, grid: u16, focused: u16) {
-    state.manager.set_preview_widths(grid, focused);
+fn set_preview_widths(state: State<'_, AppState>, grid: u16, focused: u16, quality: u8) {
+    state.manager.set_preview_widths(grid, focused, quality);
 }
 
 /// Tells the manager which screen is open, so it is refreshed faster and larger.
@@ -921,7 +939,7 @@ async fn list_broadcast_sources() -> Result<Vec<BroadcastSource>, String> {
         if let Ok(mut capturer) = media::ThumbnailCapturer::new() {
             for monitor in capturer.monitors() {
                 let thumb = capturer
-                    .capture_jpeg(monitor.index, 320)
+                    .capture_jpeg(monitor.index, 320, proto::DEFAULT_THUMBNAIL_QUALITY)
                     .ok()
                     .map(|jpeg| format!("data:image/jpeg;base64,{}", crate::manager::base64(&jpeg)))
                     .unwrap_or_default();
@@ -956,15 +974,23 @@ async fn list_broadcast_sources() -> Result<Vec<BroadcastSource>, String> {
 /// Starts broadcasting a source to the chosen PCs, optionally locking them onto it.
 ///
 /// A capture thread grabs ~5 frames a second (it owns the non-`Send` capturer); a fan-out task sends
-/// each frame to every target. Both stop when [`stop_broadcast`] flips the shared flag.
+/// each frame to every target. The broadcast runs **independently of the picker dialog** — closing the
+/// dialog no longer stops it; only [`stop_broadcast`] does. `on_close` decides what happens if the
+/// shared *window* disappears (the teacher closed it) or stays uncapturable too long (minimized): keep
+/// presenting the host desktop instead (`"desktop"`), or stop the broadcast (`"stop"`).
+// A Tauri command takes its inputs as named arguments, so they cannot be grouped into a struct without
+// changing the front-end call shape; the count is inherent to what a broadcast needs to know.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn start_broadcast(
     state: State<'_, AppState>,
     window: tauri::Window,
     source_kind: String,
     source_id: u64,
+    source_title: String,
     width: u16,
     locked: bool,
+    on_close: String,
     targets: Vec<String>,
 ) -> Result<(), String> {
     if targets.is_empty() {
@@ -974,7 +1000,19 @@ async fn start_broadcast(
     end_broadcast(&state).await;
 
     let stop = Arc::new(AtomicBool::new(false));
+    // Set when a window source is gone and `on_close == "stop"`, so the fan-out can tell the UI why the
+    // broadcast ended (rather than the teacher wondering why it just stopped).
+    let source_lost = Arc::new(AtomicBool::new(false));
     let width = width.clamp(320, 3840);
+    let label = if source_title.trim().is_empty() {
+        if source_kind == "monitor" {
+            format!("Display {}", source_id + 1)
+        } else {
+            "window".to_string()
+        }
+    } else {
+        source_title
+    };
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
 
     // Capture thread: owns the monitor capturer so it never crosses a thread boundary. It skips
@@ -983,10 +1021,17 @@ async fn start_broadcast(
     // broadcast still catches up within a second or two.
     {
         let stop = Arc::clone(&stop);
-        let kind = source_kind.clone();
+        let source_lost = Arc::clone(&source_lost);
+        let start_kind = source_kind.clone();
         std::thread::spawn(move || {
             /// How often an unchanged frame is re-sent, so late joiners catch up.
             const KEEPALIVE: Duration = Duration::from_millis(1500);
+            /// A window uncapturable (minimized) this long is treated like it was closed, so a class is
+            /// never left staring at a frozen frame — the `on_close` policy kicks in.
+            const GRACE: Duration = Duration::from_secs(8);
+            // Both are `mut` because a window source can be swapped for the host desktop mid-broadcast.
+            let mut kind = start_kind;
+            let mut src = source_id;
             let mut monitor = if kind == "monitor" {
                 media::ThumbnailCapturer::new().ok()
             } else {
@@ -996,25 +1041,63 @@ async fn start_broadcast(
             let mut last_sent = std::time::Instant::now()
                 .checked_sub(Duration::from_secs(10))
                 .unwrap_or_else(std::time::Instant::now);
+            // When a window first became uncapturable, so a brief minimize does not trip the policy.
+            let mut unavailable_since: Option<std::time::Instant> = None;
             while !stop.load(Ordering::SeqCst) {
                 let frame = if kind == "window" {
-                    media::window_capture::capture_window_jpeg(source_id, width).ok()
+                    media::window_capture::capture_window_jpeg(src, width).ok()
                 } else {
-                    let index = u8::try_from(source_id).unwrap_or(0);
+                    let index = u8::try_from(src).unwrap_or(0);
+                    // A presentation is worth a sharper JPEG than an idle grid thumbnail.
                     monitor
                         .as_mut()
-                        .and_then(|c| c.capture_jpeg(index, width).ok())
+                        .and_then(|c| c.capture_jpeg(index, width, 78).ok())
                 };
-                if let Some(jpeg) = frame {
-                    let changed = last.as_deref() != Some(jpeg.as_slice());
-                    if changed || last_sent.elapsed() >= KEEPALIVE {
-                        // Blocking send paces us to the fan-out; a full channel = a frame in flight.
-                        if tx.blocking_send(jpeg.clone()).is_err() {
-                            break; // receiver gone
+                match frame {
+                    Some(jpeg) => {
+                        unavailable_since = None;
+                        let changed = last.as_deref() != Some(jpeg.as_slice());
+                        if changed || last_sent.elapsed() >= KEEPALIVE {
+                            // Blocking send paces us to the fan-out; a full channel = a frame in flight.
+                            if tx.blocking_send(jpeg.clone()).is_err() {
+                                break; // receiver gone
+                            }
+                            last = Some(jpeg);
+                            last_sent = std::time::Instant::now();
                         }
-                        last = Some(jpeg);
-                        last_sent = std::time::Instant::now();
                     }
+                    // A monitor is always capturable, so `None` only happens for a window: it is either
+                    // closed (gone) or minimized/occluded. Keep showing the last good frame — never send
+                    // a black one — until it is truly gone or has been unavailable past the grace time.
+                    None if kind == "window" => {
+                        let gone = !media::window_capture::window_alive(src);
+                        let stale = unavailable_since
+                            .get_or_insert_with(std::time::Instant::now)
+                            .elapsed()
+                            >= GRACE;
+                        if gone || stale {
+                            if on_close == "desktop" {
+                                // Fall back to presenting the host's primary desktop.
+                                let mut cap = media::ThumbnailCapturer::new().ok();
+                                let index = cap
+                                    .as_ref()
+                                    .and_then(|c| {
+                                        c.monitors().iter().find(|m| m.primary).map(|m| m.index)
+                                    })
+                                    .unwrap_or(0);
+                                monitor = cap.take();
+                                kind = "monitor".to_string();
+                                src = u64::from(index);
+                                unavailable_since = None;
+                            } else {
+                                // Policy is "stop": signal why, then end. Dropping `tx` closes the
+                                // channel, which lets the fan-out notice and clear the clients.
+                                source_lost.store(true, Ordering::SeqCst);
+                                break;
+                            }
+                        }
+                    }
+                    None => {}
                 }
                 std::thread::sleep(Duration::from_millis(200));
             }
@@ -1024,12 +1107,14 @@ async fn start_broadcast(
     // Fan-out task: push each captured frame to every target PC **in parallel** (a JoinSet), so one
     // frame reaches ten clients in about one device-refresh instead of piling up target-by-target —
     // the difference between ~25 s and ~2 s to update a class. It also tells the UI when a PC that had
-    // been showing the broadcast drops it (closed, crashed or disconnected) — bug report #6.
+    // been showing the broadcast drops it (closed, crashed or disconnected), and when the whole
+    // broadcast ended because its source window went away.
     {
         use tauri::Emitter;
         let manager = Arc::clone(&state.manager);
         let targets = targets.clone();
         let stop = Arc::clone(&stop);
+        let source_lost = Arc::clone(&source_lost);
         let window = window.clone();
         tokio::spawn(async move {
             let mut showing: std::collections::HashMap<String, bool> =
@@ -1060,12 +1145,41 @@ async fn start_broadcast(
                     showing.insert(target, now);
                 }
             }
+            // The capture thread ended. If it was because the shared window closed (policy "stop"),
+            // clear the broadcast off every screen and tell the UI so its banner disappears.
+            if source_lost.load(Ordering::SeqCst) {
+                for target in &targets {
+                    let _ = manager.stop_broadcast(target).await;
+                }
+                let _ = window.emit("cowatcher://broadcast-source-lost", ());
+            }
         });
     }
 
-    *state.broadcast.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some(BroadcastHandle { stop, targets });
+    *state.broadcast.lock().unwrap_or_else(|e| e.into_inner()) = Some(BroadcastHandle {
+        stop,
+        targets,
+        label,
+    });
     Ok(())
+}
+
+/// The current presentation state, for the persistent "you are presenting" banner in the header.
+#[tauri::command]
+fn broadcast_status(state: State<'_, AppState>) -> BroadcastStatus {
+    let guard = state.broadcast.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_ref() {
+        Some(handle) => BroadcastStatus {
+            running: true,
+            targets: handle.targets.len(),
+            label: handle.label.clone(),
+        },
+        None => BroadcastStatus {
+            running: false,
+            targets: 0,
+            label: String::new(),
+        },
+    }
 }
 
 /// Stops the current broadcast and takes it off every screen it was on.
@@ -1242,6 +1356,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             list_broadcast_sources,
             start_broadcast,
             stop_broadcast,
+            broadcast_status,
             set_wallpaper,
             ai_config,
             ai_set_config,

@@ -6,6 +6,44 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-21, two-machine bug batch):** a round of fixes from live two-PC testing.
+`PROTOCOL_VERSION` is **17** (added a per-request JPEG `quality` to `RequestThumbnail`, so preview
+compression is chosen separately from size). Highlights:
+- **Native viewer overlay (bug 1):** the 5×7 bitmap font only had the sign's own letters, so the
+  control hint dropped every `N`/`V`/`Y` ("VIEW ONLY" → "IEW O L"). It now covers full A–Z / 0–9 +
+  punctuation. Toggling control with **Ctrl+Alt+Esc** now forces a repaint, so the green "you are
+  driving" frame and the hint update at once over a still screen (before, it looked like nothing
+  happened until the next frame).
+- **Take control now removes the student's input (bug 7):** the Agent calls
+  `platform::input::set_local_input_blocked(true)` (Win32 `BlockInput`) while a teacher drives, and
+  releases it on control-stop. `ControlSession::serve` was wrapped so control is **always** released
+  on any session exit (a dropped Console never leaves a student blocked; Windows also auto-unblocks on
+  Ctrl+Alt+Del / process exit). *Unverified live* — it seizes the student's input, so it needs the VM.
+- **Exam lock (bugs 2, 3):** the "Access is denied" on start was `OpenInputDesktop` asking for the
+  journal-record/playback access bits the per-session helper lacks — the mask is now `0x01CF` (no
+  journal bits) with a by-name "Default" fallback. After a Win+L/unlock the watchdog now also
+  `SetForegroundWindow` + `InvalidateRect`s the lock window, so its message reappears instead of a
+  black screen.
+- **Opened screen (bugs 4, 5):** the focused view is larger (`min(1600px, 96vw)`), and the frame no
+  longer clips its header dropdowns, so the **record menu** is fully visible instead of cut off.
+- **Broadcast runs in the background (bug 8):** closing the picker no longer stops the presentation;
+  a header banner shows "presenting … · Stop", `broadcast_status` reports it, and reopening the picker
+  reflects the live state. **When the shared window closes / stays minimized too long (bug 12):** a new
+  per-broadcast policy either switches to the host desktop or stops (with a toast). Minimized windows
+  keep the last good frame rather than going black (bug 10), and the picker shows a clean SVG + "no
+  preview (minimized)" placeholder instead of a broken emoji box (bug 6). Truly capturing a minimized
+  window's pixels is not possible (Windows does not render it) and is documented as such.
+- **Compression quality (bug 9):** a new footer "Quality" selector sets JPEG quality independently of
+  the grid/opened widths, threaded end-to-end (`RequestThumbnail.quality` →
+  `ThumbnailCapturer::capture_jpeg(.., quality)` → `encode_bgra_quality`); changing it drops the cached
+  frame so it takes effect immediately.
+- **Program list (bug 11):** the running-apps list already live-refreshes every 2 s, so a program a
+  student opens appears on its own — left as-is.
+
+All gates green: fmt, clippy `-D warnings`, `vite build`, 209 tests, `cargo deny` (advisories/bans/
+licenses/sources). Still to verify on the VM/second machine: input-blocking on take-control, and the
+exam-lock repaint after a real Win+L cycle.
+
 **Status (2026-09-21, polish):** Surey UI polish + broadcast speed-up + dependency hygiene. The AI
 **launcher is now a clean, draggable icon** (`SureyLauncher.svelte` — no text/gradient/dot, position
 persisted); the panel's toolbar/mic/send/trash **icons are aligned stroke-SVGs** (were misaligned

@@ -15,7 +15,7 @@ fn main() {
     match media::ThumbnailCapturer::new() {
         Ok(mut cap) => {
             for m in cap.monitors() {
-                let shot = cap.capture_jpeg(m.index, 320);
+                let shot = cap.capture_jpeg(m.index, 320, 60);
                 let note = shot
                     .map(|j| format!("{} B", j.len()))
                     .unwrap_or_else(|e| e.to_string());

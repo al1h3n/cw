@@ -40,6 +40,9 @@ pub struct ThumbnailCapturer {
     last: Option<(u8, u16, Vec<u8>)>,
     /// Whether the raw-BGRA duplication has produced at least one frame since it was (re)built.
     primed: bool,
+    /// JPEG quality the next encode uses. The Console sets this per request so a teacher can trade
+    /// sharpness against bandwidth; changing it drops the cached frame so the new quality takes effect.
+    quality: u8,
 }
 
 /// One monitor's duplication plus the scratch textures sized for a given output width.
@@ -70,7 +73,18 @@ impl ThumbnailCapturer {
             active: None,
             last: None,
             primed: false,
+            quality: QUALITY,
         })
+    }
+
+    /// Sets the JPEG quality (`1..=100`) for later captures. Dropping the cached frame on a change
+    /// means the new quality is visible on the very next request rather than a frame later.
+    fn set_quality(&mut self, quality: u8) {
+        let quality = quality.clamp(1, 100);
+        if quality != self.quality {
+            self.quality = quality;
+            self.last = None;
+        }
     }
 
     /// How many monitors are attached.
@@ -92,7 +106,13 @@ impl ThumbnailCapturer {
     ///
     /// # Errors
     /// Returns [`CaptureError`] if the monitor is missing or capture fails with no cached frame.
-    pub fn capture_jpeg(&mut self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
+    pub fn capture_jpeg(
+        &mut self,
+        monitor: u8,
+        max_width: u16,
+        quality: u8,
+    ) -> Result<Vec<u8>, CaptureError> {
+        self.set_quality(quality);
         if usize::from(monitor) >= self.monitors.len() {
             return Err(CaptureError(format!("monitor {monitor} not attached")));
         }
@@ -297,7 +317,9 @@ impl ThumbnailCapturer {
         &mut self,
         monitor: u8,
         max_width: u16,
+        quality: u8,
     ) -> Result<Vec<u8>, CaptureError> {
+        self.set_quality(quality);
         if usize::from(monitor) >= self.monitors.len() {
             return Err(CaptureError(format!("monitor {monitor} not attached")));
         }
@@ -325,7 +347,7 @@ impl ThumbnailCapturer {
         let area = output_area(&self.device, monitor)
             .ok_or_else(|| CaptureError(format!("monitor {monitor} has no desktop area")))?;
         let (pixels, w, h) = crate::gdi::capture_area_bgra(area, max_width)?;
-        let jpeg = encode_bgra(&pixels, w, h)?;
+        let jpeg = encode_bgra_quality(&pixels, w, h, self.quality)?;
         self.last = Some((monitor, max_width, jpeg.clone()));
         Ok(jpeg)
     }
@@ -357,7 +379,7 @@ impl ThumbnailCapturer {
             let force = self.last.is_none();
             let pixels = active.next_frame(&self.context, force, FRAME_WAIT_MS)?;
             if let Some((pixels, w, h)) = pixels {
-                let jpeg = encode_bgra(&pixels, w, h)?;
+                let jpeg = encode_bgra_quality(&pixels, w, h, self.quality)?;
                 self.last = Some((monitor, max_width, jpeg.clone()));
                 return Ok(Some(jpeg));
             }
@@ -394,11 +416,21 @@ fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext), CaptureError> 
     Ok((device, context))
 }
 
-/// Encodes packed BGRA pixels as JPEG.
-/// Encodes packed BGRA pixels as JPEG. Public so the recorder can encode a resized frame.
+/// Encodes packed BGRA pixels as JPEG at the default thumbnail quality. Public so the recorder and the
+/// broadcaster can encode a resized frame without choosing a quality.
 pub fn encode_bgra(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, CaptureError> {
+    encode_bgra_quality(pixels, width, height, QUALITY)
+}
+
+/// Encodes packed BGRA pixels as JPEG at a chosen `quality` (`1..=100`).
+pub fn encode_bgra_quality(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    quality: u8,
+) -> Result<Vec<u8>, CaptureError> {
     let mut jpeg = Vec::new();
-    Encoder::new(&mut jpeg, QUALITY)
+    Encoder::new(&mut jpeg, quality.clamp(1, 100))
         .encode(pixels, width as u16, height as u16, ColorType::Bgra)
         .map_err(CaptureError::new)?;
     Ok(jpeg)
@@ -630,7 +662,7 @@ mod tests {
         // Retry a little: the very first duplication may need a screen change to produce a frame.
         let mut jpeg = Vec::new();
         for attempt in 0..5 {
-            match capturer.capture_jpeg(0, 320) {
+            match capturer.capture_jpeg(0, 320, QUALITY) {
                 Ok(bytes) => {
                     jpeg = bytes;
                     break;

@@ -17,7 +17,16 @@
     { width: 1920, key: 'qualityNative' },
   ]
 
-  let widths = $state<PreviewWidths>({ grid: 480, focused: 1280 })
+  // Compression quality is separate from size: same pixels, more or fewer JPEG artefacts. A 1080p
+  // screen can still look blocky at low quality, which is what this lets a teacher fix.
+  const COMPRESSION = [
+    { q: 45, key: 'compressLight' },
+    { q: 60, key: 'compressBalanced' },
+    { q: 80, key: 'compressSharp' },
+    { q: 92, key: 'compressMax' },
+  ]
+
+  let widths = $state<PreviewWidths>({ grid: 480, focused: 1280, quality: 60 })
 
   onMount(async () => {
     widths = await invoke<PreviewWidths>('preview_widths')
@@ -25,7 +34,11 @@
 
   async function apply(next: PreviewWidths) {
     widths = next
-    await invoke('set_preview_widths', { grid: next.grid, focused: next.focused })
+    await invoke('set_preview_widths', {
+      grid: next.grid,
+      focused: next.focused,
+      quality: next.quality,
+    })
   }
 </script>
 
@@ -50,6 +63,19 @@
   >
     {#each FOCUSED as option (option.width)}
       <option value={String(option.width)}>{t(option.key)} · {option.width}px</option>
+    {/each}
+  </select>
+</label>
+
+<label class="quality">
+  <span>{t('qualityCompression')}</span>
+  <select
+    value={String(widths.quality)}
+    onchange={(e) =>
+      apply({ ...widths, quality: Number((e.currentTarget as HTMLSelectElement).value) })}
+  >
+    {#each COMPRESSION as option (option.q)}
+      <option value={String(option.q)}>{t(option.key)}</option>
     {/each}
   </select>
 </label>

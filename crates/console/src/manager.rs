@@ -27,6 +27,9 @@ const RETRY: Duration = Duration::from_secs(5);
 pub const DEFAULT_GRID_WIDTH: u16 = 480;
 /// Preview width for the screen a teacher has opened.
 pub const DEFAULT_FOCUSED_WIDTH: u16 = 1280;
+/// JPEG compression quality used until the teacher picks one (`1..=100`). Separate from width: a
+/// teacher can keep the same size but ask for a sharper, heavier image.
+pub const DEFAULT_QUALITY: u8 = proto::DEFAULT_THUMBNAIL_QUALITY;
 
 /// What the UI shows for one student PC.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -248,6 +251,8 @@ struct Preview {
     grid_width: u16,
     /// Width requested for the one screen a teacher has opened.
     focused_width: u16,
+    /// JPEG compression quality for previews (`1..=100`), independent of the widths above.
+    quality: u8,
     /// The device currently opened full-size, which is refreshed faster and larger.
     focused: Option<[u8; 32]>,
     /// The one device being listened to. Listening to a whole room at once would be unusable noise
@@ -262,6 +267,7 @@ impl Default for Preview {
         Self {
             grid_width: DEFAULT_GRID_WIDTH,
             focused_width: DEFAULT_FOCUSED_WIDTH,
+            quality: DEFAULT_QUALITY,
             focused: None,
             listening: None,
             controlling: None,
@@ -426,20 +432,22 @@ impl DeviceManager {
             .collect()
     }
 
-    /// The preview widths currently in use, as `(grid, focused)`.
+    /// The preview settings currently in use, as `(grid width, focused width, quality)`.
     #[must_use]
-    pub fn preview_widths(&self) -> (u16, u16) {
+    pub fn preview_widths(&self) -> (u16, u16, u8) {
         let preview = self.preview.lock().unwrap_or_else(|e| e.into_inner());
-        (preview.grid_width, preview.focused_width)
+        (preview.grid_width, preview.focused_width, preview.quality)
     }
 
-    /// Sets how wide the captured images should be. Bigger is sharper and costs more bandwidth.
+    /// Sets how wide the captured images should be and how hard they are compressed. Bigger widths and
+    /// higher quality are both sharper and cost more bandwidth; they are chosen independently.
     ///
     /// Values are clamped to something sane so a typo cannot ask for a 1-pixel or 20000-pixel image.
-    pub fn set_preview_widths(&self, grid: u16, focused: u16) {
+    pub fn set_preview_widths(&self, grid: u16, focused: u16, quality: u8) {
         let mut preview = self.preview.lock().unwrap_or_else(|e| e.into_inner());
         preview.grid_width = grid.clamp(160, 3840);
         preview.focused_width = focused.clamp(320, 3840);
+        preview.quality = quality.clamp(1, 100);
     }
 
     /// Marks one device as the opened screen, which refreshes faster and at the focused width.
@@ -1192,8 +1200,8 @@ impl DeviceManager {
                 self.set_last_action(id, ActionReport::new(action, outcome));
             }
 
-            let (monitor, width, focused) = self.request_shape(id, key);
-            match session.request_thumbnail(monitor, width).await {
+            let (monitor, width, quality, focused) = self.request_shape(id, key);
+            match session.request_thumbnail(monitor, width, quality).await {
                 Ok(jpeg) => self.set_screen(id, &jpeg),
                 // The student's screen is momentarily uncapturable — locked, or a UAC prompt is up.
                 // Keep the connection and the last frame; the screen comes back on a later tick.
@@ -1266,8 +1274,9 @@ impl DeviceManager {
         }
     }
 
-    /// What to ask for next: which monitor, how wide, and whether this is the opened screen.
-    fn request_shape(&self, id: &str, key: [u8; 32]) -> (u8, u16, bool) {
+    /// What to ask for next: which monitor, how wide, the JPEG quality, and whether this is the opened
+    /// screen (which also refreshes faster).
+    fn request_shape(&self, id: &str, key: [u8; 32]) -> (u8, u16, u8, bool) {
         let preview = *self.preview.lock().unwrap_or_else(|e| e.into_inner());
         let focused = preview.focused == Some(key);
         let monitor = self
@@ -1281,7 +1290,7 @@ impl DeviceManager {
         } else {
             preview.grid_width
         };
-        (monitor, width, focused)
+        (monitor, width, preview.quality, focused)
     }
 
     /// Records the monitors a PC reported, keeping the teacher's choice if it still exists.

@@ -282,12 +282,15 @@
   .frame {
     display: grid;
     grid-template-rows: auto 1fr;
-    width: min(1180px, 100%);
+    /* Fill most of the window: the opened screen should be large, not a small centred card. */
+    width: min(1600px, 96vw);
     max-height: 100%;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 14px;
-    overflow: hidden;
+    /* Not `hidden`: a dropdown opened from the header (the record menu) must be able to spill past the
+       frame edge instead of being clipped. The picture area below clips its own corners itself. */
+    overflow: visible;
   }
 
   header {
@@ -297,6 +300,8 @@
     gap: 8px 10px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--line);
+    /* Match the frame's rounding now that the frame itself no longer clips (overflow is visible). */
+    border-radius: 14px 14px 0 0;
   }
 
   /* Localization-proof: a longer label (e.g. Russian) never clips or pushes a control off-screen —
@@ -398,6 +403,9 @@
     background: #05070a;
     min-height: 0;
     padding: 10px;
+    /* The frame no longer clips, so round and clip the picture area here to keep the bottom corners. */
+    overflow: hidden;
+    border-radius: 0 0 14px 14px;
   }
 
   img {

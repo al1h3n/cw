@@ -83,7 +83,12 @@ impl AgentDevice for FakeCapture {
         }
     }
 
-    fn capture_thumbnail(&self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
+    fn capture_thumbnail(
+        &self,
+        monitor: u8,
+        max_width: u16,
+        _quality: u8,
+    ) -> Result<Vec<u8>, CaptureError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.last_request.store(
             u32::from(monitor) << 16 | u32::from(max_width),
@@ -154,7 +159,10 @@ fn trusted_console_gets_thumbnails_only_on_request() {
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
         for _ in 0..3 {
-            let jpeg = session.request_thumbnail(0, 320).await.expect("thumbnail");
+            let jpeg = session
+                .request_thumbnail(0, 320, 60)
+                .await
+                .expect("thumbnail");
             assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "starts with a JPEG SOI marker");
         }
         assert_eq!(
@@ -170,7 +178,7 @@ fn trusted_console_gets_thumbnails_only_on_request() {
         assert_eq!(monitors[1].width, 2560);
 
         session
-            .request_thumbnail(1, 1280)
+            .request_thumbnail(1, 1280, 60)
             .await
             .expect("second monitor");
         let packed = last_request.load(Ordering::SeqCst);
@@ -241,7 +249,7 @@ fn untrusted_console_is_refused() {
             let mut session =
                 ControlSession::connect(&console_ep, agent_addr, &console_trust, console_hello)
                     .await?;
-            session.request_thumbnail(0, 320).await?;
+            session.request_thumbnail(0, 320, 60).await?;
             Ok(())
         }
         .await;

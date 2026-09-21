@@ -106,6 +106,22 @@ pub fn release_all_modifiers() {
     }
 }
 
+/// Blocks or unblocks the student's own physical mouse and keyboard.
+///
+/// While the teacher is driving a PC the student must not be able to fight for the pointer or type
+/// over them, so this turns the student's *local* input off. Injected remote input (`SendInput`) still
+/// passes through, so the teacher keeps full control. Windows lifts the block automatically if
+/// Ctrl+Alt+Del is pressed or the process exits, so a student can never be permanently locked out.
+///
+/// Best-effort by design: a refusal (for example because a more privileged desktop currently owns
+/// input) is returned so the caller can log it, but it must not stop control from working.
+///
+/// # Errors
+/// [`InputError`] if the OS refuses the request.
+pub fn set_local_input_blocked(blocked: bool) -> Result<(), InputError> {
+    imp::set_local_input_blocked(blocked)
+}
+
 /// Virtual-key codes for every modifier the gate can forward.
 pub const MODIFIER_KEYS: [u16; 8] = [
     VK_SHIFT,
@@ -236,7 +252,7 @@ impl KeyGate {
 #[cfg(windows)]
 mod imp {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+        BlockInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
         KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE,
         MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
         MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK,
@@ -244,6 +260,12 @@ mod imp {
     };
 
     use super::{ButtonState, InputError, MouseButton};
+
+    pub fn set_local_input_blocked(blocked: bool) -> Result<(), InputError> {
+        // SAFETY: BlockInput takes a plain bool and keeps no state of ours. Injected SendInput still
+        // works while a block is active, which is exactly what lets the teacher keep control.
+        unsafe { BlockInput(blocked) }.map_err(|_| InputError::Refused)
+    }
 
     /// How Windows counts one wheel notch.
     const WHEEL_DELTA: i32 = 120;
@@ -368,6 +390,9 @@ mod imp {
         Err(InputError::NotSupported)
     }
     pub fn unicode_char(_ch: char, _s: ButtonState) -> Result<(), InputError> {
+        Err(InputError::NotSupported)
+    }
+    pub fn set_local_input_blocked(_blocked: bool) -> Result<(), InputError> {
         Err(InputError::NotSupported)
     }
 }

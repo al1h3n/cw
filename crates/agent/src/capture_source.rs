@@ -610,6 +610,16 @@ impl AgentDevice for ScreenCapture {
             return enabled;
         }
         *controlled = enabled;
+        // Take the student's own mouse and keyboard out of the way while the teacher drives, and give
+        // them back the moment control is released. Injected remote input still passes through, so this
+        // only stops the *student* from fighting the pointer. Best-effort: if Windows refuses (a more
+        // privileged desktop owns input), log it and carry on — control still works, just not exclusively.
+        if let Err(err) = platform::input::set_local_input_blocked(enabled) {
+            eprintln!(
+                "could not {} local input: {err}",
+                if enabled { "block" } else { "restore" }
+            );
+        }
         if !enabled {
             // Never leave a student with a modifier stuck down because the key-up never arrived.
             platform::input::release_all_modifiers();
@@ -651,7 +661,12 @@ impl AgentDevice for ScreenCapture {
         self.blocker.take_closed()
     }
 
-    fn capture_thumbnail(&self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
+    fn capture_thumbnail(
+        &self,
+        monitor: u8,
+        max_width: u16,
+        quality: u8,
+    ) -> Result<Vec<u8>, CaptureError> {
         // While a full-resolution stream is running it owns the one Desktop Duplication this output
         // allows, so the grid's thumbnails take the GDI path meanwhile — otherwise the two duplications
         // fight and both fail every frame (E_INVALIDARG). Read the flag and release the lock before
@@ -666,9 +681,9 @@ impl AgentDevice for ScreenCapture {
             .lock()
             .map_err(|_| CaptureError("capture lock poisoned".into()))?;
         let result = if streaming {
-            capturer.capture_jpeg_gdi(monitor, max_width)
+            capturer.capture_jpeg_gdi(monitor, max_width, quality)
         } else {
-            capturer.capture_jpeg(monitor, max_width)
+            capturer.capture_jpeg(monitor, max_width, quality)
         };
         result.map_err(|e| CaptureError(e.to_string()))
     }

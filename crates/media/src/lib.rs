@@ -51,7 +51,7 @@ mod gdi;
 mod windows_capture;
 
 #[cfg(windows)]
-pub use windows_capture::{ThumbnailCapturer, encode_bgra};
+pub use windows_capture::{ThumbnailCapturer, encode_bgra, encode_bgra_quality};
 
 #[cfg(not(windows))]
 mod stub {
@@ -78,6 +78,7 @@ mod stub {
             &mut self,
             _monitor: u8,
             _max_width: u16,
+            _quality: u8,
         ) -> Result<Vec<u8>, CaptureError> {
             Err(CaptureError("screen capture is Windows-only so far".into()))
         }

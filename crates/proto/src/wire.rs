@@ -447,13 +447,15 @@ pub enum Control {
     Pong(u64),
     /// Console → Agent: capture one image of `monitor`, no wider than `max_width` pixels.
     /// The Agent captures only in response to this, so an idle Console means zero capture (D11).
-    /// `max_width` is how the Console picks preview quality: small for the grid, large when a
-    /// teacher opens one screen.
+    /// `max_width` sets the pixel size (grid vs. opened screen); `quality` sets the JPEG compression
+    /// quality independently, so a teacher can trade sharpness against bandwidth at a fixed size.
     RequestThumbnail {
         /// Which monitor (0-based).
         monitor: u8,
         /// Maximum width in pixels; the Agent scales down to fit and keeps the aspect ratio.
         max_width: u16,
+        /// JPEG quality, `1..=100`. Higher is sharper and larger; see [`DEFAULT_THUMBNAIL_QUALITY`].
+        quality: u8,
     },
     /// Console → Agent: what monitors does this PC have?
     ListMonitors,

@@ -41,6 +41,22 @@
   let error = $state<string | null>(null)
   let loaded = $state(false)
   let keyCopied = $state(false)
+  // A broadcast keeps running after its picker dialog is closed, so a small header banner shows it is
+  // live and offers a one-click Stop.
+  let presenting = $state<{ running: boolean; targets: number; label: string }>({
+    running: false,
+    targets: 0,
+    label: '',
+  })
+
+  async function stopPresenting() {
+    try {
+      await invoke('stop_broadcast')
+    } catch (e) {
+      error = String(e)
+    }
+    presenting = { running: false, targets: 0, label: '' }
+  }
 
   async function copyKey() {
     if (!info) return
@@ -157,6 +173,13 @@
     } catch (e) {
       error = String(e)
     }
+    try {
+      presenting = await invoke<{ running: boolean; targets: number; label: string }>(
+        'broadcast_status',
+      )
+    } catch {
+      // Status is best-effort; leave the banner as it was on a transient miss.
+    }
   }
 
   /** Listening is exclusive: starting one PC stops any other. */
@@ -256,12 +279,20 @@
       const dev = devices.find((d) => d.device_id === e.payload)
       toasts.push(t('broadcastEndedOn', dev?.name || e.payload), 'error')
     })
+    // The shared window closed and the teacher chose "stop": the backend already cleared the class, so
+    // just drop the banner and let them know.
+    unlistenSourceLost = await tauriListen('cowatcher://broadcast-source-lost', () => {
+      presenting = { running: false, targets: 0, label: '' }
+      toasts.push(t('broadcastSourceLost'), 'info')
+    })
   })
 
   let unlistenBroadcast: UnlistenFn | null = null
+  let unlistenSourceLost: UnlistenFn | null = null
   onDestroy(() => {
     if (timer) window.clearInterval(timer)
     unlistenBroadcast?.()
+    unlistenSourceLost?.()
   })
 </script>
 
@@ -308,6 +339,15 @@
       {/if}
     </div>
   </header>
+
+  {#if presenting.running}
+    <div class="presenting" role="status" transition:slide={{ duration: 160, easing: cubicOut }}>
+      <span class="pulse"></span>
+      <span class="ptext">{t('broadcastBanner', presenting.label, presenting.targets)}</span>
+      <span class="pspace"></span>
+      <button class="pstop" onclick={stopPresenting}>{t('broadcastStop')}</button>
+    </div>
+  {/if}
 
   {#if error}
     <div class="banner" role="alert">
@@ -610,6 +650,58 @@
     border-bottom: 1px solid #5a2b2b;
     color: #ffd7d7;
     font-size: 13px;
+  }
+
+  /* Presenting banner: quiet, accent-tinted, always visible while a broadcast runs in the background. */
+  .presenting {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 20px;
+    background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+    border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .presenting .pulse {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent);
+    animation: presenting-pulse 1.8s ease-out infinite;
+  }
+
+  @keyframes presenting-pulse {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+    }
+    70% {
+      box-shadow: 0 0 0 7px transparent;
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+
+  .presenting .ptext {
+    font-weight: 500;
+  }
+
+  .presenting .pspace {
+    flex: 1;
+  }
+
+  .presenting .pstop {
+    padding: 4px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    color: #06101f;
+    cursor: pointer;
   }
 
   main {

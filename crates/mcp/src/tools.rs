@@ -224,7 +224,7 @@ pub async fn call(fleet: &Fleet, name: &str, args: &Value) -> Result<Vec<Value>,
                 .unwrap_or(640);
             let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
             let jpeg = session
-                .request_thumbnail(monitor, max_width)
+                .request_thumbnail(monitor, max_width, proto::DEFAULT_THUMBNAIL_QUALITY)
                 .await
                 .map_err(|e| e.to_string())?;
             let data = base64::engine::general_purpose::STANDARD.encode(&jpeg);

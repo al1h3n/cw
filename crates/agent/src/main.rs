@@ -227,8 +227,13 @@ fn cmd_capture(args: &[String]) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     println!("monitors: {}", capture.monitor_count());
     let started = std::time::Instant::now();
-    let jpeg = net::AgentDevice::capture_thumbnail(&capture, monitor, max_width)
-        .map_err(|e| e.to_string())?;
+    let jpeg = net::AgentDevice::capture_thumbnail(
+        &capture,
+        monitor,
+        max_width,
+        proto::DEFAULT_THUMBNAIL_QUALITY,
+    )
+    .map_err(|e| e.to_string())?;
     let elapsed = started.elapsed();
     std::fs::write(Path::new(file), &jpeg).map_err(|e| format!("write {file}: {e}"))?;
     println!("wrote {} ({} bytes) in {elapsed:?}", file, jpeg.len());

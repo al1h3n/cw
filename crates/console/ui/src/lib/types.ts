@@ -37,6 +37,7 @@ export interface ActionReport {
 export interface PreviewWidths {
   grid: number
   focused: number
+  quality: number
 }
 
 export interface ConsoleInfo {

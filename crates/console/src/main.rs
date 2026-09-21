@@ -197,7 +197,7 @@ async fn cmd_watch(args: Vec<String>) -> Result<(), String> {
     for index in 0..count {
         let started = Instant::now();
         let jpeg = session
-            .request_thumbnail(0, 320)
+            .request_thumbnail(0, 320, proto::DEFAULT_THUMBNAIL_QUALITY)
             .await
             .map_err(|e| e.to_string())?;
         let file = out_dir.join(format!("{}-{index:03}.jpg", peer.device_id));
@@ -448,7 +448,9 @@ async fn cmd_broadcast(args: Vec<String>) -> Result<(), String> {
     let frames = seconds * 5;
     let mut sent = 0u32;
     for _ in 0..frames {
-        let jpeg = capturer.capture_jpeg(0, width).map_err(|e| e.to_string())?;
+        let jpeg = capturer
+            .capture_jpeg(0, width, proto::DEFAULT_THUMBNAIL_QUALITY)
+            .map_err(|e| e.to_string())?;
         let (showing, problem) = session
             .show_broadcast(jpeg, false)
             .await

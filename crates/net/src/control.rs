@@ -58,11 +58,17 @@ pub trait AgentDevice {
         proto::ActionOutcome::Failed(proto::ActionFailure::NotSupported)
     }
 
-    /// Returns a JPEG of `monitor`, scaled to at most `max_width` pixels wide.
+    /// Returns a JPEG of `monitor`, scaled to at most `max_width` pixels wide and encoded at the given
+    /// JPEG `quality` (`1..=100`).
     ///
     /// # Errors
     /// Returns [`CaptureError`] if the monitor is unavailable or capture fails.
-    fn capture_thumbnail(&self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError>;
+    fn capture_thumbnail(
+        &self,
+        monitor: u8,
+        max_width: u16,
+        quality: u8,
+    ) -> Result<Vec<u8>, CaptureError>;
 
     /// The monitors this device has, so the Console can offer them.
     fn monitors(&self) -> Vec<Monitor>;
@@ -354,10 +360,15 @@ impl ControlSession {
         &mut self,
         monitor: u8,
         max_width: u16,
+        quality: u8,
     ) -> Result<Vec<u8>, EndpointError> {
         write_message(
             &mut self.send,
-            &Control::RequestThumbnail { monitor, max_width },
+            &Control::RequestThumbnail {
+                monitor,
+                max_width,
+                quality,
+            },
         )
         .await?;
         match read_message::<Control>(&mut self.recv).await? {
@@ -849,6 +860,17 @@ impl ControlSession {
     /// # Errors
     /// A capture error ends the session with [`EndpointError::Capture`].
     pub async fn serve(mut self, source: &impl AgentDevice) -> Result<(), EndpointError> {
+        let result = self.serve_inner(source).await;
+        // Whatever ended the session — a clean close, a write error, or an unexpected message — must
+        // not leave the student with their input blocked or a modifier stuck down because control was
+        // still on when the Console vanished. `set_control` is idempotent, so this is a no-op when
+        // control was never granted.
+        source.set_control(&self.peer, false);
+        result
+    }
+
+    /// The request loop; [`ControlSession::serve`] wraps this so control is always released on exit.
+    async fn serve_inner(&mut self, source: &impl AgentDevice) -> Result<(), EndpointError> {
         let mut seq = 0u64;
         let mut audio_seq = 0u64;
         loop {
@@ -857,13 +879,17 @@ impl ControlSession {
                 Err(_) => return Ok(()), // Console closed the stream: clean end.
             };
             match request {
-                Control::RequestThumbnail { monitor, max_width } => {
+                Control::RequestThumbnail {
+                    monitor,
+                    max_width,
+                    quality,
+                } => {
                     // A capture failure is almost always transient — a lock screen, a UAC secure
                     // desktop, a resolution change. Ending the whole session on it made both sides
                     // reconnect at once and again, an endless storm (seen live). Instead, tell the
                     // Console the screen is momentarily unavailable and keep serving; the next
                     // request usually succeeds once the desktop is back.
-                    match source.capture_thumbnail(monitor, max_width) {
+                    match source.capture_thumbnail(monitor, max_width, quality) {
                         Ok(jpeg) => {
                             seq += 1;
                             write_message(
