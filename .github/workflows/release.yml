@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: # lets you build an installer on demand from the Actions tab
+
+permissions:
+  contents: write # needed to create the GitHub Release
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install NASM
+        run: choco install nasm -y --no-progress
+
+      - name: Add NASM to PATH
+        run: echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/console/ui/package-lock.json
+
+      - name: Build the Console UI
+        working-directory: crates/console/ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build release binaries
+        run: cargo build --release -p console-app -p agent -p viewer
+
+      - name: Stage binaries into dist
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\release\cowatcher-console.exe dist\ -Force
+          Copy-Item target\release\cowatcher-agent.exe   dist\ -Force
+          Copy-Item target\release\cowatcher-viewer.exe  dist\ -Force
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build the installer
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\cowatcher.iss'
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cowatcher-windows
+          path: |
+            installer\Output\cowatcher-setup.exe
+            dist\cowatcher-console.exe
+            dist\cowatcher-agent.exe
+            dist\cowatcher-viewer.exe
+
+      - name: Publish GitHub Release (on tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer\Output\cowatcher-setup.exe
+            dist\cowatcher-console.exe
+            dist\cowatcher-agent.exe
+            dist\cowatcher-viewer.exe

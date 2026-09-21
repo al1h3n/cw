@@ -657,8 +657,16 @@ mod tests {
 
         migrate_identity(&from, &to);
 
-        assert_eq!(std::fs::read(to.join("device.key")).unwrap(), b"KEY", "missing file copied");
-        assert_eq!(std::fs::read(to.join("trust.bin")).unwrap(), b"KEEP", "existing file kept");
+        assert_eq!(
+            std::fs::read(to.join("device.key")).unwrap(),
+            b"KEY",
+            "missing file copied"
+        );
+        assert_eq!(
+            std::fs::read(to.join("trust.bin")).unwrap(),
+            b"KEEP",
+            "existing file kept"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

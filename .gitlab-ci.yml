@@ -1,0 +1,51 @@
+# GitLab CI for Co-watcher.
+#
+# Building Windows .exe files needs a WINDOWS runner. GitLab's SaaS Windows runners use the tag
+# `saas-windows-medium-amd64` (they consume CI minutes). If you self-host, tag your Windows runner
+# `windows` and change the `tags:` below. Linux shared runners cannot produce these binaries.
+
+stages:
+  - check
+  - release
+
+default:
+  tags: [saas-windows-medium-amd64]
+  before_script:
+    - choco install nasm -y --no-progress
+    - $env:Path += ";C:\Program Files\NASM"
+    - rustup toolchain install 1.97.1 --component rustfmt clippy
+    - rustup default 1.97.1
+
+check:
+  stage: check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+  script:
+    - cd crates/console/ui; npm ci; npm run build; cd ../../..
+    - cargo fmt --all --check
+    - cargo clippy --workspace --all-targets -- -D warnings
+    - cargo test --workspace
+
+installer:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+    - if: $CI_PIPELINE_SOURCE == "web" # manual "Run pipeline"
+  script:
+    - cd crates/console/ui; npm ci; npm run build; cd ../../..
+    - cargo build --release -p console-app -p agent -p viewer
+    - New-Item -ItemType Directory -Force -Path dist | Out-Null
+    - Copy-Item target/release/cowatcher-console.exe dist/ -Force
+    - Copy-Item target/release/cowatcher-agent.exe dist/ -Force
+    - Copy-Item target/release/cowatcher-viewer.exe dist/ -Force
+    - choco install innosetup -y --no-progress
+    - '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/cowatcher.iss'
+  artifacts:
+    name: cowatcher-windows
+    paths:
+      - installer/Output/cowatcher-setup.exe
+      - dist/cowatcher-console.exe
+      - dist/cowatcher-agent.exe
+      - dist/cowatcher-viewer.exe
+    expire_in: 30 days

@@ -72,8 +72,8 @@ mod imp {
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
                 GetSystemMetrics, HMENU, KillTimer, MSG, PostMessageW, PostQuitMessage,
                 RegisterClassExW, SC_CLOSE, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow,
-                SetTimer, ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_PAINT, WM_SYSCOMMAND,
-                WM_TIMER, WNDCLASSEXW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+                SetTimer, ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_PAINT,
+                WM_SYSCOMMAND, WM_TIMER, WNDCLASSEXW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
             },
         },
         core::{PCWSTR, w},
@@ -351,7 +351,12 @@ mod imp {
                     if wide.is_empty() {
                         wide = "Exam in progress".encode_utf16().collect();
                     }
-                    DrawTextW(dc, &mut wide, &mut rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    DrawTextW(
+                        dc,
+                        &mut wide,
+                        &mut rect,
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+                    );
 
                     SelectObject(dc, old);
                     let _ = DeleteObject(font.into());

@@ -170,7 +170,15 @@ fn run(
     };
     let (width, height) = resize::fit_within(src_w, src_h, options.max_width, options.max_height);
 
-    let mut sink = match make_sink(ffmpeg.as_deref(), path, src_w, src_h, width, height, &options) {
+    let mut sink = match make_sink(
+        ffmpeg.as_deref(),
+        path,
+        src_w,
+        src_h,
+        width,
+        height,
+        &options,
+    ) {
         Ok(sink) => sink,
         Err(err) => return fail(status, err),
     };
@@ -230,7 +238,9 @@ fn run(
     // downloads before then simply gets the single-pass version, which is already valid.
     if finished.is_ok()
         && options.two_pass
-        && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
+        && path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
         && let Some(ffmpeg) = ffmpeg
     {
         let (codec_lib, preset, use_bframes, _) = ffmpeg_params(&options);
@@ -288,10 +298,17 @@ fn frame_interval(fps: u32) -> std::time::Duration {
 
 /// Clamps the teacher's choices into ranges the recorder can deliver.
 fn clamp_options(mut o: RecordOptions) -> RecordOptions {
-    o.max_width = o.max_width.clamp(RecordingSettings::MIN_WIDTH, RecordingSettings::MAX_WIDTH) & !1;
-    o.max_height =
-        o.max_height.clamp(RecordingSettings::MIN_WIDTH, RecordingSettings::MAX_HEIGHT) & !1;
-    o.fps = o.fps.clamp(RecordingSettings::MIN_FPS, RecordingSettings::MAX_FPS);
+    o.max_width = o
+        .max_width
+        .clamp(RecordingSettings::MIN_WIDTH, RecordingSettings::MAX_WIDTH)
+        & !1;
+    o.max_height = o
+        .max_height
+        .clamp(RecordingSettings::MIN_WIDTH, RecordingSettings::MAX_HEIGHT)
+        & !1;
+    o.fps = o
+        .fps
+        .clamp(RecordingSettings::MIN_FPS, RecordingSettings::MAX_FPS);
     o.quality = o.quality.min(51);
     o.bframes = o.bframes.min(16);
     o
@@ -320,7 +337,8 @@ impl Sink {
                 if scaled.is_empty() {
                     return Ok(());
                 }
-                let jpeg = media::encode_bgra(&scaled, *out_w, *out_h).map_err(|e| e.to_string())?;
+                let jpeg =
+                    media::encode_bgra(&scaled, *out_w, *out_h).map_err(|e| e.to_string())?;
                 recorder.push_jpeg(&jpeg).map_err(|e| e.to_string())
             }
         }
@@ -438,7 +456,12 @@ fn ffmpeg_params(o: &RecordOptions) -> (String, String, bool, String) {
         Scaler::Lanczos => "lanczos",
         Scaler::Neighbor => "neighbor",
     };
-    (codec_lib.to_string(), preset, use_bframes, scaler.to_string())
+    (
+        codec_lib.to_string(),
+        preset,
+        use_bframes,
+        scaler.to_string(),
+    )
 }
 
 /// Where recordings are kept on this PC.

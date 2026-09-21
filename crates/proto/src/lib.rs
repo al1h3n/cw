@@ -30,7 +30,7 @@ pub use pairing::{MAX_ROOM_NAME, MAX_ROOM_SECRET, PairMessage, PairRejection, We
 pub use record_id::{RecordId, RecordIdParseError};
 pub use wire::{
     Action, ActionFailure, ActionOutcome, AppEntry, AudioFormat, Capabilities, Codec, Control,
-    DecodeError, Hello, InputEvent, MAX_BLOCKLIST, MAX_INPUT_BATCH, Monitor, PointerButton,
-    Preset, ProtocolError, RecordOptions, RecordingInfo, Role, RunningApp, Scaler, StoredRecording,
+    DecodeError, Hello, InputEvent, MAX_BLOCKLIST, MAX_INPUT_BATCH, Monitor, PointerButton, Preset,
+    ProtocolError, RecordOptions, RecordingInfo, Role, RunningApp, Scaler, StoredRecording,
     VideoSettings, decode, encode, version_compatible,
 };

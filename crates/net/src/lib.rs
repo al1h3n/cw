@@ -12,7 +12,8 @@ pub mod room;
 
 pub use control::{AgentDevice, CaptureError, ControlSession, LocalHello, PeerInfo, VideoStream};
 pub use endpoint::{
-    EndpointError, PairedPeer, agent_request_pairing, bind, console_accept_pairing, console_pair_connection,
+    EndpointError, PairedPeer, agent_request_pairing, bind, console_accept_pairing,
+    console_pair_connection,
 };
 pub use identity::{Identity, IdentityError};
 pub use pairing::{

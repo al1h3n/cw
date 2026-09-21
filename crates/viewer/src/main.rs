@@ -547,7 +547,8 @@ impl App {
             // rows/columns of pixels, which is what made text look "half visible"; an area average
             // keeps every glyph readable. At the same size we copy 1:1 (pixel-perfect text), and when
             // enlarging we nearest-fill (upscaled screen text can't be sharper than its source).
-            let scaled: std::borrow::Cow<[u8]> = if draw_w == frame.width && draw_h == frame.height {
+            let scaled: std::borrow::Cow<[u8]> = if draw_w == frame.width && draw_h == frame.height
+            {
                 std::borrow::Cow::Borrowed(&frame.bgra)
             } else if draw_w < frame.width || draw_h < frame.height {
                 std::borrow::Cow::Owned(media::resize::area_average(
@@ -591,9 +592,21 @@ impl App {
         if self.controlling {
             let (c, t) = (0x00_2ECC71, 4);
             fill_rect(buf, width, height, (0, 0, width, t), c);
-            fill_rect(buf, width, height, (0, height.saturating_sub(t), width, t), c);
+            fill_rect(
+                buf,
+                width,
+                height,
+                (0, height.saturating_sub(t), width, t),
+                c,
+            );
             fill_rect(buf, width, height, (0, 0, t, height), c);
-            fill_rect(buf, width, height, (width.saturating_sub(t), 0, t, height), c);
+            fill_rect(
+                buf,
+                width,
+                height,
+                (width.saturating_sub(t), 0, t, height),
+                c,
+            );
         }
         buffer.present().map_err(|e| anyhow!("{e}"))?;
         Ok(())
@@ -772,7 +785,8 @@ fn nearest_resample(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) 
     for dy in 0..dst_h {
         let sy = (u64::from(dy) * u64::from(src_h) / u64::from(dst_h)).min(u64::from(src_h - 1));
         for dx in 0..dst_w {
-            let sx = (u64::from(dx) * u64::from(src_w) / u64::from(dst_w)).min(u64::from(src_w - 1));
+            let sx =
+                (u64::from(dx) * u64::from(src_w) / u64::from(dst_w)).min(u64::from(src_w - 1));
             let s = ((sy * u64::from(src_w) + sx) as usize) * 4;
             let d = ((dy * dst_w + dx) as usize) * 4;
             out[d..d + 4].copy_from_slice(&src[s..s + 4]);
@@ -793,7 +807,9 @@ const GLYPH_ROWS: u32 = 7;
 const GAP: u32 = 1;
 const PAD: u32 = 22;
 /// Colours the sign takes each time it bounces off a wall (0x00RRGGBB), like the old DVD logo.
-const PALETTE: [u32; 6] = [0x00_E5FF, 0xFF_3DC4, 0xFF_D500, 0x3D_FF7A, 0xFF_7A1A, 0xFF_FFFF];
+const PALETTE: [u32; 6] = [
+    0x00_E5FF, 0xFF_3DC4, 0xFF_D500, 0x3D_FF7A, 0xFF_7A1A, 0xFF_FFFF,
+];
 
 /// The sign's pixel size (box including padding).
 fn sign_dims() -> (u32, u32) {
@@ -893,19 +909,45 @@ fn draw_hint(buf: &mut [u32], w: u32, h: u32, controlling: bool) {
 /// A 5x7 uppercase bitmap font, just the glyphs the sign needs (others render blank).
 fn font(ch: char) -> [u8; 7] {
     match ch.to_ascii_uppercase() {
-        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
-        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
-        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
-        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
-        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
-        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
-        'I' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
-        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
-        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
-        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'C' => [
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
+        ],
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'I' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+        ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'B' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
         '-' => [0, 0, 0, 0b01110, 0, 0, 0],
         _ => [0; 7],
     }
@@ -926,36 +968,104 @@ fn pointer_button(button: MouseButton) -> Option<PointerButton> {
 fn keycode_to_vk(code: KeyCode) -> Option<u16> {
     use KeyCode::*;
     let vk: u16 = match code {
-        KeyA => 0x41, KeyB => 0x42, KeyC => 0x43, KeyD => 0x44, KeyE => 0x45, KeyF => 0x46,
-        KeyG => 0x47, KeyH => 0x48, KeyI => 0x49, KeyJ => 0x4A, KeyK => 0x4B, KeyL => 0x4C,
-        KeyM => 0x4D, KeyN => 0x4E, KeyO => 0x4F, KeyP => 0x50, KeyQ => 0x51, KeyR => 0x52,
-        KeyS => 0x53, KeyT => 0x54, KeyU => 0x55, KeyV => 0x56, KeyW => 0x57, KeyX => 0x58,
-        KeyY => 0x59, KeyZ => 0x5A,
-        Digit0 => 0x30, Digit1 => 0x31, Digit2 => 0x32, Digit3 => 0x33, Digit4 => 0x34,
-        Digit5 => 0x35, Digit6 => 0x36, Digit7 => 0x37, Digit8 => 0x38, Digit9 => 0x39,
+        KeyA => 0x41,
+        KeyB => 0x42,
+        KeyC => 0x43,
+        KeyD => 0x44,
+        KeyE => 0x45,
+        KeyF => 0x46,
+        KeyG => 0x47,
+        KeyH => 0x48,
+        KeyI => 0x49,
+        KeyJ => 0x4A,
+        KeyK => 0x4B,
+        KeyL => 0x4C,
+        KeyM => 0x4D,
+        KeyN => 0x4E,
+        KeyO => 0x4F,
+        KeyP => 0x50,
+        KeyQ => 0x51,
+        KeyR => 0x52,
+        KeyS => 0x53,
+        KeyT => 0x54,
+        KeyU => 0x55,
+        KeyV => 0x56,
+        KeyW => 0x57,
+        KeyX => 0x58,
+        KeyY => 0x59,
+        KeyZ => 0x5A,
+        Digit0 => 0x30,
+        Digit1 => 0x31,
+        Digit2 => 0x32,
+        Digit3 => 0x33,
+        Digit4 => 0x34,
+        Digit5 => 0x35,
+        Digit6 => 0x36,
+        Digit7 => 0x37,
+        Digit8 => 0x38,
+        Digit9 => 0x39,
         Enter | NumpadEnter => 0x0D,
         Escape => 0x1B,
         Backspace => 0x08,
         Tab => 0x09,
         Space => 0x20,
-        Minus => 0xBD, Equal => 0xBB,
-        BracketLeft => 0xDB, BracketRight => 0xDD, Backslash => 0xDC,
-        Semicolon => 0xBA, Quote => 0xDE, Backquote => 0xC0,
-        Comma => 0xBC, Period => 0xBE, Slash => 0xBF,
+        Minus => 0xBD,
+        Equal => 0xBB,
+        BracketLeft => 0xDB,
+        BracketRight => 0xDD,
+        Backslash => 0xDC,
+        Semicolon => 0xBA,
+        Quote => 0xDE,
+        Backquote => 0xC0,
+        Comma => 0xBC,
+        Period => 0xBE,
+        Slash => 0xBF,
         CapsLock => 0x14,
-        ControlLeft => 0xA2, ControlRight => 0xA3,
-        ShiftLeft => 0xA0, ShiftRight => 0xA1,
-        AltLeft => 0xA4, AltRight => 0xA5,
-        SuperLeft => 0x5B, SuperRight => 0x5C,
-        ArrowLeft => 0x25, ArrowUp => 0x26, ArrowRight => 0x27, ArrowDown => 0x28,
-        Home => 0x24, End => 0x23, PageUp => 0x21, PageDown => 0x22,
-        Insert => 0x2D, Delete => 0x2E,
-        F1 => 0x70, F2 => 0x71, F3 => 0x72, F4 => 0x73, F5 => 0x74, F6 => 0x75,
-        F7 => 0x76, F8 => 0x77, F9 => 0x78, F10 => 0x79, F11 => 0x7A, F12 => 0x7B,
-        Numpad0 => 0x60, Numpad1 => 0x61, Numpad2 => 0x62, Numpad3 => 0x63, Numpad4 => 0x64,
-        Numpad5 => 0x65, Numpad6 => 0x66, Numpad7 => 0x67, Numpad8 => 0x68, Numpad9 => 0x69,
-        NumpadMultiply => 0x6A, NumpadAdd => 0x6B, NumpadSubtract => 0x6D,
-        NumpadDecimal => 0x6E, NumpadDivide => 0x6F,
+        ControlLeft => 0xA2,
+        ControlRight => 0xA3,
+        ShiftLeft => 0xA0,
+        ShiftRight => 0xA1,
+        AltLeft => 0xA4,
+        AltRight => 0xA5,
+        SuperLeft => 0x5B,
+        SuperRight => 0x5C,
+        ArrowLeft => 0x25,
+        ArrowUp => 0x26,
+        ArrowRight => 0x27,
+        ArrowDown => 0x28,
+        Home => 0x24,
+        End => 0x23,
+        PageUp => 0x21,
+        PageDown => 0x22,
+        Insert => 0x2D,
+        Delete => 0x2E,
+        F1 => 0x70,
+        F2 => 0x71,
+        F3 => 0x72,
+        F4 => 0x73,
+        F5 => 0x74,
+        F6 => 0x75,
+        F7 => 0x76,
+        F8 => 0x77,
+        F9 => 0x78,
+        F10 => 0x79,
+        F11 => 0x7A,
+        F12 => 0x7B,
+        Numpad0 => 0x60,
+        Numpad1 => 0x61,
+        Numpad2 => 0x62,
+        Numpad3 => 0x63,
+        Numpad4 => 0x64,
+        Numpad5 => 0x65,
+        Numpad6 => 0x66,
+        Numpad7 => 0x67,
+        Numpad8 => 0x68,
+        Numpad9 => 0x69,
+        NumpadMultiply => 0x6A,
+        NumpadAdd => 0x6B,
+        NumpadSubtract => 0x6D,
+        NumpadDecimal => 0x6E,
+        NumpadDivide => 0x6F,
         _ => return None,
     };
     Some(vk)

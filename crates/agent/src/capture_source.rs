@@ -380,9 +380,18 @@ impl AgentDevice for ScreenCapture {
             };
             match opened {
                 Ok(presenter) => {
-                    let how = if locked { "broadcast-start-locked" } else { "broadcast-start" };
-                    println!("console {} started broadcasting (locked={locked})", from.device_id);
-                    let _ = self.audit.note(net::endpoint::now_ms(), from.device_id, how);
+                    let how = if locked {
+                        "broadcast-start-locked"
+                    } else {
+                        "broadcast-start"
+                    };
+                    println!(
+                        "console {} started broadcasting (locked={locked})",
+                        from.device_id
+                    );
+                    let _ = self
+                        .audit
+                        .note(net::endpoint::now_ms(), from.device_id, how);
                     *slot = Some(presenter);
                 }
                 Err(err) => return (false, err.to_string()),
@@ -502,11 +511,7 @@ impl AgentDevice for ScreenCapture {
     fn recording_path(&self, file: &str) -> Option<std::path::PathBuf> {
         // Trust boundary: a bare file name only, that really exists in our recordings folder — never
         // a path with separators or `..`, so a Console can never pull an arbitrary file off the PC.
-        if file.is_empty()
-            || file.contains('/')
-            || file.contains('\\')
-            || file.contains("..")
-        {
+        if file.is_empty() || file.contains('/') || file.contains('\\') || file.contains("..") {
             return None;
         }
         let path = self.recordings_dir.join(file);

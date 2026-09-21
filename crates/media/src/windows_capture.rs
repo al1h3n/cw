@@ -293,7 +293,11 @@ impl ThumbnailCapturer {
     ///
     /// # Errors
     /// Returns [`CaptureError`] if the monitor is missing or the GDI grab fails.
-    pub fn capture_jpeg_gdi(&mut self, monitor: u8, max_width: u16) -> Result<Vec<u8>, CaptureError> {
+    pub fn capture_jpeg_gdi(
+        &mut self,
+        monitor: u8,
+        max_width: u16,
+    ) -> Result<Vec<u8>, CaptureError> {
         if usize::from(monitor) >= self.monitors.len() {
             return Err(CaptureError(format!("monitor {monitor} not attached")));
         }

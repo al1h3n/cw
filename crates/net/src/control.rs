@@ -659,7 +659,9 @@ impl ControlSession {
         let mut remaining = size;
         let mut buf = vec![0u8; 64 * 1024];
         while remaining > 0 {
-            let want = buf.len().min(usize::try_from(remaining).unwrap_or(buf.len()));
+            let want = buf
+                .len()
+                .min(usize::try_from(remaining).unwrap_or(buf.len()));
             recv.read_exact(&mut buf[..want])
                 .await
                 .map_err(|e| EndpointError::Stream(e.to_string()))?;
@@ -1014,9 +1016,7 @@ impl ControlSession {
                     write_message(&mut self.send, &Control::Apps(source.list_apps())).await?;
                 }
                 Control::FetchAppIcon { id } => {
-                    let (width, height, bgra) = source
-                        .app_icon(id)
-                        .unwrap_or((0, 0, Vec::new()));
+                    let (width, height, bgra) = source.app_icon(id).unwrap_or((0, 0, Vec::new()));
                     write_message(
                         &mut self.send,
                         &Control::AppIcon {
@@ -1198,7 +1198,10 @@ mod tests {
         // Whatever a peer sends, only the final component survives, so a download can never be
         // written outside the chosen directory.
         assert_eq!(sanitize_file_name("recording-abc.mp4"), "recording-abc.mp4");
-        assert_eq!(sanitize_file_name(r"..\..\Windows\system32\evil.dll"), "evil.dll");
+        assert_eq!(
+            sanitize_file_name(r"..\..\Windows\system32\evil.dll"),
+            "evil.dll"
+        );
         assert_eq!(sanitize_file_name("../../etc/passwd"), "passwd");
         assert_eq!(sanitize_file_name(""), "recording.bin");
         assert_eq!(sanitize_file_name("/"), "recording.bin");

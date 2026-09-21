@@ -40,7 +40,11 @@ pub struct FfmpegOptions<'a> {
 /// Returns `None` if neither is present, so the caller can fall back to the built-in recorder.
 #[must_use]
 pub fn find_ffmpeg() -> Option<PathBuf> {
-    let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let name = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {

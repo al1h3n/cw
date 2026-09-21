@@ -210,7 +210,11 @@ fn wake(state: State<'_, AppState>, device_id: String) -> Result<usize, String> 
 
 /// Sets a teacher's own name for one PC (empty clears it back to just the id).
 #[tauri::command]
-fn rename_device(state: State<'_, AppState>, device_id: String, name: String) -> Result<(), String> {
+fn rename_device(
+    state: State<'_, AppState>,
+    device_id: String,
+    name: String,
+) -> Result<(), String> {
     state.manager.rename(&device_id, &name)
 }
 
@@ -344,7 +348,10 @@ fn send_input(state: State<'_, AppState>, events: Vec<UiInput>) -> Result<(), St
 
 /// Starts recording one PC's screen. Returns what it is actually recording after clamping.
 #[tauri::command]
-#[expect(clippy::too_many_arguments, reason = "a flat command over the recording options")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a flat command over the recording options"
+)]
 async fn start_recording(
     state: State<'_, AppState>,
     device_id: String,
@@ -521,7 +528,10 @@ struct BulkResult {
 }
 
 #[tauri::command]
-#[expect(clippy::too_many_arguments, reason = "a flat command over the recording options")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a flat command over the recording options"
+)]
 async fn record_all(
     state: State<'_, AppState>,
     max_width: u32,
@@ -550,7 +560,11 @@ async fn record_all(
         if device.status != crate::manager::DeviceStatus::Live {
             continue;
         }
-        match state.manager.start_recording(&device.device_id, options).await {
+        match state
+            .manager
+            .start_recording(&device.device_id, options)
+            .await
+        {
             Ok(_) => result.ok += 1,
             Err(_) => result.failed += 1,
         }
@@ -598,7 +612,10 @@ async fn download_all_recordings_zip(state: State<'_, AppState>) -> Result<Strin
     let mut entries: Vec<(String, std::path::PathBuf)> = Vec::new();
     for (device_id, file) in &wanted {
         if let Ok(saved) = state.manager.download_recording(device_id, file).await {
-            entries.push((format!("{device_id}/{file}"), std::path::PathBuf::from(saved)));
+            entries.push((
+                format!("{device_id}/{file}"),
+                std::path::PathBuf::from(saved),
+            ));
         }
     }
     if entries.is_empty() {
@@ -782,7 +799,12 @@ fn begin_pairing(state: State<'_, AppState>, window: tauri::Window) -> PairingIn
     *state.pairing_code.lock().unwrap_or_else(|e| e.into_inner()) = Some(code);
 
     // Stop any earlier loop, then start a fresh one that accepts PC after PC until the panel closes.
-    if let Some(previous) = state.pairing_stop.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if let Some(previous) = state
+        .pairing_stop
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
         previous.notify_waiters();
     }
     let stop = Arc::new(tokio::sync::Notify::new());
@@ -815,7 +837,12 @@ fn begin_pairing(state: State<'_, AppState>, window: tauri::Window) -> PairingIn
 /// Stops the continuous-pairing loop (the teacher closed the "Add a PC" panel).
 #[tauri::command]
 fn stop_pairing(state: State<'_, AppState>) {
-    if let Some(stop) = state.pairing_stop.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if let Some(stop) = state
+        .pairing_stop
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
         stop.notify_waiters();
     }
 }
@@ -919,7 +946,9 @@ async fn start_broadcast(
                     media::window_capture::capture_window_jpeg(source_id, width).ok()
                 } else {
                     let index = u8::try_from(source_id).unwrap_or(0);
-                    monitor.as_mut().and_then(|c| c.capture_jpeg(index, width).ok())
+                    monitor
+                        .as_mut()
+                        .and_then(|c| c.capture_jpeg(index, width).ok())
                 };
                 if let Some(jpeg) = frame {
                     // Blocking send paces us to the fan-out; a full channel means a frame in flight.

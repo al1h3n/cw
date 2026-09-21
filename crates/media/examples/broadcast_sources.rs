@@ -6,7 +6,9 @@ fn main() {
     println!("{} windows", windows.len());
     for w in windows.iter().take(6) {
         let shot = media::window_capture::capture_window_jpeg(w.id, 320);
-        let note = shot.map(|j| format!("{} B", j.len())).unwrap_or_else(|e| e.to_string());
+        let note = shot
+            .map(|j| format!("{} B", j.len()))
+            .unwrap_or_else(|e| e.to_string());
         println!("  0x{:x}  {:<40}  thumb: {note}", w.id, w.title);
     }
 
@@ -14,8 +16,13 @@ fn main() {
         Ok(mut cap) => {
             for m in cap.monitors() {
                 let shot = cap.capture_jpeg(m.index, 320);
-                let note = shot.map(|j| format!("{} B", j.len())).unwrap_or_else(|e| e.to_string());
-                println!("monitor {} {}x{} primary={} thumb: {note}", m.index, m.width, m.height, m.primary);
+                let note = shot
+                    .map(|j| format!("{} B", j.len()))
+                    .unwrap_or_else(|e| e.to_string());
+                println!(
+                    "monitor {} {}x{} primary={} thumb: {note}",
+                    m.index, m.width, m.height, m.primary
+                );
             }
         }
         Err(e) => println!("capturer failed: {e}"),

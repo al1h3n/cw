@@ -156,7 +156,8 @@ mod imp {
             let old = SelectObject(mem, HGDIOBJ(bitmap.0));
 
             // PW_RENDERFULLCONTENT (2) makes DWM/GPU windows (browsers, UWP) render into our DC.
-            let printed = PrintWindow(window, mem, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)).as_bool();
+            let printed =
+                PrintWindow(window, mem, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)).as_bool();
             let mut pixels = read_bgra(mem, bitmap, width, height);
 
             // Some apps ignore PrintWindow and leave the client area blank (only the title bar draws).
@@ -164,7 +165,17 @@ mod imp {
             // covered by another window (a foreground window being presented usually is not). The
             // complete fix for occluded/GPU windows is Windows.Graphics.Capture (a later change).
             if !printed || looks_blank(&pixels, width, height) {
-                let _ = BitBlt(mem, 0, 0, width, height, Some(screen), rect.left, rect.top, SRCCOPY);
+                let _ = BitBlt(
+                    mem,
+                    0,
+                    0,
+                    width,
+                    height,
+                    Some(screen),
+                    rect.left,
+                    rect.top,
+                    SRCCOPY,
+                );
                 pixels = read_bgra(mem, bitmap, width, height);
             }
 
@@ -219,11 +230,7 @@ mod imp {
                 DIB_RGB_COLORS,
             )
         };
-        if lines == 0 {
-            Vec::new()
-        } else {
-            pixels
-        }
+        if lines == 0 { Vec::new() } else { pixels }
     }
 
     /// Cheap heuristic: is the window's client area a single flat colour (PrintWindow gave nothing)?
@@ -255,6 +262,8 @@ mod imp {
     }
 
     pub fn capture_window_bgra(_id: u64) -> Result<(Vec<u8>, u32, u32), CaptureError> {
-        Err(CaptureError::new("window capture is not supported on this platform"))
+        Err(CaptureError::new(
+            "window capture is not supported on this platform",
+        ))
     }
 }

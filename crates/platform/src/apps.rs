@@ -174,8 +174,8 @@ mod imp {
     use windows::{
         Win32::{
             Graphics::Gdi::{
-                BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
-                GetObjectW, HGDIOBJ, ReleaseDC,
+                BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC,
+                GetDIBits, GetObjectW, HGDIOBJ, ReleaseDC,
             },
             UI::{
                 Shell::{SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGetFileInfoW, ShellExecuteW},

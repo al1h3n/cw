@@ -57,9 +57,13 @@ mod imp {
             // module handle is this process's own.
             unsafe {
                 let module = GetModuleHandleW(PCWSTR::null()).ok()?;
-                let hook =
-                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), Some(HINSTANCE(module.0)), 0)
-                        .ok()?;
+                let hook = SetWindowsHookExW(
+                    WH_KEYBOARD_LL,
+                    Some(hook_proc),
+                    Some(HINSTANCE(module.0)),
+                    0,
+                )
+                .ok()?;
                 Some(Self { hook })
             }
         }
@@ -96,7 +100,8 @@ mod imp {
             let alt_down = (event.flags & LLKHF_ALTDOWN).0 != 0;
             // Ctrl is not in the hook flags; read its live state.
             // SAFETY: a documented, side-effect-free key-state query.
-            let ctrl_down = unsafe { GetAsyncKeyState(i32::from(VK_CONTROL.0)) } as u16 & 0x8000 != 0;
+            let ctrl_down =
+                unsafe { GetAsyncKeyState(i32::from(VK_CONTROL.0)) } as u16 & 0x8000 != 0;
             if should_block(event.vkCode, alt_down, ctrl_down) {
                 return LRESULT(1); // swallow: do not pass to the next hook or the app
             }
