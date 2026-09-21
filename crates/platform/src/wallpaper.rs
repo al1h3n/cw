@@ -75,6 +75,38 @@ pub fn restore(save_path: &std::path::Path) -> Result<(), WallpaperError> {
     imp::restore(save_path)
 }
 
+/// Sets the desktop wallpaper to `image` (raw PNG, JPEG or BMP bytes), a lasting choice a teacher
+/// pushes to a student PC.
+///
+/// The bytes are written to a stable file next to `save_path` (the same file [`set_black`] uses to
+/// remember the student's wallpaper) and the desktop is pointed at it. If a teacher is *currently*
+/// watching — so the wallpaper is blacked out — the new image is recorded as the wallpaper to
+/// restore rather than shown immediately, so it appears the moment watching ends instead of being
+/// overwritten by the black-out. An empty `image` clears the wallpaper to a plain background.
+///
+/// # Errors
+/// [`WallpaperError`] if the format is not one the OS accepts, or a file/registry step fails.
+pub fn set_image(image: &[u8], save_path: &std::path::Path) -> Result<(), WallpaperError> {
+    imp::set_image(image, save_path)
+}
+
+/// The file extension for a wallpaper image, chosen from its magic bytes. Defaults to `bmp` so an
+/// unrecognised blob is at least written with a concrete extension.
+#[must_use]
+pub fn image_extension(image: &[u8]) -> &'static str {
+    if image.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "png"
+    } else if image.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "jpg"
+    } else if image.starts_with(b"BM") {
+        "bmp"
+    } else if image.starts_with(b"GIF8") {
+        "gif"
+    } else {
+        "bmp"
+    }
+}
+
 /// Snapshots the current wallpaper, blacks it out, then restores it, and reports whether the
 /// original came back. A quick, self-contained way to confirm the black-on-watch mechanism works on
 /// this PC — it does briefly flash the desktop black, so it is only run on request.
@@ -182,6 +214,37 @@ mod imp {
         result
     }
 
+    pub fn set_image(image: &[u8], save_path: &Path) -> Result<(), WallpaperError> {
+        // An empty image means "no wallpaper": clear it and stop remembering any earlier choice.
+        if image.is_empty() {
+            let _ = std::fs::remove_file(save_path);
+            return apply_wallpaper("");
+        }
+        // Write the chosen image beside the save file with a concrete extension the OS understands.
+        // A fixed name (per extension) keeps the agent dir from filling with old wallpapers.
+        let ext = super::image_extension(image);
+        let chosen = save_path.with_file_name(format!("wallpaper-chosen.{ext}"));
+        for other in ["png", "jpg", "bmp", "gif"] {
+            if other != ext {
+                let _ = std::fs::remove_file(
+                    save_path.with_file_name(format!("wallpaper-chosen.{other}")),
+                );
+            }
+        }
+        std::fs::write(&chosen, image)
+            .map_err(|e| WallpaperError::Os(format!("write wallpaper image: {e}")))?;
+        let chosen = chosen.to_string_lossy().to_string();
+
+        // If black is currently shown (a teacher is watching), don't fight the black-out: record the
+        // new image as the wallpaper to restore, so it shows the instant watching ends.
+        if save_path.exists() {
+            std::fs::write(save_path, &chosen)
+                .map_err(|e| WallpaperError::Os(format!("update saved wallpaper: {e}")))?;
+            return Ok(());
+        }
+        apply_wallpaper(&chosen)
+    }
+
     pub fn selftest(save_path: &Path) -> Result<bool, WallpaperError> {
         let before = current_wallpaper();
         set_black(save_path)?;
@@ -262,6 +325,19 @@ mod bmp_tests {
         let bmp = black_bmp();
         assert!(bmp[54..].iter().all(|&b| b == 0), "pixels must be black");
     }
+
+    #[test]
+    fn wallpaper_extension_is_read_from_the_magic_bytes() {
+        assert_eq!(image_extension(&[0x89, b'P', b'N', b'G', 0x0D]), "png");
+        assert_eq!(image_extension(&[0xFF, 0xD8, 0xFF, 0xE0]), "jpg");
+        assert_eq!(image_extension(b"BM..."), "bmp");
+        assert_eq!(image_extension(b"GIF89a"), "gif");
+        // Our own black bitmap round-trips as a BMP.
+        assert_eq!(image_extension(&black_bmp()), "bmp");
+        // An unknown blob falls back to a concrete extension rather than panicking.
+        assert_eq!(image_extension(&[0, 1, 2, 3]), "bmp");
+        assert_eq!(image_extension(&[]), "bmp");
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -302,6 +378,12 @@ mod imp {
     }
 
     pub fn set_black(_save_path: &std::path::Path) -> Result<(), WallpaperError> {
+        Err(WallpaperError::NotSupported)
+    }
+
+    // ponytail: GNOME/KDE set the wallpaper via gsettings/plasma-apply-wallpaperimage; added with
+    // the Linux Agent.
+    pub fn set_image(_image: &[u8], _save_path: &std::path::Path) -> Result<(), WallpaperError> {
         Err(WallpaperError::NotSupported)
     }
 

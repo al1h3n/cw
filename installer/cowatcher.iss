@@ -37,6 +37,8 @@ UninstallDisplayName={#AppName}
 Source: "{#Bin}\cowatcher-console.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Bin}\cowatcher-agent.exe";   DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Bin}\cowatcher-viewer.exe";  DestDir: "{app}"; Flags: ignoreversion
+; The MCP server is a teacher-side tool (drives paired PCs for AI features); installed with the Console.
+Source: "{#Bin}\cowatcher-mcp.exe";     DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist; Check: IsTeacher
 ; Optional: drop ffmpeg.exe next to the agent for real-codec recording (skipped if not present).
 Source: "..\dist\ffmpeg.exe";           DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\dist\README.txt";           DestDir: "{app}"; Flags: ignoreversion isreadme skipifsourcedoesntexist

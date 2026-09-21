@@ -6,6 +6,20 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-21, later):** the **Co-watcher MCP server** and **push-a-wallpaper** landed.
+`crates/mcp` (`cowatcher-mcp`) is a Model Context Protocol server (JSON-RPC 2.0 over stdio) that
+exposes the Console's typed remote actions as MCP tools — `list_devices`, `device_status`,
+`screen_thumbnail`, `list_apps`/`launch_app`/`close_app`, `set_blocklist`, `perform_action`,
+`set_exam`, `set_wallpaper`, and the recording set — reusing the same `net::ControlSession` / closed
+`proto::Action` enum (no arbitrary-command tool). It depends only on `net`+`proto`, so no OS code
+lives in it (the pinned rule). The operator brief (`crates/mcp/SKILL.md`) is sent **once** as the
+`initialize` `instructions` (and offered as a prompt + resource), so a client injects it ahead of
+prompts without re-spending tokens each turn — this is the "AI skill before prompts" the user asked
+for. Also: a teacher can now **set a desktop wallpaper** on one/selected/all connected PCs
+(`Control::SetWallpaper`, `platform::wallpaper::set_image`, a "Wallpaper" Console button +
+`WallpaperDialog`). `PROTOCOL_VERSION` is 16. The MCP ships in the release build/installer (teacher
+side). **Next: the AI chat panel (D22).**
+
 **Status (2026-09-21):** **broadcast with a source picker + student lockdown** landed. A Zoom/Teams-style
 picker (`gui::list_broadcast_sources`) lists every monitor and app window with a thumbnail; the teacher
 picks one, chooses target PCs, and can tick **Lock students onto it** — a locked broadcast shows on a

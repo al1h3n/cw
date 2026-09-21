@@ -25,6 +25,7 @@ cross-platform in principle; only the OS glue is missing.
 | Full-screen broadcast | `platform::present` (StretchDIBits) | ✅ | ❌ stub | ❌ stub |
 | Broadcast/exam **lockdown** desktop | `platform::present` / `platform::examlock` (`CreateDesktopW` + `SwitchDesktop`) | ✅ | ❌ n/a² | ❌ n/a² |
 | Wallpaper black-out | `platform::wallpaper` | ✅ | ❌ | ❌ |
+| Set a chosen wallpaper | `platform::wallpaper::set_image` (SPI_SETDESKWALLPAPER) | ✅ | ❌ stub³ | ❌ stub³ |
 | Wake-on-LAN | `platform::wol` | ✅ (portable UDP) | likely ✅¹ | likely ✅¹ |
 | Service + per-session helper | `platform::service`, `platform::session` | ✅ (unverified, see §8 checklist) | ❌ | ❌ |
 | Console GUI (Tauri) | `crates/console` | ✅ | build not yet exercised | build not yet exercised |
@@ -35,6 +36,12 @@ that OS yet, so treat it as unverified until someone does.
 ² *n/a* — the separate-desktop lock is a Win32 concept. The equivalent on Linux/macOS is a different
 mechanism entirely (a full-screen override-redirect/kiosk surface, or the platform's Assessment/Guided
 Access mode); it will be designed when those platforms are built, not ported.
+³ *stub* — GNOME/KDE set the wallpaper through `gsettings` / `plasma-apply-wallpaperimage`, macOS
+through `NSWorkspace.setDesktopImageURL`; the `#[cfg(not(windows))]` path returns `NotSupported` until
+the respective Agent is built.
+
+> The **MCP server** (`crates/mcp`) is OS-agnostic — it only speaks to Agents over the network, so it
+> builds and runs on any OS; the per-OS support above is entirely about what the *Agent* can carry out.
 
 ## What each non-Windows backend does today
 

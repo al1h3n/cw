@@ -421,6 +421,48 @@ async fn set_exam(
     state.manager.set_exam(&device_id, on, &message).await
 }
 
+/// Sets the desktop wallpaper on the chosen PCs (or every connected PC when `targets` is empty) to
+/// the supplied image bytes (PNG, JPEG or BMP). Returns how many were set and how many failed.
+///
+/// The front end reads the file the teacher picked and passes its bytes; the Console never touches
+/// the file path itself, so this cannot be turned into "read an arbitrary file".
+#[tauri::command]
+async fn set_wallpaper(
+    state: State<'_, AppState>,
+    targets: Vec<String>,
+    image: Vec<u8>,
+) -> Result<BulkResult, String> {
+    if image.is_empty() {
+        return Err("no image was chosen".into());
+    }
+    let connected: Vec<String> = state
+        .manager
+        .devices()
+        .into_iter()
+        .filter(|d| d.status == crate::manager::DeviceStatus::Live)
+        .map(|d| d.device_id)
+        .collect();
+    let chosen: Vec<String> = if targets.is_empty() {
+        connected
+    } else {
+        targets
+            .into_iter()
+            .filter(|id| connected.contains(id))
+            .collect()
+    };
+    if chosen.is_empty() {
+        return Err("no connected PCs to set the wallpaper on".into());
+    }
+    let mut result = BulkResult { ok: 0, failed: 0 };
+    for id in chosen {
+        match state.manager.set_wallpaper(&id, image.clone()).await {
+            Ok((true, _)) => result.ok += 1,
+            _ => result.failed += 1,
+        }
+    }
+    Ok(result)
+}
+
 /// Lists the recordings stored on one PC.
 #[tauri::command]
 async fn list_recordings(
@@ -1077,6 +1119,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             list_broadcast_sources,
             start_broadcast,
             stop_broadcast,
+            set_wallpaper,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| e.to_string())

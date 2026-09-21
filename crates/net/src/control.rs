@@ -157,6 +157,13 @@ pub trait AgentDevice {
         (false, "this device cannot lock for an exam".to_string())
     }
 
+    /// Sets this PC's desktop wallpaper to `image` (raw PNG/JPEG/BMP bytes). Returns whether it was
+    /// applied, and a reason if not. The default cannot change the wallpaper.
+    fn set_wallpaper(&self, from: &PeerInfo, image: &[u8]) -> (bool, String) {
+        let _ = (from, image);
+        (false, "this device cannot set its wallpaper".to_string())
+    }
+
     /// Starts recording this PC's screen, returning what it is actually recording.
     ///
     /// The default refuses by reporting an inactive recording, so a device that cannot record simply
@@ -560,6 +567,19 @@ impl ControlSession {
         }
     }
 
+    /// Console side: set this PC's desktop wallpaper to `image`. Returns `(ok, problem)`.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn set_wallpaper(&mut self, image: Vec<u8>) -> Result<(bool, String), EndpointError> {
+        write_message(&mut self.send, &Control::SetWallpaper { image }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::WallpaperSet { ok, problem } => Ok((ok, problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Reads the reply both broadcast requests produce.
     async fn read_broadcast_state(&mut self) -> Result<(bool, String), EndpointError> {
         match read_message::<Control>(&mut self.recv).await? {
@@ -953,6 +973,10 @@ impl ControlSession {
                 Control::SetExam { on, message } => {
                     let (active, problem) = source.set_exam(&self.peer, on, &message);
                     write_message(&mut self.send, &Control::ExamState { active, problem }).await?;
+                }
+                Control::SetWallpaper { image } => {
+                    let (ok, problem) = source.set_wallpaper(&self.peer, &image);
+                    write_message(&mut self.send, &Control::WallpaperSet { ok, problem }).await?;
                 }
                 Control::StartRecording { monitor, options } => {
                     let info = source.start_recording(&self.peer, monitor, options);

@@ -38,7 +38,7 @@ jobs:
           npm run build
 
       - name: Build release binaries
-        run: cargo build --release -p console-app -p agent -p viewer
+        run: cargo build --release -p console-app -p agent -p viewer -p mcp
 
       - name: Stage + build the installer
         run: |

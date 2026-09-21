@@ -171,6 +171,11 @@ enum DeviceRequest {
     StopBroadcast {
         reply: tokio::sync::oneshot::Sender<(bool, String)>,
     },
+    /// Set this PC's desktop wallpaper to the given image; the reply is `(ok, problem)`.
+    SetWallpaper {
+        image: Vec<u8>,
+        reply: tokio::sync::oneshot::Sender<(bool, String)>,
+    },
 }
 
 /// Connection state of one device, in the order the UI colours them.
@@ -691,6 +696,22 @@ impl DeviceManager {
         .await
     }
 
+    /// Sets one PC's desktop wallpaper to `image` (raw PNG/JPEG/BMP bytes). Returns `(ok, problem)`.
+    ///
+    /// # Errors
+    /// The PC is unknown or not connected.
+    pub async fn set_wallpaper(
+        &self,
+        device_id: &str,
+        image: Vec<u8>,
+    ) -> Result<(bool, String), String> {
+        self.ask(device_id, move |reply| DeviceRequest::SetWallpaper {
+            image,
+            reply,
+        })
+        .await
+    }
+
     /// Lists the recordings stored on one PC.
     ///
     /// # Errors
@@ -1151,6 +1172,13 @@ impl DeviceManager {
                     }
                     DeviceRequest::StopBroadcast { reply } => {
                         let state = session.stop_broadcast().await.map_err(|e| e.to_string())?;
+                        let _ = reply.send(state);
+                    }
+                    DeviceRequest::SetWallpaper { image, reply } => {
+                        let state = session
+                            .set_wallpaper(image)
+                            .await
+                            .map_err(|e| e.to_string())?;
                         let _ = reply.send(state);
                     }
                 }

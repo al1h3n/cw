@@ -34,7 +34,7 @@ installer:
     - if: $CI_PIPELINE_SOURCE == "web" # manual "Run pipeline"
   script:
     - cd crates/console/ui; npm ci; npm run build; cd ../../..
-    - cargo build --release -p console-app -p agent -p viewer
+    - cargo build --release -p console-app -p agent -p viewer -p mcp
     - New-Item -ItemType Directory -Force -Path dist | Out-Null
     - Copy-Item target/release/cowatcher-console.exe dist/ -Force
     - Copy-Item target/release/cowatcher-agent.exe dist/ -Force

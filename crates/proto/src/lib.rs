@@ -9,7 +9,8 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 ///
 /// Bump it on every breaking change to message layout or meaning. Peers with different
 /// versions must refuse the session with a clear error instead of guessing.
-/// Version 9 added full-resolution H.264 streaming (`StartStream`, on its own uni-stream);
+/// Version 16 added setting a chosen desktop wallpaper on students (`SetWallpaper`);
+/// version 9 added full-resolution H.264 streaming (`StartStream`, on its own uni-stream);
 /// version 8 added the watched/black-wallpaper signal (`SetWatched`);
 /// version 7 added Wake-on-LAN (`ListMacs`, `WakeOnLan`); version 6 added broadcasting the
 /// teacher's screen (`ShowBroadcast`, `StopBroadcast`);
@@ -18,7 +19,7 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 /// added remote mouse/keyboard input; version 2 added remote actions. Each shifted the later
 /// `Control` discriminants, so a peer on an older version would decode them as the wrong message and
 /// the handshake refuses it outright.
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 
 mod device_id;
 mod pairing;

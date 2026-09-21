@@ -1,0 +1,25 @@
+[package]
+name = "mcp"
+description = "Co-watcher MCP server: exposes the typed remote actions as Model Context Protocol tools."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "cowatcher-mcp"
+path = "src/main.rs"
+
+[dependencies]
+net = { path = "../net" }
+proto = { path = "../proto" }
+iroh = "1.2" # only for EndpointId/EndpointAddr when dialing a paired Agent, same as the Console
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1" # MCP is JSON-RPC 2.0 over stdio
+anyhow = "1" # binaries use anyhow for start-up errors (AGENTS.md D15)
+base64 = "0.22" # decode teacher-picked wallpaper bytes and encode JPEG thumbnails for MCP image content
+
+[lints]
+workspace = true

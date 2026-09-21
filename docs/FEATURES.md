@@ -167,7 +167,8 @@ Fresh from two-machine use; not yet built unless noted.
   Its own capture path — scope as a separate round.
 - **A Co-watcher MCP server** exposing the existing typed remote actions (screen check, launch/block
   apps, etc.) as MCP tools, for the future paid AI features. Must reuse the same signed-action enum in
-  `proto` — no arbitrary command execution (D-rules). Its own crate and milestone.
+  `proto` — no arbitrary command execution (D-rules). Its own crate and milestone. **Built** —
+  `crates/mcp` (`cowatcher-mcp`), see *Done 2026-09-21 (later)* below.
 
 ### Bug fixes from live testing 2026-09-21
 
@@ -189,6 +190,31 @@ Fresh from two-machine use; not yet built unless noted.
   complete fix for occluded/GPU windows is Windows.Graphics.Capture, noted as a later change.
 - **No sign when a client dropped the broadcast** — the fan-out now emits `cowatcher://broadcast-ended`
   when a PC that was showing stops, and the Console toasts "<PC> closed the broadcast".
+
+### Done 2026-09-21 (later)
+
+- **Co-watcher MCP server** (`crates/mcp`, binary `cowatcher-mcp`). A Model Context Protocol server
+  (JSON-RPC 2.0 over stdio) that lets an AI client drive the classroom through the same typed, signed
+  path the Console uses. Tools: `list_devices`, `device_status`, `screen_thumbnail` (returns an
+  image), `list_apps`, `list_running`, `launch_app`, `close_app`, `set_blocklist`, `perform_action`
+  (shutdown/reboot/log-off/lock-screen/cancel-shutdown/lock-/unlock-wallpaper), `set_exam`,
+  `set_wallpaper`, `recording_status`, `start_recording`, `stop_recording`, `list_recordings`. Each
+  maps onto a `net::ControlSession` method and thus the closed `proto::Action` enum — there is **no**
+  arbitrary-command tool. The operator brief (`crates/mcp/SKILL.md`) is served once as the
+  `initialize` `instructions` (and as a prompt `cowatcher_operator` + resource `cowatcher:///skill`),
+  so the skill is sent ahead of prompts without being re-spent each turn. It reuses the Console's data
+  dir (`COWATCHER_DIR` / `--data-dir`) and depends only on `net`+`proto` (no OS code — the pinned
+  separation rule). Verified end-to-end over stdio (initialize → tools/list → tools/call) plus 11
+  unit tests. Ships in the release build and, teacher-side, in the installer.
+
+- **Push a desktop wallpaper to students.** A **Wallpaper** Console button opens `WallpaperDialog`:
+  pick an image (PNG/JPEG/BMP), choose one/selected/all connected PCs, apply. The bytes travel as
+  `Control::SetWallpaper` and the Agent writes them beside its data dir and points the desktop at the
+  image (`platform::wallpaper::set_image`). If a teacher is watching (wallpaper blacked out), the new
+  image is recorded as the wallpaper to restore so it appears when watching ends rather than fighting
+  the black-out. Windows only for now (Linux/macOS stubs — see `docs/PLATFORMS.md`). `PROTOCOL_VERSION`
+  is 16. Format detection + the black-bitmap are unit-tested; the live registry/SPI paths need a
+  student PC (per `docs/TEST-CHECKLIST.md`).
 
 ### Done 2026-09-21 (this session)
 

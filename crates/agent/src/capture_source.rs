@@ -443,6 +443,23 @@ impl AgentDevice for ScreenCapture {
         }
     }
 
+    fn set_wallpaper(&self, from: &PeerInfo, image: &[u8]) -> (bool, String) {
+        match platform::wallpaper::set_image(image, &self.wallpaper_save) {
+            Ok(()) => {
+                println!(
+                    "console {} set wallpaper ({} bytes)",
+                    from.device_id,
+                    image.len()
+                );
+                let _ = self
+                    .audit
+                    .note(net::endpoint::now_ms(), from.device_id, "wallpaper-set");
+                (true, String::new())
+            }
+            Err(err) => (false, err.to_string()),
+        }
+    }
+
     fn start_recording(
         &self,
         from: &PeerInfo,

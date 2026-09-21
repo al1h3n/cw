@@ -41,7 +41,7 @@ jobs:
           npm run build
 
       - name: Build release binaries
-        run: cargo build --release -p console-app -p agent -p viewer
+        run: cargo build --release -p console-app -p agent -p viewer -p mcp
 
       - name: Stage binaries into dist
         run: |
@@ -49,6 +49,7 @@ jobs:
           Copy-Item target\release\cowatcher-console.exe dist\ -Force
           Copy-Item target\release\cowatcher-agent.exe   dist\ -Force
           Copy-Item target\release\cowatcher-viewer.exe  dist\ -Force
+          Copy-Item target\release\cowatcher-mcp.exe     dist\ -Force
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
@@ -65,6 +66,7 @@ jobs:
             dist\cowatcher-console.exe
             dist\cowatcher-agent.exe
             dist\cowatcher-viewer.exe
+            dist\cowatcher-mcp.exe
 
       - name: Publish GitHub Release (on tags)
         if: startsWith(github.ref, 'refs/tags/')
@@ -75,3 +77,4 @@ jobs:
             dist\cowatcher-console.exe
             dist\cowatcher-agent.exe
             dist\cowatcher-viewer.exe
+            dist\cowatcher-mcp.exe

@@ -11,6 +11,7 @@
   import PairDialog from './lib/PairDialog.svelte'
   import BroadcastDialog from './lib/BroadcastDialog.svelte'
   import RecordingsDialog from './lib/RecordingsDialog.svelte'
+  import WallpaperDialog from './lib/WallpaperDialog.svelte'
   import Focused from './lib/Focused.svelte'
   import ActionMenu from './lib/ActionMenu.svelte'
   import BlocklistDialog from './lib/BlocklistDialog.svelte'
@@ -28,6 +29,7 @@
   let pairing = $state(false)
   let broadcasting = $state(false)
   let showRecordings = $state(false)
+  let settingWallpaper = $state(false)
   let editingBlocklist = $state(false)
   let showTutorial = $state(false)
   let controllingId = $state<string | null>(null)
@@ -293,6 +295,9 @@
       <button onclick={() => (showRecordings = true)} disabled={devices.length === 0}>
         {t('recordingsButton')}
       </button>
+      <button onclick={() => (settingWallpaper = true)} disabled={devices.length === 0}>
+        {t('wallpaperButton')}
+      </button>
       <button onclick={() => (editingBlocklist = true)}>{t('blockButton')}</button>
       <button onclick={() => (showTutorial = true)} title={t('helpHint')}>{t('help')}</button>
       {#if watching}
@@ -519,6 +524,14 @@
 
 {#if showRecordings}
   <RecordingsDialog onclose={() => (showRecordings = false)} onerror={(m) => (error = m)} />
+{/if}
+
+{#if settingWallpaper}
+  <WallpaperDialog
+    {devices}
+    onclose={() => (settingWallpaper = false)}
+    onerror={(m) => (error = m)}
+  />
 {/if}
 
 {#if focusedDevice}

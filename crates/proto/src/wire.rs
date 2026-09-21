@@ -585,6 +585,23 @@ pub enum Control {
         /// Empty unless the lock could not be started.
         problem: String,
     },
+    /// Console → Agent: set this PC's desktop wallpaper to the image in `image`.
+    ///
+    /// The teacher picks an image file on their own PC; the Console reads its bytes and sends them
+    /// here (PNG, JPEG or BMP). The Agent writes them to a stable file in its data dir and points the
+    /// desktop at it. Unlike [`Control::SetWatched`]'s black-out this is a lasting choice, so it also
+    /// survives the black-on-watch swap.
+    SetWallpaper {
+        /// The wallpaper image, as the raw bytes of a PNG, JPEG or BMP file.
+        image: Vec<u8>,
+    },
+    /// Agent → Console: whether the wallpaper was applied, and why not if it failed.
+    WallpaperSet {
+        /// True when the desktop wallpaper is now the sent image.
+        ok: bool,
+        /// Empty unless the wallpaper could not be set.
+        problem: String,
+    },
     /// Console → Agent: start recording this PC's screen to a file on that PC.
     ///
     /// The Agent clamps every value and reports back what it is *actually* recording, so a teacher
