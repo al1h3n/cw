@@ -1,6 +1,8 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
   import { onDestroy, onMount, untrack } from 'svelte'
+  import { listen as tauriListen, type UnlistenFn } from '@tauri-apps/api/event'
+  import { toasts } from './lib/toast-store.svelte'
   import { flip } from 'svelte/animate'
   import { slide, fade } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
@@ -244,10 +246,17 @@
     await refresh()
     // One poll drives the whole grid; the agents only capture while watching is on.
     timer = window.setInterval(refresh, 1000)
+    // A PC dropping the broadcast (closed, crashed or disconnected) toasts the teacher (bug #6).
+    unlistenBroadcast = await tauriListen<string>('cowatcher://broadcast-ended', (e) => {
+      const dev = devices.find((d) => d.device_id === e.payload)
+      toasts.push(t('broadcastEndedOn', dev?.name || e.payload), 'error')
+    })
   })
 
+  let unlistenBroadcast: UnlistenFn | null = null
   onDestroy(() => {
     if (timer) window.clearInterval(timer)
+    unlistenBroadcast?.()
   })
 </script>
 

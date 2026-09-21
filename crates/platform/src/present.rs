@@ -82,9 +82,10 @@ mod imp {
             },
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetSystemMetrics,
-                HMENU, KillTimer, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SM_CXSCREEN,
-                SM_CYSCREEN, SW_SHOW, SetForegroundWindow, SetTimer, ShowWindow, TranslateMessage,
-                WM_CLOSE, WM_DESTROY, WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_TOPMOST, WS_POPUP,
+                HMENU, HWND_TOPMOST, KillTimer, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
+                SC_CLOSE, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TranslateMessage, WM_CLOSE,
+                WM_DESTROY, WM_PAINT, WM_SYSCOMMAND, WM_TIMER, WNDCLASSEXW, WS_EX_TOPMOST, WS_POPUP,
                 WS_VISIBLE,
             },
         },
@@ -236,14 +237,21 @@ mod imp {
             };
             window.store(handle.0 as isize, Ordering::SeqCst);
 
-            if let Some((_, lock)) = desktops {
+            // The watchdog runs for every broadcast: locked → re-assert the desktop, unlocked →
+            // re-assert "topmost" so clicking elsewhere on the student PC cannot bury the broadcast.
+            let _ = SetTimer(Some(handle), WATCHDOG_TIMER, WATCHDOG_MS, None);
+            let _guard = if let Some((_, lock)) = desktops {
                 LOCK_DESKTOP.store(lock.0 as isize, Ordering::SeqCst);
                 let _ = SwitchDesktop(lock);
-                let _ = SetTimer(Some(handle), WATCHDOG_TIMER, WATCHDOG_MS, None);
-            }
+                // Swallow the escape keys while locked (installed on this pumping thread).
+                crate::keyguard::KeyGuard::install()
+            } else {
+                None
+            };
             ready.store(true, Ordering::SeqCst);
 
             pump_messages();
+            drop(_guard);
 
             if let Some((original, lock)) = desktops {
                 LOCK_DESKTOP.store(0, Ordering::SeqCst);
@@ -419,13 +427,32 @@ mod imp {
                 }
                 LRESULT(0)
             }
+            WM_SYSCOMMAND if (wparam.0 & 0xFFF0) == SC_CLOSE as usize => {
+                // Block Alt+F4 / the close command; the broadcast is dismissed only by the teacher
+                // (Drop posts an explicit WM_CLOSE, which does not come through WM_SYSCOMMAND).
+                LRESULT(0)
+            }
             WM_TIMER => {
-                // Watchdog: re-assert the locked broadcast desktop if the student escaped (Win+L).
                 let lock = LOCK_DESKTOP.load(Ordering::SeqCst);
                 if lock != 0 {
+                    // Locked: re-assert the broadcast desktop if the student escaped (Win+L unlock).
                     // SAFETY: a desktop handle we created and own until teardown.
                     unsafe {
                         let _ = SwitchDesktop(HDESK(lock as *mut std::ffi::c_void));
+                    }
+                } else {
+                    // Unlocked: keep the broadcast on top even if the student clicks another window.
+                    // SAFETY: a valid window handle; NOACTIVATE means we do not steal focus.
+                    unsafe {
+                        let _ = SetWindowPos(
+                            window,
+                            Some(HWND_TOPMOST),
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
                     }
                 }
                 LRESULT(0)

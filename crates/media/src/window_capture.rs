@@ -58,15 +58,15 @@ mod imp {
         Win32::{
             Foundation::{HWND, LPARAM, RECT},
             Graphics::Gdi::{
-                BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
+                BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
                 DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, HGDIOBJ, ReleaseDC,
-                SelectObject,
+                SRCCOPY, SelectObject,
             },
             Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow},
             UI::WindowsAndMessaging::{
                 EnumWindows, GA_ROOTOWNER, GWL_EXSTYLE, GetAncestor, GetWindowLongW, GetWindowRect,
-                GetWindowTextLengthW, GetWindowTextW, IsWindowVisible, PW_RENDERFULLCONTENT,
-                WS_EX_TOOLWINDOW,
+                GetWindowTextLengthW, GetWindowTextW, IsIconic, IsWindowVisible,
+                PW_RENDERFULLCONTENT, WS_EX_TOOLWINDOW,
             },
         },
         core::BOOL,
@@ -136,6 +136,12 @@ mod imp {
         // SAFETY: GDI capture of a window. Every object created is freed on every path; the pixel
         // buffer is sized to width*height*4 before GetDIBits writes it.
         unsafe {
+            // A minimized window is not rendered by Windows at all — nobody can capture pixels from
+            // it. Report that so the broadcaster keeps showing the last good frame instead of black.
+            if IsIconic(window).as_bool() {
+                return Err(CaptureError::new("the window is minimized"));
+            }
+
             let mut rect = RECT::default();
             GetWindowRect(window, &mut rect).map_err(CaptureError::new)?;
             let width = rect.right - rect.left;
@@ -151,36 +157,23 @@ mod imp {
 
             // PW_RENDERFULLCONTENT (2) makes DWM/GPU windows (browsers, UWP) render into our DC.
             let printed = PrintWindow(window, mem, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)).as_bool();
+            let mut pixels = read_bgra(mem, bitmap, width, height);
 
-            let mut bmi = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: u32::try_from(std::mem::size_of::<BITMAPINFOHEADER>()).unwrap_or(0),
-                    biWidth: width,
-                    biHeight: -height, // top-down, matching the rest of the pipeline
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: 0, // BI_RGB
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
-            let lines = GetDIBits(
-                mem,
-                bitmap,
-                0,
-                u32::try_from(height).unwrap_or(0),
-                Some(pixels.as_mut_ptr().cast()),
-                &mut bmi,
-                DIB_RGB_COLORS,
-            );
+            // Some apps ignore PrintWindow and leave the client area blank (only the title bar draws).
+            // For those, copy the window's on-screen pixels instead — correct as long as it is not
+            // covered by another window (a foreground window being presented usually is not). The
+            // complete fix for occluded/GPU windows is Windows.Graphics.Capture (a later change).
+            if !printed || looks_blank(&pixels, width, height) {
+                let _ = BitBlt(mem, 0, 0, width, height, Some(screen), rect.left, rect.top, SRCCOPY);
+                pixels = read_bgra(mem, bitmap, width, height);
+            }
 
             SelectObject(mem, old);
             let _ = DeleteObject(HGDIOBJ(bitmap.0));
             let _ = DeleteDC(mem);
             ReleaseDC(None, screen);
 
-            if !printed || lines == 0 {
+            if pixels.is_empty() {
                 return Err(CaptureError::new("the window could not be captured"));
             }
             Ok((
@@ -189,6 +182,66 @@ mod imp {
                 u32::try_from(height).unwrap_or(0),
             ))
         }
+    }
+
+    /// Reads the `mem` DC's bitmap into top-down BGRA. Empty on failure.
+    ///
+    /// # Safety
+    /// `mem`/`bitmap` are a valid DC and its selected bitmap of the given size.
+    unsafe fn read_bgra(
+        mem: windows::Win32::Graphics::Gdi::HDC,
+        bitmap: windows::Win32::Graphics::Gdi::HBITMAP,
+        width: i32,
+        height: i32,
+    ) -> Vec<u8> {
+        let mut bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: u32::try_from(std::mem::size_of::<BITMAPINFOHEADER>()).unwrap_or(0),
+                biWidth: width,
+                biHeight: -height, // top-down, matching the rest of the pipeline
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: 0, // BI_RGB
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
+        // SAFETY: buffer is width*height*4; header describes it exactly.
+        let lines = unsafe {
+            GetDIBits(
+                mem,
+                bitmap,
+                0,
+                u32::try_from(height).unwrap_or(0),
+                Some(pixels.as_mut_ptr().cast()),
+                &mut bmi,
+                DIB_RGB_COLORS,
+            )
+        };
+        if lines == 0 {
+            Vec::new()
+        } else {
+            pixels
+        }
+    }
+
+    /// Cheap heuristic: is the window's client area a single flat colour (PrintWindow gave nothing)?
+    ///
+    /// Samples a strided row below the title bar. A genuinely flat window is a harmless false positive
+    /// — the on-screen fallback then just re-reads the same pixels.
+    fn looks_blank(pixels: &[u8], width: i32, height: i32) -> bool {
+        if pixels.len() < (width as usize) * (height as usize) * 4 || width <= 0 || height <= 0 {
+            return true;
+        }
+        let row = ((height as usize) * 3 / 5).min(height as usize - 1); // ~60% down, past the title bar
+        let base = row * (width as usize) * 4;
+        let first = &pixels[base..base + 4];
+        let stride = ((width as usize) / 64).max(1);
+        (0..width as usize).step_by(stride).all(|x| {
+            let p = base + x * 4;
+            pixels[p..p + 4] == *first
+        })
     }
 }
 

@@ -71,9 +71,9 @@ mod imp {
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
                 GetSystemMetrics, HMENU, KillTimer, MSG, PostMessageW, PostQuitMessage,
-                RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, SetTimer,
-                ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_PAINT, WM_TIMER, WNDCLASSEXW,
-                WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+                RegisterClassExW, SC_CLOSE, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow,
+                SetTimer, ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_PAINT, WM_SYSCOMMAND,
+                WM_TIMER, WNDCLASSEXW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
             },
         },
         core::{PCWSTR, w},
@@ -205,6 +205,9 @@ mod imp {
 
             // Make the lock desktop the one that receives input, then pump until the window closes.
             let _ = SwitchDesktop(exam);
+            // Swallow Alt+Tab / Win / Ctrl+Esc / Alt+F4 while the lock is up (installed on this
+            // pumping thread; dropped when the loop ends). Win+L / Ctrl+Alt+Del cannot be blocked.
+            let _guard = crate::keyguard::KeyGuard::install();
             pump_messages();
 
             // Ended: give the student's real desktop back. The captured `original` handle can be a
@@ -354,6 +357,11 @@ mod imp {
                     let _ = DeleteObject(font.into());
                     let _ = EndPaint(window, &paint);
                 }
+                LRESULT(0)
+            }
+            WM_SYSCOMMAND if (wparam.0 & 0xFFF0) == SC_CLOSE as usize => {
+                // Block Alt+F4 / the close command so the exam window cannot be dismissed. Teardown
+                // uses an explicit WM_CLOSE from Drop, which is not routed through WM_SYSCOMMAND.
                 LRESULT(0)
             }
             WM_TIMER => {

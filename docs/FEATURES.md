@@ -169,6 +169,27 @@ Fresh from two-machine use; not yet built unless noted.
   apps, etc.) as MCP tools, for the future paid AI features. Must reuse the same signed-action enum in
   `proto` — no arbitrary command execution (D-rules). Its own crate and milestone.
 
+### Bug fixes from live testing 2026-09-21
+
+- **Grid drag was completely dead** — Tauri's OS drag-drop handler (`dragDropEnabled`, on by default)
+  swallows HTML5 drag events inside WebView2. Set `dragDropEnabled: false` on the window so the
+  drag-to-reorder grip works.
+- **Locked broadcast/exam were escapable** — added `platform::keyguard` (a `WH_KEYBOARD_LL` hook that
+  drops Alt+Tab, Alt+Esc, Ctrl+Esc, the Windows keys and Alt+F4), installed while a locked broadcast
+  or exam is up, plus a `WM_SYSCOMMAND`/`SC_CLOSE` block so Alt+F4 cannot close the window.
+  **Win+L and Ctrl+Alt+Del cannot be blocked from user space** (Secure Attention Sequence) — the
+  watchdog re-asserts the lock desktop after a Win+L unlock, which is the documented best effort.
+- **Broadcast could be buried by clicking another window** — the presenter now re-asserts `HWND_TOPMOST`
+  on its watchdog tick (unlocked mode) without stealing focus.
+- **Minimizing the shared window turned clients black** — `media::window_capture` now reports a
+  minimized window (`IsIconic`) as uncapturable, so the broadcaster keeps showing the last good frame
+  instead of a black one.
+- **Some windows broadcast only their title bar** — when `PrintWindow` leaves the client area blank,
+  capture falls back to a screen-region `BitBlt` (correct for a foreground, unobscured window). The
+  complete fix for occluded/GPU windows is Windows.Graphics.Capture, noted as a later change.
+- **No sign when a client dropped the broadcast** — the fan-out now emits `cowatcher://broadcast-ended`
+  when a PC that was showing stops, and the Console toasts "<PC> closed the broadcast".
+
 ### Done 2026-09-21 (this session)
 
 - **Host-wide recordings panel.** A **Recordings** button opens a live view of every PC's recording

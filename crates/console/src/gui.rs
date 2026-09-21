@@ -887,6 +887,7 @@ async fn list_broadcast_sources() -> Result<Vec<BroadcastSource>, String> {
 #[tauri::command]
 async fn start_broadcast(
     state: State<'_, AppState>,
+    window: tauri::Window,
     source_kind: String,
     source_id: u64,
     width: u16,
@@ -931,18 +932,31 @@ async fn start_broadcast(
         });
     }
 
-    // Fan-out task: push each captured frame to every target PC.
+    // Fan-out task: push each captured frame to every target PC, and tell the UI when a PC that had
+    // been showing the broadcast drops it (closed, crashed or disconnected) — bug report #6.
     {
+        use tauri::Emitter;
         let manager = Arc::clone(&state.manager);
         let targets = targets.clone();
         let stop = Arc::clone(&stop);
+        let window = window.clone();
         tokio::spawn(async move {
+            let mut showing: std::collections::HashMap<String, bool> =
+                targets.iter().map(|t| (t.clone(), false)).collect();
             while let Some(jpeg) = rx.recv().await {
                 if stop.load(Ordering::SeqCst) {
                     break;
                 }
                 for target in &targets {
-                    let _ = manager.show_broadcast(target, jpeg.clone(), locked).await;
+                    let now = matches!(
+                        manager.show_broadcast(target, jpeg.clone(), locked).await,
+                        Ok((true, _))
+                    );
+                    let was = showing.get(target).copied().unwrap_or(false);
+                    if was && !now {
+                        let _ = window.emit("cowatcher://broadcast-ended", target.clone());
+                    }
+                    showing.insert(target.clone(), now);
                 }
             }
         });
