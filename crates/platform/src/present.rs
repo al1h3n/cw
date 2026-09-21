@@ -36,7 +36,18 @@ impl Presenter {
     /// # Errors
     /// [`PresentError`] if the window cannot be created.
     pub fn open() -> Result<Self, PresentError> {
-        imp::Presenter::open().map(Self)
+        imp::Presenter::open(false).map(Self)
+    }
+
+    /// Like [`Presenter::open`], but on a **locked separate Win32 desktop** the student cannot leave:
+    /// Alt+Tab, the Windows key and Ctrl+Esc do nothing while the broadcast is up, because the shell
+    /// runs on the original desktop. A watchdog re-asserts the lock if the student escapes (Win+L).
+    /// Dropping the presenter restores the student's desktop.
+    ///
+    /// # Errors
+    /// [`PresentError`] if the locked desktop or the window cannot be created.
+    pub fn open_locked() -> Result<Self, PresentError> {
+        imp::Presenter::open(true).map(Self)
     }
 
     /// Replaces what is on screen. `pixels` is packed BGRA, `width` × `height`.
@@ -65,17 +76,31 @@ mod imp {
                 BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, DIB_RGB_COLORS, EndPaint, HBRUSH,
                 InvalidateRect, PAINTSTRUCT, SRCCOPY, StretchDIBits,
             },
+            System::StationsAndDesktops::{
+                CloseDesktop, CreateDesktopW, DESKTOP_ACCESS_FLAGS, HDESK, OpenDesktopW,
+                OpenInputDesktop, SetThreadDesktop, SwitchDesktop,
+            },
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetSystemMetrics,
-                HMENU, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SM_CXSCREEN,
-                SM_CYSCREEN, SW_SHOW, SetForegroundWindow, ShowWindow, TranslateMessage, WM_CLOSE,
-                WM_DESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+                HMENU, KillTimer, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SM_CXSCREEN,
+                SM_CYSCREEN, SW_SHOW, SetForegroundWindow, SetTimer, ShowWindow, TranslateMessage,
+                WM_CLOSE, WM_DESTROY, WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_TOPMOST, WS_POPUP,
+                WS_VISIBLE,
             },
         },
         core::{PCWSTR, w},
     };
 
     use super::PresentError;
+
+    /// The locked broadcast desktop (as an `isize`) so the watchdog can re-assert it; 0 = unlocked or
+    /// tearing down. Mirrors the exam lock's mechanism (`platform::examlock`).
+    static LOCK_DESKTOP: AtomicIsize = AtomicIsize::new(0);
+    /// Watchdog timer id and interval (ms), matching the exam lock.
+    const WATCHDOG_TIMER: usize = 1;
+    const WATCHDOG_MS: u32 = 250;
+    /// Broad desktop access: create windows on it and switch to it.
+    const DESKTOP_ACCESS: DESKTOP_ACCESS_FLAGS = DESKTOP_ACCESS_FLAGS(0x01FF);
 
     /// The frame currently on screen, shared with the window thread.
     struct Frame {
@@ -98,7 +123,7 @@ mod imp {
     }
 
     impl Presenter {
-        pub fn open() -> Result<Self, PresentError> {
+        pub fn open(locked: bool) -> Result<Self, PresentError> {
             let window = Arc::new(AtomicIsize::new(0));
             let closing = Arc::new(AtomicBool::new(false));
             let ready = Arc::new(AtomicBool::new(false));
@@ -108,13 +133,8 @@ mod imp {
                 let window = Arc::clone(&window);
                 let ready = Arc::clone(&ready);
                 let failed = Arc::clone(&failed);
-                std::thread::spawn(move || match create_window() {
-                    Ok(handle) => {
-                        window.store(handle.0 as isize, Ordering::SeqCst);
-                        ready.store(true, Ordering::SeqCst);
-                        pump_messages();
-                    }
-                    Err(err) => {
+                std::thread::spawn(move || {
+                    if let Err(err) = run_window(locked, &window, &ready) {
                         *failed.lock().unwrap_or_else(|e| e.into_inner()) = err;
                         ready.store(true, Ordering::SeqCst);
                     }
@@ -167,6 +187,8 @@ mod imp {
     impl Drop for Presenter {
         fn drop(&mut self) {
             self.closing.store(true, Ordering::SeqCst);
+            // Stop the watchdog re-asserting the lock desktop, so the teardown switch-back holds.
+            LOCK_DESKTOP.store(0, Ordering::SeqCst);
             let handle = HWND(self.window.load(Ordering::SeqCst) as *mut std::ffi::c_void);
             if !handle.is_invalid() {
                 // `DestroyWindow` only works on the thread that created the window — calling it
@@ -182,6 +204,116 @@ mod imp {
                 let _ = thread.join();
             }
             *FRAME.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+
+    /// The presentation window thread: optionally lock a fresh desktop, create the window, pump
+    /// messages, then (if locked) restore the student's real desktop.
+    fn run_window(
+        locked: bool,
+        window: &Arc<AtomicIsize>,
+        ready: &Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        // SAFETY: standard station/desktop + window calls; every desktop handle is closed before
+        // returning, and the window is created only after this thread is on the target desktop.
+        unsafe {
+            let desktops = if locked {
+                Some(enter_lock_desktop()?)
+            } else {
+                None
+            };
+
+            let handle = match create_window() {
+                Ok(handle) => handle,
+                Err(err) => {
+                    if let Some((original, lock)) = desktops {
+                        let _ = SetThreadDesktop(original);
+                        let _ = CloseDesktop(lock);
+                        let _ = CloseDesktop(original);
+                    }
+                    return Err(err);
+                }
+            };
+            window.store(handle.0 as isize, Ordering::SeqCst);
+
+            if let Some((_, lock)) = desktops {
+                LOCK_DESKTOP.store(lock.0 as isize, Ordering::SeqCst);
+                let _ = SwitchDesktop(lock);
+                let _ = SetTimer(Some(handle), WATCHDOG_TIMER, WATCHDOG_MS, None);
+            }
+            ready.store(true, Ordering::SeqCst);
+
+            pump_messages();
+
+            if let Some((original, lock)) = desktops {
+                LOCK_DESKTOP.store(0, Ordering::SeqCst);
+                restore_real_desktop(original);
+                let _ = SetThreadDesktop(original);
+                let _ = CloseDesktop(lock);
+                let _ = CloseDesktop(original);
+            }
+        }
+        Ok(())
+    }
+
+    /// Creates a fresh locked desktop and attaches this thread to it. Returns `(original, lock)`.
+    ///
+    /// # Safety
+    /// Both returned desktop handles must be closed by the caller.
+    unsafe fn enter_lock_desktop() -> Result<(HDESK, HDESK), String> {
+        // SAFETY: documented station/desktop calls; handles are cleaned up on every failure path.
+        unsafe {
+            let original = OpenInputDesktop(Default::default(), false, DESKTOP_ACCESS)
+                .map_err(|e| format!("open current desktop: {}", e.message()))?;
+            let lock = CreateDesktopW(
+                w!("CowatcherBroadcast"),
+                PCWSTR::null(),
+                None,
+                Default::default(),
+                DESKTOP_ACCESS.0,
+                None,
+            )
+            .map_err(|e| {
+                let _ = CloseDesktop(original);
+                format!("create broadcast desktop: {}", e.message())
+            })?;
+            if let Err(err) = SetThreadDesktop(lock) {
+                let _ = CloseDesktop(lock);
+                let _ = CloseDesktop(original);
+                return Err(format!("attach to broadcast desktop: {}", err.message()));
+            }
+            Ok((original, lock))
+        }
+    }
+
+    /// Switches input back to the student's ordinary ("Default") desktop, retrying briefly (a switch
+    /// right after a lock/unlock can be rejected until the session settles).
+    ///
+    /// # Safety
+    /// `original` is a valid desktop handle owned by the caller.
+    unsafe fn restore_real_desktop(original: HDESK) {
+        // SAFETY: the by-name handle is closed here; `original` is closed by the caller.
+        unsafe {
+            let by_name =
+                OpenDesktopW(w!("Default"), Default::default(), false, DESKTOP_ACCESS.0).ok();
+            for _ in 0..40 {
+                if let Some(desktop) = by_name
+                    && SwitchDesktop(desktop).is_ok()
+                {
+                    let _ = CloseDesktop(desktop);
+                    return;
+                }
+                if SwitchDesktop(original).is_ok() {
+                    if let Some(desktop) = by_name {
+                        let _ = CloseDesktop(desktop);
+                    }
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if let Some(desktop) = by_name {
+                let _ = CloseDesktop(desktop);
+            }
         }
     }
 
@@ -287,9 +419,23 @@ mod imp {
                 }
                 LRESULT(0)
             }
+            WM_TIMER => {
+                // Watchdog: re-assert the locked broadcast desktop if the student escaped (Win+L).
+                let lock = LOCK_DESKTOP.load(Ordering::SeqCst);
+                if lock != 0 {
+                    // SAFETY: a desktop handle we created and own until teardown.
+                    unsafe {
+                        let _ = SwitchDesktop(HDESK(lock as *mut std::ffi::c_void));
+                    }
+                }
+                LRESULT(0)
+            }
             WM_DESTROY => {
-                // SAFETY: posting the quit message ends this thread's loop.
-                unsafe { PostQuitMessage(0) };
+                // SAFETY: stop the watchdog, then end this thread's loop.
+                unsafe {
+                    let _ = KillTimer(Some(window), WATCHDOG_TIMER);
+                    PostQuitMessage(0);
+                }
                 LRESULT(0)
             }
             // SAFETY: the documented default handler for everything we do not handle.
@@ -309,7 +455,7 @@ mod imp {
     pub struct Presenter;
 
     impl Presenter {
-        pub fn open() -> Result<Self, PresentError> {
+        pub fn open(_locked: bool) -> Result<Self, PresentError> {
             Err(PresentError::NotSupported)
         }
 

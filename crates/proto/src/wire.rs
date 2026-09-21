@@ -556,8 +556,11 @@ pub enum Control {
     /// Each message carries one complete JPEG, so a student who joins late or misses a frame sees
     /// the right picture on the very next one — there is no stream to resynchronise with.
     ShowBroadcast {
-        /// One frame of the teacher's screen, JPEG encoded.
+        /// One frame of the teacher's screen (or a chosen window), JPEG encoded.
         jpeg: Vec<u8>,
+        /// When true, show it on a **locked** separate desktop the student cannot Alt+Tab or Win-key
+        /// away from — presentation with lockdown. Read from the first frame of a broadcast.
+        locked: bool,
     },
     /// Console → Agent: take the broadcast off the screen and give the student their desktop back.
     StopBroadcast,

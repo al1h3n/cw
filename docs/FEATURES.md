@@ -155,12 +155,6 @@ and ffmpeg-based recording with download-to-teacher (#12). Elevation paths still
 
 Fresh from two-machine use; not yet built unless noted.
 
-- **Full-screen broadcast of the teacher's screen or one app, with student lockdown** (not built).
-  A Zoom/Teams-style source picker (pick a monitor or a specific window), streamed to students and
-  shown **full-screen on a locked desktop** so Alt+Tab, Ctrl+Esc, Win+D and the like are unavailable
-  while it runs — no launching other apps, no cheating. Reuses the existing broadcast plus the
-  exam-desktop lock (`platform::examlock`); the window-source path needs `PrintWindow` /
-  duplication-of-one-window capture. Needs new protocol messages. Its own delivery.
 - **AI chat panel** (not built): a button in the bottom-right of the Console opens a chat with
   **sessions** (multiple saved conversations), rendering text and an attachment tray like
   WhatsApp/Telegram — a small grid of files with icons, image previews, and a video's first frame,
@@ -174,6 +168,27 @@ Fresh from two-machine use; not yet built unless noted.
 - **A Co-watcher MCP server** exposing the existing typed remote actions (screen check, launch/block
   apps, etc.) as MCP tools, for the future paid AI features. Must reuse the same signed-action enum in
   `proto` — no arbitrary command execution (D-rules). Its own crate and milestone.
+
+### Done 2026-09-21 (this session)
+
+- **Full-screen broadcast with a source picker + student lockdown.** A Zoom/Teams-style picker
+  (`list_broadcast_sources`) lists every monitor and every ordinary app window with a thumbnail; the
+  teacher picks one, chooses which PCs, and optionally ticks **Lock students onto it**. A locked
+  broadcast shows on a **separate Win32 desktop** (`platform::present::open_locked`, same mechanism as
+  the exam lock, with the by-name restore + watchdog) so Alt+Tab / Win / Ctrl+Esc do nothing.
+  Window capture is `media::window_capture` (`EnumWindows` + `PrintWindow(PW_RENDERFULLCONTENT)`).
+  `PROTOCOL_VERSION` = 15 (`ShowBroadcast` gained a `locked` flag). Source capture verified locally
+  (`cargo run -p media --example broadcast_sources`) and the locked desktop restore
+  (`cargo run -p platform --example present_locked_smoke`); the on-student lockdown itself is best
+  confirmed on a second machine.
+- **App icons on the binaries:** the Console and viewer use the "Host" icon, the Agent the "Client"
+  icon (embedded via `winresource`; Tauri embeds the Console's from `tauri.conf.json`).
+
+### Cross-platform status
+
+`docs/PLATFORMS.md` now records, per feature, what works on Windows vs. the Linux/macOS stubs, and what
+each of those platforms will need in Phase 5. Short version: capture, input, power, broadcast and
+lockdown are Windows-only today; the portable crates (proto, net, codecs, UI) are unverified elsewhere.
 
 ### Done 2026-09-20 (this session)
 

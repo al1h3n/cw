@@ -6,6 +6,17 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-21):** **broadcast with a source picker + student lockdown** landed. A Zoom/Teams-style
+picker (`gui::list_broadcast_sources`) lists every monitor and app window with a thumbnail; the teacher
+picks one, chooses target PCs, and can tick **Lock students onto it** — a locked broadcast shows on a
+separate Win32 desktop (`platform::present::open_locked`, sharing the exam lock's by-name restore +
+watchdog) so Alt+Tab/Win/Ctrl+Esc do nothing. Window capture is `media::window_capture` (`EnumWindows`
++ `PrintWindow`). Also this session: the **exam + Win+L** bare-desktop bug is fixed (restore Default by
+name + watchdog, verified live), **lazy program icons** in the app picker (`Control::FetchAppIcon`), and
+the **binaries carry real icons** (Host for Console/viewer, Client for Agent). `PROTOCOL_VERSION` is 15.
+Per-OS support is now written down in `docs/PLATFORMS.md` (capture/input/power/broadcast/lockdown are
+Windows-only; Linux/macOS are stubs). AI-endpoint choice recorded as **D22**. **Next: the AI chat panel.**
+
 **Status (2026-09-16, later):** **exam lockdown** exists — `platform::examlock` puts a fullscreen
 message window on a **separate Win32 desktop** (`CreateDesktopW` + `SwitchDesktop`) the student can't
 Alt+Tab or Win-key away from, toggled from the focused view (`Control::SetExam`, `PROTOCOL_VERSION`

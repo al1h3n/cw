@@ -3,12 +3,23 @@
 //! The UI is deliberately thin. Every command here returns plain data from [`DeviceManager`], so the
 //! front end never deals with keys, sockets or retries — it renders devices and calls actions.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
 
 use net::PairingCode;
 use tauri::{Manager, State};
 
 use crate::manager::{DeviceManager, DeviceView};
+
+/// A running broadcast: the stop flag its capture thread watches, and who is receiving it (so it can
+/// be taken off exactly those screens when it ends).
+struct BroadcastHandle {
+    stop: Arc<AtomicBool>,
+    targets: Vec<String>,
+}
 
 /// Everything the window needs, shared across commands.
 struct AppState {
@@ -17,6 +28,8 @@ struct AppState {
     pairing_code: Mutex<Option<PairingCode>>,
     /// Stops the current continuous-pairing loop when the teacher closes the panel.
     pairing_stop: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    /// The broadcast in progress, if the teacher is presenting.
+    broadcast: Mutex<Option<BroadcastHandle>>,
     /// Where per-user files live: the trust store, the device key and `languages/`.
     data_dir: std::path::PathBuf,
 }
@@ -616,6 +629,157 @@ fn stop_pairing(state: State<'_, AppState>) {
 ///
 /// # Errors
 /// Returns a message if state cannot be loaded or the window fails to start.
+/// One thing a teacher can broadcast: a whole monitor, or a single application window.
+#[derive(serde::Serialize)]
+struct BroadcastSource {
+    /// "monitor" or "window".
+    kind: String,
+    /// Monitor index, or the window handle — passed back to `start_broadcast`.
+    id: u64,
+    /// Window title (empty for a monitor; the UI labels monitors itself).
+    title: String,
+    /// True for the primary monitor (meaningless for windows).
+    primary: bool,
+    /// A small JPEG preview as a `data:` URL, so the picker looks like Zoom/Teams. May be empty.
+    thumb: String,
+}
+
+/// Lists what the teacher could present: every monitor and every ordinary app window, each with a
+/// one-shot thumbnail. Capture runs on a blocking thread because the DXGI capturer is not `Send`.
+#[tauri::command]
+async fn list_broadcast_sources() -> Result<Vec<BroadcastSource>, String> {
+    tokio::task::spawn_blocking(|| {
+        let mut out = Vec::new();
+        if let Ok(mut capturer) = media::ThumbnailCapturer::new() {
+            for monitor in capturer.monitors() {
+                let thumb = capturer
+                    .capture_jpeg(monitor.index, 320)
+                    .ok()
+                    .map(|jpeg| format!("data:image/jpeg;base64,{}", crate::manager::base64(&jpeg)))
+                    .unwrap_or_default();
+                out.push(BroadcastSource {
+                    kind: "monitor".into(),
+                    id: u64::from(monitor.index),
+                    title: String::new(),
+                    primary: monitor.primary,
+                    thumb,
+                });
+            }
+        }
+        for window in media::window_capture::list_windows() {
+            let thumb = media::window_capture::capture_window_jpeg(window.id, 320)
+                .ok()
+                .map(|jpeg| format!("data:image/jpeg;base64,{}", crate::manager::base64(&jpeg)))
+                .unwrap_or_default();
+            out.push(BroadcastSource {
+                kind: "window".into(),
+                id: window.id,
+                title: window.title,
+                primary: false,
+                thumb,
+            });
+        }
+        out
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Starts broadcasting a source to the chosen PCs, optionally locking them onto it.
+///
+/// A capture thread grabs ~5 frames a second (it owns the non-`Send` capturer); a fan-out task sends
+/// each frame to every target. Both stop when [`stop_broadcast`] flips the shared flag.
+#[tauri::command]
+async fn start_broadcast(
+    state: State<'_, AppState>,
+    source_kind: String,
+    source_id: u64,
+    width: u16,
+    locked: bool,
+    targets: Vec<String>,
+) -> Result<(), String> {
+    if targets.is_empty() {
+        return Err("choose at least one PC to broadcast to".into());
+    }
+    // Replace any broadcast already running.
+    end_broadcast(&state).await;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let width = width.clamp(320, 3840);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+
+    // Capture thread: owns the monitor capturer so it never crosses a thread boundary.
+    {
+        let stop = Arc::clone(&stop);
+        let kind = source_kind.clone();
+        std::thread::spawn(move || {
+            let mut monitor = if kind == "monitor" {
+                media::ThumbnailCapturer::new().ok()
+            } else {
+                None
+            };
+            while !stop.load(Ordering::SeqCst) {
+                let frame = if kind == "window" {
+                    media::window_capture::capture_window_jpeg(source_id, width).ok()
+                } else {
+                    let index = u8::try_from(source_id).unwrap_or(0);
+                    monitor.as_mut().and_then(|c| c.capture_jpeg(index, width).ok())
+                };
+                if let Some(jpeg) = frame {
+                    // Blocking send paces us to the fan-out; a full channel means a frame in flight.
+                    if tx.blocking_send(jpeg).is_err() {
+                        break; // receiver gone
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        });
+    }
+
+    // Fan-out task: push each captured frame to every target PC.
+    {
+        let manager = Arc::clone(&state.manager);
+        let targets = targets.clone();
+        let stop = Arc::clone(&stop);
+        tokio::spawn(async move {
+            while let Some(jpeg) = rx.recv().await {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                for target in &targets {
+                    let _ = manager.show_broadcast(target, jpeg.clone(), locked).await;
+                }
+            }
+        });
+    }
+
+    *state.broadcast.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some(BroadcastHandle { stop, targets });
+    Ok(())
+}
+
+/// Stops the current broadcast and takes it off every screen it was on.
+#[tauri::command]
+async fn stop_broadcast(state: State<'_, AppState>) -> Result<(), String> {
+    end_broadcast(&state).await;
+    Ok(())
+}
+
+/// Shared teardown: flip the capture thread's stop flag and clear the broadcast off each target.
+async fn end_broadcast(state: &AppState) {
+    let handle = state
+        .broadcast
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    if let Some(handle) = handle {
+        handle.stop.store(true, Ordering::SeqCst);
+        for target in &handle.targets {
+            let _ = state.manager.stop_broadcast(target).await;
+        }
+    }
+}
+
 pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
     let manager = Arc::new(DeviceManager::load(&data_dir)?);
     tauri::Builder::default()
@@ -624,6 +788,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
                 manager: Arc::clone(&manager),
                 pairing_code: Mutex::new(None),
                 pairing_stop: Mutex::new(None),
+                broadcast: Mutex::new(None),
                 data_dir: data_dir.clone(),
             });
             Ok(())
@@ -667,6 +832,9 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             export_language_template,
             begin_pairing,
             stop_pairing,
+            list_broadcast_sources,
+            start_broadcast,
+            stop_broadcast,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| e.to_string())

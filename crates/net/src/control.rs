@@ -139,8 +139,8 @@ pub trait AgentDevice {
     ///
     /// Returns whether the broadcast is on screen, and a reason when it is not. The default refuses,
     /// so a device that cannot present simply reports that.
-    fn show_broadcast(&self, from: &PeerInfo, jpeg: &[u8]) -> (bool, String) {
-        let _ = (from, jpeg);
+    fn show_broadcast(&self, from: &PeerInfo, jpeg: &[u8], locked: bool) -> (bool, String) {
+        let _ = (from, jpeg, locked);
         (false, "this device cannot show a broadcast".to_string())
     }
 
@@ -525,8 +525,12 @@ impl ControlSession {
     ///
     /// # Errors
     /// Stream failure, or an unexpected reply.
-    pub async fn show_broadcast(&mut self, jpeg: Vec<u8>) -> Result<(bool, String), EndpointError> {
-        write_message(&mut self.send, &Control::ShowBroadcast { jpeg }).await?;
+    pub async fn show_broadcast(
+        &mut self,
+        jpeg: Vec<u8>,
+        locked: bool,
+    ) -> Result<(bool, String), EndpointError> {
+        write_message(&mut self.send, &Control::ShowBroadcast { jpeg, locked }).await?;
         self.read_broadcast_state().await
     }
 
@@ -928,8 +932,8 @@ impl ControlSession {
                     let sent = source.wake_on_lan(&self.peer, &mac);
                     write_message(&mut self.send, &Control::WakeSent { sent }).await?;
                 }
-                Control::ShowBroadcast { jpeg } => {
-                    let (showing, problem) = source.show_broadcast(&self.peer, &jpeg);
+                Control::ShowBroadcast { jpeg, locked } => {
+                    let (showing, problem) = source.show_broadcast(&self.peer, &jpeg, locked);
                     write_message(
                         &mut self.send,
                         &Control::BroadcastState { showing, problem },

@@ -364,19 +364,25 @@ impl AgentDevice for ScreenCapture {
         }
     }
 
-    fn show_broadcast(&self, from: &PeerInfo, jpeg: &[u8]) -> (bool, String) {
+    fn show_broadcast(&self, from: &PeerInfo, jpeg: &[u8], locked: bool) -> (bool, String) {
         let (pixels, width, height) = match media::jpeg::decode_to_bgra(jpeg) {
             Ok(frame) => frame,
             Err(err) => return (false, format!("unreadable broadcast frame: {err}")),
         };
         let mut slot = self.broadcast.lock().unwrap_or_else(|e| e.into_inner());
         if slot.is_none() {
-            match platform::present::Presenter::open() {
+            // A locked broadcast traps the student on a separate desktop (no Alt+Tab / Win key) for
+            // the duration; an unlocked one is just an always-on-top full-screen window.
+            let opened = if locked {
+                platform::present::Presenter::open_locked()
+            } else {
+                platform::present::Presenter::open()
+            };
+            match opened {
                 Ok(presenter) => {
-                    println!("console {} started broadcasting", from.device_id);
-                    let _ =
-                        self.audit
-                            .note(net::endpoint::now_ms(), from.device_id, "broadcast-start");
+                    let how = if locked { "broadcast-start-locked" } else { "broadcast-start" };
+                    println!("console {} started broadcasting (locked={locked})", from.device_id);
+                    let _ = self.audit.note(net::endpoint::now_ms(), from.device_id, how);
                     *slot = Some(presenter);
                 }
                 Err(err) => return (false, err.to_string()),

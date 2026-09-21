@@ -161,6 +161,16 @@ enum DeviceRequest {
         message: String,
         reply: tokio::sync::oneshot::Sender<(bool, String)>,
     },
+    /// Show one broadcast frame on this PC; the reply is `(showing, problem)`.
+    ShowBroadcast {
+        jpeg: Vec<u8>,
+        locked: bool,
+        reply: tokio::sync::oneshot::Sender<(bool, String)>,
+    },
+    /// Take the broadcast off this PC; the reply is `(showing, problem)`.
+    StopBroadcast {
+        reply: tokio::sync::oneshot::Sender<(bool, String)>,
+    },
 }
 
 /// Connection state of one device, in the order the UI colours them.
@@ -761,6 +771,33 @@ impl DeviceManager {
             .await
     }
 
+    /// Shows one broadcast frame on a PC. `(showing, problem)`.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn show_broadcast(
+        &self,
+        device_id: &str,
+        jpeg: Vec<u8>,
+        locked: bool,
+    ) -> Result<(bool, String), String> {
+        self.ask(device_id, move |reply| DeviceRequest::ShowBroadcast {
+            jpeg,
+            locked,
+            reply,
+        })
+        .await
+    }
+
+    /// Takes the broadcast off a PC. `(showing, problem)`.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn stop_broadcast(&self, device_id: &str) -> Result<(bool, String), String> {
+        self.ask(device_id, |reply| DeviceRequest::StopBroadcast { reply })
+            .await
+    }
+
     /// Takes the queued UI requests for one device.
     fn take_requests(&self, id: &str) -> Vec<DeviceRequest> {
         let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
@@ -1101,6 +1138,21 @@ impl DeviceManager {
                             .map_err(|e| e.to_string())?;
                         let _ = reply.send(state);
                     }
+                    DeviceRequest::ShowBroadcast {
+                        jpeg,
+                        locked,
+                        reply,
+                    } => {
+                        let state = session
+                            .show_broadcast(jpeg, locked)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let _ = reply.send(state);
+                    }
+                    DeviceRequest::StopBroadcast { reply } => {
+                        let state = session.stop_broadcast().await.map_err(|e| e.to_string())?;
+                        let _ = reply.send(state);
+                    }
                 }
             }
 
@@ -1319,7 +1371,7 @@ fn load_names(path: &std::path::Path) -> std::collections::HashMap<String, Strin
 }
 
 /// Minimal base64 (standard alphabet, padded) so screens can go straight into an `<img src>`.
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {

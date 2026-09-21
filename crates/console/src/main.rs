@@ -448,7 +448,7 @@ async fn cmd_broadcast(args: Vec<String>) -> Result<(), String> {
     for _ in 0..frames {
         let jpeg = capturer.capture_jpeg(0, width).map_err(|e| e.to_string())?;
         let (showing, problem) = session
-            .show_broadcast(jpeg)
+            .show_broadcast(jpeg, false)
             .await
             .map_err(|e| e.to_string())?;
         if !showing {

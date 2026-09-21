@@ -21,5 +21,8 @@ rand = "0.10" # UUIDv7 random half; already in the tree via iroh
 thiserror = "2" # typed leave/membership errors, as the workspace does elsewhere
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1" # embed the Windows .exe icon; maintained fork of winres
+
 [lints]
 workspace = true

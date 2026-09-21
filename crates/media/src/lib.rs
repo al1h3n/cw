@@ -43,6 +43,7 @@ pub mod h264;
 pub mod jpeg;
 pub mod recorder;
 pub mod resize;
+pub mod window_capture;
 
 #[cfg(windows)]
 mod gdi;

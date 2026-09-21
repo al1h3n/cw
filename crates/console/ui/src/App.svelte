@@ -7,6 +7,7 @@
   import { groups, UNCAT } from './lib/groups.svelte'
   import DeviceTile from './lib/DeviceTile.svelte'
   import PairDialog from './lib/PairDialog.svelte'
+  import BroadcastDialog from './lib/BroadcastDialog.svelte'
   import Focused from './lib/Focused.svelte'
   import ActionMenu from './lib/ActionMenu.svelte'
   import BlocklistDialog from './lib/BlocklistDialog.svelte'
@@ -22,6 +23,7 @@
   let devices = $state<Device[]>([])
   let watching = $state(false)
   let pairing = $state(false)
+  let broadcasting = $state(false)
   let editingBlocklist = $state(false)
   let showTutorial = $state(false)
   let controllingId = $state<string | null>(null)
@@ -274,6 +276,9 @@
         {watching ? t('stopWatching') : t('startWatching')}
       </button>
       <button onclick={() => (pairing = true)}>{t('addPc')}</button>
+      <button onclick={() => (broadcasting = true)} disabled={devices.length === 0}>
+        {t('broadcastButton')}
+      </button>
       <button onclick={() => (editingBlocklist = true)}>{t('blockButton')}</button>
       <button onclick={() => (showTutorial = true)} title={t('helpHint')}>{t('help')}</button>
       {#if watching}
@@ -488,6 +493,14 @@
 
 {#if editingBlocklist}
   <BlocklistDialog onclose={() => (editingBlocklist = false)} />
+{/if}
+
+{#if broadcasting}
+  <BroadcastDialog
+    {devices}
+    onclose={() => (broadcasting = false)}
+    onerror={(m) => (error = m)}
+  />
 {/if}
 
 {#if focusedDevice}
