@@ -451,6 +451,201 @@ async fn recording_status(
     state.manager.recording_status(&device_id).await
 }
 
+/// One PC's recording situation for the host-wide overview.
+#[derive(serde::Serialize)]
+struct DeviceRecording {
+    device_id: String,
+    name: Option<String>,
+    /// True while this PC is actively recording (only known for a watched PC).
+    active: bool,
+    /// Frames written so far by the active recording.
+    frames: u32,
+    /// Whether this PC is currently connected (only connected PCs can be queried).
+    connected: bool,
+    /// Recordings already stored on that PC.
+    recordings: Vec<proto::StoredRecording>,
+}
+
+/// Every PC's recording state at once: who is recording now, and what each has stored. Queried
+/// concurrently; a PC that is not being watched shows as disconnected with an empty list.
+#[tauri::command]
+async fn recording_overview(state: State<'_, AppState>) -> Result<Vec<DeviceRecording>, String> {
+    let devices = state.manager.devices();
+    let mut tasks = Vec::new();
+    for device in devices {
+        let manager = Arc::clone(&state.manager);
+        tasks.push(tokio::spawn(async move {
+            // Only a connected (watched) PC answers control requests.
+            let connected = device.status == crate::manager::DeviceStatus::Live;
+            let (active, frames) = if connected {
+                manager
+                    .recording_status(&device.device_id)
+                    .await
+                    .map(|info| (info.active, info.frames))
+                    .unwrap_or((false, 0))
+            } else {
+                (false, 0)
+            };
+            let recordings = if connected {
+                manager
+                    .list_recordings(&device.device_id)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            DeviceRecording {
+                device_id: device.device_id,
+                name: device.name,
+                active,
+                frames,
+                connected,
+                recordings,
+            }
+        }));
+    }
+    let mut out = Vec::new();
+    for task in tasks {
+        if let Ok(row) = task.await {
+            out.push(row);
+        }
+    }
+    Ok(out)
+}
+
+/// Starts recording on every connected PC at once. Returns how many started and how many failed.
+#[derive(serde::Serialize)]
+struct BulkResult {
+    ok: u32,
+    failed: u32,
+}
+
+#[tauri::command]
+#[expect(clippy::too_many_arguments, reason = "a flat command over the recording options")]
+async fn record_all(
+    state: State<'_, AppState>,
+    max_width: u32,
+    max_height: u32,
+    fps: u32,
+    codec: String,
+    preset: String,
+    quality: u8,
+    bframes: u8,
+    scaler: String,
+    two_pass: bool,
+) -> Result<BulkResult, String> {
+    let options = proto::RecordOptions {
+        max_width,
+        max_height,
+        fps,
+        codec: parse_codec(&codec),
+        preset: parse_preset(&preset),
+        quality,
+        bframes,
+        scaler: parse_scaler(&scaler),
+        two_pass,
+    };
+    let mut result = BulkResult { ok: 0, failed: 0 };
+    for device in state.manager.devices() {
+        if device.status != crate::manager::DeviceStatus::Live {
+            continue;
+        }
+        match state.manager.start_recording(&device.device_id, options).await {
+            Ok(_) => result.ok += 1,
+            Err(_) => result.failed += 1,
+        }
+    }
+    Ok(result)
+}
+
+/// Stops recording on every connected PC. Returns how many were told to stop.
+#[tauri::command]
+async fn stop_all_recording(state: State<'_, AppState>) -> Result<BulkResult, String> {
+    let mut result = BulkResult { ok: 0, failed: 0 };
+    for device in state.manager.devices() {
+        if device.status != crate::manager::DeviceStatus::Live {
+            continue;
+        }
+        match state.manager.stop_recording(&device.device_id).await {
+            Ok(_) => result.ok += 1,
+            Err(_) => result.failed += 1,
+        }
+    }
+    Ok(result)
+}
+
+/// Downloads every stored recording from every connected PC and bundles them into one `.zip` on the
+/// teacher's PC, laid out as `<device>/<file>`. Returns the archive path.
+#[tauri::command]
+async fn download_all_recordings_zip(state: State<'_, AppState>) -> Result<String, String> {
+    // Collect what to fetch: (device_id, file) for every recording on every connected PC.
+    let mut wanted: Vec<(String, String)> = Vec::new();
+    for device in state.manager.devices() {
+        if device.status != crate::manager::DeviceStatus::Live {
+            continue;
+        }
+        if let Ok(list) = state.manager.list_recordings(&device.device_id).await {
+            for rec in list {
+                wanted.push((device.device_id.clone(), rec.file));
+            }
+        }
+    }
+    if wanted.is_empty() {
+        return Err("no recordings found on the connected PCs".into());
+    }
+
+    // Fetch each to the teacher's recordings folder, remembering the saved path and its zip name.
+    let mut entries: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for (device_id, file) in &wanted {
+        if let Ok(saved) = state.manager.download_recording(device_id, file).await {
+            entries.push((format!("{device_id}/{file}"), std::path::PathBuf::from(saved)));
+        }
+    }
+    if entries.is_empty() {
+        return Err("could not fetch any recordings".into());
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dest = state
+        .data_dir
+        .join("recordings")
+        .join(format!("all-recordings-{stamp}.zip"));
+
+    // Zipping is blocking file I/O; keep it off the async runtime.
+    let dest_for_task = dest.clone();
+    tokio::task::spawn_blocking(move || write_stored_zip(&entries, &dest_for_task))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    Ok(dest.display().to_string())
+}
+
+/// Writes `entries` (zip-name, source-path) into one Stored (uncompressed) zip — recordings are
+/// already compressed video, so re-compressing would only cost CPU for no gain.
+fn write_stored_zip(
+    entries: &[(String, std::path::PathBuf)],
+    dest: &std::path::Path,
+) -> std::io::Result<()> {
+    let file = std::fs::File::create(dest)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .large_file(true);
+    for (name, path) in entries {
+        let Ok(mut input) = std::fs::File::open(path) else {
+            continue; // a file that vanished mid-run should not abort the whole archive
+        };
+        zip.start_file(name.as_str(), options)
+            .map_err(std::io::Error::other)?;
+        std::io::copy(&mut input, &mut zip)?;
+    }
+    zip.finish().map_err(std::io::Error::other)?;
+    Ok(())
+}
+
 /// The programs a PC offers to start.
 #[tauri::command]
 async fn list_apps(
@@ -819,6 +1014,10 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             recording_status,
             list_recordings,
             download_recording,
+            recording_overview,
+            record_all,
+            stop_all_recording,
+            download_all_recordings_zip,
             set_exam,
             list_apps,
             app_icon,

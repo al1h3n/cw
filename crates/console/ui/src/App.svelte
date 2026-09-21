@@ -8,6 +8,7 @@
   import DeviceTile from './lib/DeviceTile.svelte'
   import PairDialog from './lib/PairDialog.svelte'
   import BroadcastDialog from './lib/BroadcastDialog.svelte'
+  import RecordingsDialog from './lib/RecordingsDialog.svelte'
   import Focused from './lib/Focused.svelte'
   import ActionMenu from './lib/ActionMenu.svelte'
   import BlocklistDialog from './lib/BlocklistDialog.svelte'
@@ -24,6 +25,7 @@
   let watching = $state(false)
   let pairing = $state(false)
   let broadcasting = $state(false)
+  let showRecordings = $state(false)
   let editingBlocklist = $state(false)
   let showTutorial = $state(false)
   let controllingId = $state<string | null>(null)
@@ -279,6 +281,9 @@
       <button onclick={() => (broadcasting = true)} disabled={devices.length === 0}>
         {t('broadcastButton')}
       </button>
+      <button onclick={() => (showRecordings = true)} disabled={devices.length === 0}>
+        {t('recordingsButton')}
+      </button>
       <button onclick={() => (editingBlocklist = true)}>{t('blockButton')}</button>
       <button onclick={() => (showTutorial = true)} title={t('helpHint')}>{t('help')}</button>
       {#if watching}
@@ -501,6 +506,10 @@
     onclose={() => (broadcasting = false)}
     onerror={(m) => (error = m)}
   />
+{/if}
+
+{#if showRecordings}
+  <RecordingsDialog onclose={() => (showRecordings = false)} onerror={(m) => (error = m)} />
 {/if}
 
 {#if focusedDevice}

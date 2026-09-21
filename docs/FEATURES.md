@@ -171,6 +171,16 @@ Fresh from two-machine use; not yet built unless noted.
 
 ### Done 2026-09-21 (this session)
 
+- **Host-wide recordings panel.** A **Recordings** button opens a live view of every PC's recording
+  state (a pulsing ● while a PC is recording, with its frame count), plus **Record all** / **Stop all**
+  across the watched class, and **Download all (.zip)** — every stored recording is fetched to the
+  teacher's PC and bundled into one Stored (uncompressed) archive laid out as `<device>/<file>`
+  (`download_all_recordings_zip`, using the `zip` crate). Per-PC download already existed
+  (`FetchRecording`); this adds the class-wide overview, bulk start/stop, and the single archive.
+  Console-only, so `PROTOCOL_VERSION` stays 15. (Recording ops require a *watched* PC, since only a
+  live control session answers — the panel shows unwatched PCs greyed out.)
+
+
 - **Full-screen broadcast with a source picker + student lockdown.** A Zoom/Teams-style picker
   (`list_broadcast_sources`) lists every monitor and every ordinary app window with a thumbnail; the
   teacher picks one, chooses which PCs, and optionally ticks **Lock students onto it**. A locked
