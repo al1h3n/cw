@@ -23,7 +23,10 @@ pub fn decode_to_bgra(jpeg: &[u8]) -> Result<(Vec<u8>, u32, u32), CaptureError> 
     // CMYK JPEG still arrives as three bytes per pixel and the loop below stays correct.
     let options = DecoderOptions::default()
         .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB);
-    let mut decoder = JpegDecoder::new_with_options(jpeg, options);
+    // zune-jpeg 0.5 takes a reader implementing `ZByteReaderTrait` rather than a raw `&[u8]`;
+    // `ZCursor` wraps the slice for that without copying the bytes.
+    let reader = zune_jpeg::zune_core::bytestream::ZCursor::new(jpeg);
+    let mut decoder = JpegDecoder::new_with_options(reader, options);
     decoder
         .decode_headers()
         .map_err(|e| CaptureError(format!("not a readable JPEG: {e}")))?;
