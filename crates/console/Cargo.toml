@@ -12,12 +12,15 @@ name = "cowatcher-console"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22" # image attachments (data URLs) and audio for voice transcription
 iroh = "1.2"
 media = { version = "0.1.0", path = "../media" }
 net = { path = "../net" }
 platform = { version = "0.1.0", path = "../platform" }
 proto = { path = "../proto" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2", "charset", "multipart"] } # call the AI provider from Rust (D22: key stays off the web layer); multipart for voice transcription
 serde = { version = "1", features = ["derive"] }
+serde_json = "1" # AI chat-completions / Anthropic messages payloads
 tauri = { version = "2", features = [] } # the teacher-facing GUI (AGENTS D13)
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }

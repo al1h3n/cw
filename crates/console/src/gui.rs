@@ -30,6 +30,8 @@ struct AppState {
     pairing_stop: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// The broadcast in progress, if the teacher is presenting.
     broadcast: Mutex<Option<BroadcastHandle>>,
+    /// Surey, the AI assistant: provider config, key store and in-flight selection requests.
+    ai: crate::ai::AiState,
     /// Where per-user files live: the trust store, the device key and `languages/`.
     data_dir: std::path::PathBuf,
 }
@@ -1060,6 +1062,72 @@ async fn end_broadcast(state: &AppState) {
     }
 }
 
+// ---- Surey (AI assistant) commands -------------------------------------------------------------
+
+/// The current AI provider config for the settings panel (never includes the key).
+#[tauri::command]
+fn ai_config(state: State<'_, AppState>) -> crate::ai::ConfigView {
+    state.ai.config_view()
+}
+
+/// Saves the AI provider choice. `key` is the API key: omit it to keep the stored one, send `""` to
+/// clear it. Local providers may have no key.
+#[tauri::command]
+fn ai_set_config(
+    state: State<'_, AppState>,
+    kind: String,
+    base_url: String,
+    model: String,
+    key: Option<String>,
+) -> Result<(), String> {
+    use crate::ai::provider::{ProviderConfig, ProviderKind};
+    let kind = match kind.as_str() {
+        "openai" => ProviderKind::OpenAi,
+        "anthropic" => ProviderKind::Anthropic,
+        "local" => ProviderKind::Local,
+        _ => ProviderKind::Custom,
+    };
+    let config = ProviderConfig {
+        kind,
+        base_url,
+        model,
+    };
+    state.ai.set_config(config, key)
+}
+
+/// Lists the model ids the configured endpoint offers (helpful for local Ollama/LM Studio servers).
+#[tauri::command]
+async fn ai_list_models(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    state.ai.list_models().await
+}
+
+/// Runs one Surey turn over the supplied conversation, returning the assistant's final reply.
+/// Tool activity and selection prompts arrive as `surey://…` events on the window.
+#[tauri::command]
+async fn ai_send(
+    state: State<'_, AppState>,
+    window: tauri::Window,
+    messages: Vec<crate::ai::ChatMessage>,
+) -> Result<String, String> {
+    state.ai.run_turn(&window, &state.manager, messages).await
+}
+
+/// Answers an outstanding `ask_user` selection. Returns whether a request was waiting for it.
+#[tauri::command]
+fn ai_choice_reply(state: State<'_, AppState>, id: String, value: String) -> bool {
+    state.ai.resolve_choice(&id, value)
+}
+
+/// Transcribes recorded voice audio to text via the endpoint's Whisper-shape transcription API.
+#[tauri::command]
+async fn ai_transcribe(
+    state: State<'_, AppState>,
+    audio: Vec<u8>,
+    filename: String,
+) -> Result<String, String> {
+    state.ai.transcribe(audio, filename).await
+}
+
 pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
     let manager = Arc::new(DeviceManager::load(&data_dir)?);
     tauri::Builder::default()
@@ -1069,6 +1137,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
                 pairing_code: Mutex::new(None),
                 pairing_stop: Mutex::new(None),
                 broadcast: Mutex::new(None),
+                ai: crate::ai::AiState::load(&data_dir),
                 data_dir: data_dir.clone(),
             });
             Ok(())
@@ -1120,6 +1189,12 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             start_broadcast,
             stop_broadcast,
             set_wallpaper,
+            ai_config,
+            ai_set_config,
+            ai_list_models,
+            ai_send,
+            ai_choice_reply,
+            ai_transcribe,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| e.to_string())

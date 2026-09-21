@@ -6,6 +6,23 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-21, latest):** **Surey**, the in-Console AI assistant (D22), landed. A bottom-right
+**Ask Surey** button opens a **floating, draggable, dockable** panel (`SureyPanel.svelte`, float /
+dock-left / dock-right, resizable, position + chat sessions persisted in `localStorage`). It chats with
+a **user-configured provider** — official OpenAI, official Anthropic (native Messages API), any custom
+OpenAI-compatible endpoint (e.g. the Omniroute example), or a **local** server (Ollama/LM Studio), with
+a "list models" helper — and every request is **proxied through Rust** (`crates/console/src/ai/`), the
+API key sealed with DPAPI (`platform::secret`), never touching the web layer (D22). Surey can *act* on
+the class through the same typed fleet tools the MCP exposes (`ai::tools` → `DeviceManager` → closed
+`proto::Action`), including an **`ask_user` selection tool** the panel renders as options chosen by
+number key / arrows+Enter / mouse (with an optional free-form answer) — the interaction primitive the
+AI drives. **Voice input** is real-time via the WebView Speech API (interim transcript straight into the
+box), falling back to record-then-transcribe through the endpoint's Whisper-shape API. Tool-calling
+loops with a live device snapshot in the pre-prompt so it can map "PC 4,5" to ids, and confirms
+destructive actions. Backend fully unit-tested (provider/DPAPI/tool-schema/wire-shape); the live LLM
+calls need a real endpoint. **Next: attachments in the chat (images/files), and streaming token
+output.**
+
 **Status (2026-09-21, later):** the **Co-watcher MCP server** and **push-a-wallpaper** landed.
 `crates/mcp` (`cowatcher-mcp`) is a Model Context Protocol server (JSON-RPC 2.0 over stdio) that
 exposes the Console's typed remote actions as MCP tools — `list_devices`, `device_status`,

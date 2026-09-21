@@ -191,6 +191,31 @@ Fresh from two-machine use; not yet built unless noted.
 - **No sign when a client dropped the broadcast** — the fan-out now emits `cowatcher://broadcast-ended`
   when a PC that was showing stops, and the Console toasts "<PC> closed the broadcast".
 
+### Done 2026-09-21 (latest)
+
+- **Surey — the in-Console AI assistant (D22).** A bottom-right **Ask Surey** button opens a floating,
+  draggable, dockable panel (`crates/console/ui/src/lib/SureyPanel.svelte`): float / dock-left /
+  dock-right, resizable, with multiple chat sessions and its placement persisted in `localStorage`.
+  - **Providers.** Official OpenAI, official Anthropic (native `/v1/messages`), any custom
+    OpenAI-compatible endpoint (the Omniroute example), and **local** servers (Ollama/LM Studio) via
+    the OpenAI-compatible shape, with a "list models" helper (`GET /v1/models`). All traffic is proxied
+    through Rust (`crates/console/src/ai/{provider,client,tools,mod}.rs`); the API key is sealed with
+    DPAPI (`platform::secret`) and never reaches the web layer (D22).
+  - **Acting on the class.** Surey uses the same typed fleet tools as the MCP (`ai::tools` →
+    `DeviceManager` → closed `proto::Action`): `list_devices`, `power_action`, `set_exam`, `list_apps`,
+    `launch_app`, `list_running`, `close_app`, `set_blocklist`, recording controls. No arbitrary-command
+    tool. The pre-prompt carries a live device snapshot so it can map "PC 4,5" to ids; it confirms
+    destructive actions.
+  - **Selection tool (`ask_user`).** The interaction primitive the AI drives: it presents options the
+    panel renders as a list chosen by number key, arrows+Enter, or mouse, with an optional free-form
+    answer. The Rust side round-trips via a per-request channel; one choice can lead to the next.
+  - **Voice.** Real-time speech-to-text via the WebView Speech API (interim transcript straight into the
+    box, Jarvis-style), falling back to record-then-transcribe through the endpoint's Whisper-shape
+    `/audio/transcriptions`.
+  - Backend unit-tested (provider round-trip incl. DPAPI, OpenAI/Anthropic wire shapes, tool schemas,
+    argument parsing). Live LLM calls need a real endpoint; not exercised in CI. **Follow-ups:**
+    attachments (images/files) in the composer, and streaming token output.
+
 ### Done 2026-09-21 (later)
 
 - **Co-watcher MCP server** (`crates/mcp`, binary `cowatcher-mcp`). A Model Context Protocol server
