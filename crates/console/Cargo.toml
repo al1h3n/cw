@@ -12,7 +12,7 @@ name = "cowatcher-console"
 path = "src/main.rs"
 
 [dependencies]
-base64 = "0.22" # image attachments (data URLs) and audio for voice transcription
+base64 = "0.23" # image attachments (data URLs) and audio for voice transcription
 iroh = "1.2"
 media = { version = "0.1.0", path = "../media" }
 net = { path = "../net" }
@@ -24,7 +24,7 @@ serde_json = "1" # AI chat-completions / Anthropic messages payloads
 tauri = { version = "2", features = [] } # the teacher-facing GUI (AGENTS D13)
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
-zip = { version = "2", default-features = false } # bundle downloaded recordings into one .zip (Stored; handles ZIP64/CRC)
+zip = { version = "8", default-features = false } # bundle downloaded recordings into one .zip (Stored; handles ZIP64/CRC)
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

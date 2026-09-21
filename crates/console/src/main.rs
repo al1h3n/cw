@@ -22,6 +22,7 @@ mod gui;
 mod i18n;
 mod manager;
 mod room;
+mod subscription;
 
 use std::{
     path::PathBuf,

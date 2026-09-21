@@ -6,6 +6,22 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-21, polish):** Surey UI polish + broadcast speed-up + dependency hygiene. The AI
+**launcher is now a clean, draggable icon** (`SureyLauncher.svelte` — no text/gradient/dot, position
+persisted); the panel's toolbar/mic/send/trash **icons are aligned stroke-SVGs** (were misaligned
+glyphs); **voice** now reliably records → transcribes (Whisper-shape) with a clear red "listening"
+state and drops the flaky WebView Speech path that ended instantly with no text. A **Co-Watcher
+subscription placeholder** (D1) was added: `crates/console/src/subscription.rs` stores a dashboard URL
++ a DPAPI-sealed licence key and opens the dashboard via `platform::browser::open` (http(s)-only,
+validated) — ready to point at the hosted endpoint when it exists. **Broadcast is much faster**: the
+capture thread **skips frames identical to the last one** (re-sending only every 1.5 s so late joiners
+catch up), and the fan-out now pushes each frame to all targets **in parallel** (a `JoinSet`) instead
+of target-by-target — the ~25 s-to-update-a-class problem, down to ~1–2 s. Dependencies: **base64 →
+0.23**, **zip → 8.6**; transitive deps updated; `cargo deny check advisories` is clean (no CVEs).
+**argon2 held at 0.5** on purpose — 0.6 is a breaking migration (password-hash 0.6 / rand_core 0.9) to
+security-critical room-password hashing (D10), to be done as a focused, separately-tested change. 209
+tests pass.
+
 **Status (2026-09-21, latest):** **Surey**, the in-Console AI assistant (D22), landed. A bottom-right
 **Ask Surey** button opens a **floating, draggable, dockable** panel (`SureyPanel.svelte`, float /
 dock-left / dock-right, resizable, position + chat sessions persisted in `localStorage`). It chats with

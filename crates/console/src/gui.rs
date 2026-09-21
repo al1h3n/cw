@@ -32,6 +32,8 @@ struct AppState {
     broadcast: Mutex<Option<BroadcastHandle>>,
     /// Surey, the AI assistant: provider config, key store and in-flight selection requests.
     ai: crate::ai::AiState,
+    /// The (placeholder) Co-watcher subscription: dashboard URL and licence key.
+    subscription: crate::subscription::Store,
     /// Where per-user files live: the trust store, the device key and `languages/`.
     data_dir: std::path::PathBuf,
 }
@@ -975,16 +977,25 @@ async fn start_broadcast(
     let width = width.clamp(320, 3840);
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
 
-    // Capture thread: owns the monitor capturer so it never crosses a thread boundary.
+    // Capture thread: owns the monitor capturer so it never crosses a thread boundary. It skips
+    // frames identical to the last one it sent (a still teacher screen costs no network or client
+    // CPU), re-sending an unchanged frame only every KEEPALIVE so a client that reconnects mid-
+    // broadcast still catches up within a second or two.
     {
         let stop = Arc::clone(&stop);
         let kind = source_kind.clone();
         std::thread::spawn(move || {
+            /// How often an unchanged frame is re-sent, so late joiners catch up.
+            const KEEPALIVE: Duration = Duration::from_millis(1500);
             let mut monitor = if kind == "monitor" {
                 media::ThumbnailCapturer::new().ok()
             } else {
                 None
             };
+            let mut last: Option<Vec<u8>> = None;
+            let mut last_sent = std::time::Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .unwrap_or_else(std::time::Instant::now);
             while !stop.load(Ordering::SeqCst) {
                 let frame = if kind == "window" {
                     media::window_capture::capture_window_jpeg(source_id, width).ok()
@@ -995,9 +1006,14 @@ async fn start_broadcast(
                         .and_then(|c| c.capture_jpeg(index, width).ok())
                 };
                 if let Some(jpeg) = frame {
-                    // Blocking send paces us to the fan-out; a full channel means a frame in flight.
-                    if tx.blocking_send(jpeg).is_err() {
-                        break; // receiver gone
+                    let changed = last.as_deref() != Some(jpeg.as_slice());
+                    if changed || last_sent.elapsed() >= KEEPALIVE {
+                        // Blocking send paces us to the fan-out; a full channel = a frame in flight.
+                        if tx.blocking_send(jpeg.clone()).is_err() {
+                            break; // receiver gone
+                        }
+                        last = Some(jpeg);
+                        last_sent = std::time::Instant::now();
                     }
                 }
                 std::thread::sleep(Duration::from_millis(200));
@@ -1005,7 +1021,9 @@ async fn start_broadcast(
         });
     }
 
-    // Fan-out task: push each captured frame to every target PC, and tell the UI when a PC that had
+    // Fan-out task: push each captured frame to every target PC **in parallel** (a JoinSet), so one
+    // frame reaches ten clients in about one device-refresh instead of piling up target-by-target —
+    // the difference between ~25 s and ~2 s to update a class. It also tells the UI when a PC that had
     // been showing the broadcast drops it (closed, crashed or disconnected) — bug report #6.
     {
         use tauri::Emitter;
@@ -1020,16 +1038,26 @@ async fn start_broadcast(
                 if stop.load(Ordering::SeqCst) {
                     break;
                 }
+                let mut set = tokio::task::JoinSet::new();
                 for target in &targets {
-                    let now = matches!(
-                        manager.show_broadcast(target, jpeg.clone(), locked).await,
-                        Ok((true, _))
-                    );
-                    let was = showing.get(target).copied().unwrap_or(false);
+                    let manager = Arc::clone(&manager);
+                    let target = target.clone();
+                    let jpeg = jpeg.clone();
+                    set.spawn(async move {
+                        let now = matches!(
+                            manager.show_broadcast(&target, jpeg, locked).await,
+                            Ok((true, _))
+                        );
+                        (target, now)
+                    });
+                }
+                while let Some(joined) = set.join_next().await {
+                    let Ok((target, now)) = joined else { continue };
+                    let was = showing.get(&target).copied().unwrap_or(false);
                     if was && !now {
                         let _ = window.emit("cowatcher://broadcast-ended", target.clone());
                     }
-                    showing.insert(target.clone(), now);
+                    showing.insert(target, now);
                 }
             }
         });
@@ -1128,6 +1156,31 @@ async fn ai_transcribe(
     state.ai.transcribe(audio, filename).await
 }
 
+// ---- Co-watcher subscription (placeholder) -----------------------------------------------------
+
+/// The current subscription state for the settings card (never includes the licence key).
+#[tauri::command]
+fn subscription_config(state: State<'_, AppState>) -> crate::subscription::SubscriptionView {
+    state.subscription.view()
+}
+
+/// Saves the dashboard URL and (optionally) the licence key. `license` = `None` keeps the stored key,
+/// `Some("")` clears it.
+#[tauri::command]
+fn subscription_set(
+    state: State<'_, AppState>,
+    dashboard_url: String,
+    license: Option<String>,
+) -> Result<(), String> {
+    state.subscription.set(&dashboard_url, license)
+}
+
+/// Opens the configured dashboard URL in the default browser.
+#[tauri::command]
+fn open_dashboard(state: State<'_, AppState>) -> Result<(), String> {
+    state.subscription.open_dashboard()
+}
+
 pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
     let manager = Arc::new(DeviceManager::load(&data_dir)?);
     tauri::Builder::default()
@@ -1138,6 +1191,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
                 pairing_stop: Mutex::new(None),
                 broadcast: Mutex::new(None),
                 ai: crate::ai::AiState::load(&data_dir),
+                subscription: crate::subscription::Store::new(&data_dir),
                 data_dir: data_dir.clone(),
             });
             Ok(())
@@ -1195,6 +1249,9 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             ai_send,
             ai_choice_reply,
             ai_transcribe,
+            subscription_config,
+            subscription_set,
+            open_dashboard,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| e.to_string())

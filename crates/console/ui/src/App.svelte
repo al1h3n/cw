@@ -13,6 +13,7 @@
   import RecordingsDialog from './lib/RecordingsDialog.svelte'
   import WallpaperDialog from './lib/WallpaperDialog.svelte'
   import SureyPanel from './lib/SureyPanel.svelte'
+  import SureyLauncher from './lib/SureyLauncher.svelte'
   import Focused from './lib/Focused.svelte'
   import ActionMenu from './lib/ActionMenu.svelte'
   import BlocklistDialog from './lib/BlocklistDialog.svelte'
@@ -541,9 +542,7 @@
 {/if}
 
 {#if !sureyOpen}
-  <button class="surey-fab" onclick={() => (sureyOpen = true)} title={t('sureyOpen')}>
-    <span class="fab-dot"></span> Surey
-  </button>
+  <SureyLauncher onopen={() => (sureyOpen = true)} />
 {/if}
 
 {#if focusedDevice}
@@ -919,32 +918,4 @@
     box-shadow: 0 0 0 3px rgba(62, 207, 142, 0.18);
   }
 
-  /* Surey: the AI assistant launcher, bottom-right corner. */
-  .surey-fab {
-    position: fixed;
-    right: 20px;
-    bottom: 20px;
-    z-index: 50;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 16px;
-    font-weight: 700;
-    color: #fff;
-    background: linear-gradient(135deg, var(--accent, #3b6fd4), #7a4fd4);
-    border: none;
-    border-radius: 999px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-    cursor: pointer;
-  }
-  .surey-fab:hover {
-    filter: brightness(1.08);
-  }
-  .fab-dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 0 8px #fff;
-  }
 </style>

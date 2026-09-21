@@ -6,6 +6,7 @@
 #![allow(unsafe_code)] // sanctioned here per AGENTS.md §5; FFI only, each block documented
 
 pub mod apps;
+pub mod browser;
 pub mod console;
 pub mod examlock;
 pub mod input;

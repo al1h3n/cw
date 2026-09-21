@@ -150,79 +150,57 @@
     }
   }
 
-  // ---- voice (real-time via Web Speech; falls back to record + transcribe) ----------------------
+  // ---- voice: record with MediaRecorder, then transcribe through the provider (Whisper-shape). ---
+  // Reliable everywhere getUserMedia works, and the recognised text lands in the box so you can see
+  // and edit what was heard before sending. (WebView2 has no built-in speech service, so the browser
+  // SpeechRecognition API is not used here — it silently ends with no result.)
   let listening = $state(false)
   let voiceSupported = $state(false)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let recognition: any = null
   let recorder: MediaRecorder | null = null
+  let micStream: MediaStream | null = null
   let chunks: Blob[] = []
 
   function setupVoice() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (SR) {
-      voiceSupported = true
-      recognition = new SR()
-      recognition.continuous = true
-      recognition.interimResults = true
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      recognition.onresult = (ev: any) => {
-        let text = ''
-        for (let i = 0; i < ev.results.length; i++) text += ev.results[i][0].transcript
-        input = text // real-time, updates as you speak (Jarvis-style)
-      }
-      recognition.onend = () => (listening = false)
-    } else {
-      // Fallback path: we still show the mic; it records and asks the provider to transcribe.
-      voiceSupported = 'mediaDevices' in navigator
-    }
+    voiceSupported = !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== 'undefined'
   }
 
   async function toggleVoice() {
     if (listening) {
-      listening = false
-      recognition?.stop()
+      // Stop → the recorder's onstop transcribes.
       recorder?.stop()
+      listening = false
       return
     }
-    if (recognition) {
-      listening = true
-      input = ''
-      try {
-        recognition.start()
-      } catch {
-        listening = false
-      }
-      return
-    }
-    // MediaRecorder fallback → transcribe on stop.
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      recorder = new MediaRecorder(stream)
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      recorder = new MediaRecorder(micStream)
       chunks = []
-      recorder.ondataavailable = (e) => chunks.push(e.data)
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data)
+      }
       recorder.onstop = async () => {
-        stream.getTracks().forEach((tr) => tr.stop())
-        const blob = new Blob(chunks, { type: 'audio/webm' })
+        micStream?.getTracks().forEach((tr) => tr.stop())
+        micStream = null
+        const blob = new Blob(chunks, { type: recorder?.mimeType || 'audio/webm' })
+        if (blob.size === 0) return
         const buf = new Uint8Array(await blob.arrayBuffer())
         activity = t('sureyTranscribing')
         try {
-          input = await invoke<string>('ai_transcribe', {
+          const text = await invoke<string>('ai_transcribe', {
             audio: Array.from(buf),
             filename: 'voice.webm',
           })
-        } catch (e) {
-          activity = String(e)
-          return
-        } finally {
+          input = input ? `${input} ${text}` : text
           activity = ''
+        } catch (e) {
+          activity = `⚠ ${String(e)}`
         }
       }
       recorder.start()
       listening = true
     } catch (e) {
-      activity = String(e)
+      activity = `⚠ ${String(e)}`
+      listening = false
     }
   }
 
@@ -232,11 +210,46 @@
   let models = $state<string[]>([])
   let settingsMsg = $state('')
 
+  // ---- Co-Watcher subscription (placeholder; endpoint wired later) ------------------------------
+  type Sub = { dashboard_url: string; has_license: boolean; plan: string }
+  let sub = $state<Sub>({ dashboard_url: '', has_license: false, plan: 'free' })
+  let licenseInput = $state('')
+  let subMsg = $state('')
+
   async function loadConfig() {
     try {
       cfg = await invoke<Config>('ai_config')
     } catch (e) {
       settingsMsg = String(e)
+    }
+    try {
+      sub = await invoke<Sub>('subscription_config')
+    } catch {
+      /* placeholder unavailable */
+    }
+  }
+
+  async function saveSubscription() {
+    subMsg = ''
+    try {
+      await invoke('subscription_set', {
+        dashboardUrl: sub.dashboard_url,
+        license: licenseInput ? licenseInput : null,
+      })
+      licenseInput = ''
+      sub = await invoke<Sub>('subscription_config')
+      subMsg = t('sureySaved')
+    } catch (e) {
+      subMsg = String(e)
+    }
+  }
+
+  async function openDashboard() {
+    subMsg = ''
+    try {
+      await invoke('open_dashboard')
+    } catch (e) {
+      subMsg = String(e)
     }
   }
 
@@ -336,8 +349,8 @@
   })
   onDestroy(() => {
     unlisteners.forEach((u) => u())
-    recognition?.stop?.()
     recorder?.stop?.()
+    micStream?.getTracks().forEach((tr) => tr.stop())
   })
 
   function onGlobalKey(event: KeyboardEvent) {
@@ -360,17 +373,34 @@
       <span class="dot"></span> Surey
     </span>
     <span class="tools">
-      <button title={t('sureyNewChat')} onclick={newSession} aria-label={t('sureyNewChat')}>＋</button>
+      <button title={t('sureyNewChat')} onclick={newSession} aria-label={t('sureyNewChat')}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
       <button
         class:active={showSettings}
         title={t('sureySettings')}
         onclick={() => (showSettings = !showSettings)}
-        aria-label={t('sureySettings')}>⚙</button
+        aria-label={t('sureySettings')}
       >
-      <button class:active={dock === 'left'} title="Dock left" onclick={() => setDock('left')}>⇤</button>
-      <button class:active={dock === 'float'} title="Float" onclick={() => setDock('float')}>◻</button>
-      <button class:active={dock === 'right'} title="Dock right" onclick={() => setDock('right')}>⇥</button>
-      <button title={t('close')} onclick={onclose} aria-label={t('close')}>✕</button>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path
+            d="M19.4 13.5a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.56V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06A2 2 0 1 1 7.09 4.4l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.56V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1.5Z"
+          />
+        </svg>
+      </button>
+      <button class:active={dock === 'left'} title="Dock left" onclick={() => setDock('left')} aria-label="Dock left">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="16" height="16" rx="2" /><path d="M9 4v16" /></svg>
+      </button>
+      <button class:active={dock === 'float'} title="Float" onclick={() => setDock('float')} aria-label="Float">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="14" height="14" rx="2" /><path d="M4 14V6a2 2 0 0 1 2-2h8" /></svg>
+      </button>
+      <button class:active={dock === 'right'} title="Dock right" onclick={() => setDock('right')} aria-label="Dock right">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="16" height="16" rx="2" /><path d="M15 4v16" /></svg>
+      </button>
+      <button title={t('close')} onclick={onclose} aria-label={t('close')}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
     </span>
   </header>
 
@@ -413,6 +443,33 @@
         <button class="primary" onclick={saveConfig}>{t('sureySave')}</button>
         <span class="smsg">{settingsMsg}</span>
       </div>
+
+      <div class="subcard">
+        <div class="subhead">
+          <h3>{t('subTitle')}</h3>
+          <span class="plan {sub.plan === 'custom' ? 'plan-custom' : 'plan-free'}">
+            {sub.plan === 'custom' ? t('subPlanCustom') : t('subPlanFree')}
+          </span>
+        </div>
+        <p class="hint">{t('subLead')}</p>
+        <label>
+          {t('subDashboardUrl')}
+          <input bind:value={sub.dashboard_url} placeholder="https://dashboard.co-watcher..." />
+        </label>
+        <label>
+          {t('subLicense')}
+          <input
+            type="password"
+            bind:value={licenseInput}
+            placeholder={sub.has_license ? t('sureyKeySet') : 'XXXX-XXXX-XXXX'}
+          />
+        </label>
+        <div class="srow">
+          <button class="primary" onclick={saveSubscription}>{t('sureySave')}</button>
+          <button onclick={openDashboard} disabled={!sub.dashboard_url}>{t('subOpen')}</button>
+          <span class="smsg">{subMsg}</span>
+        </div>
+      </div>
     </div>
   {:else}
     <div class="sessions">
@@ -420,7 +477,9 @@
         {#each sessions as s (s.id)}<option value={s.id}>{s.title}</option>{/each}
       </select>
       {#if sessions.length > 1}
-        <button title={t('sureyDeleteChat')} onclick={() => deleteSession(currentId)}>🗑</button>
+        <button class="iconbtn" title={t('sureyDeleteChat')} aria-label={t('sureyDeleteChat')} onclick={() => deleteSession(currentId)}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" /></svg>
+        </button>
       {/if}
     </div>
 
@@ -465,6 +524,12 @@
       {/if}
     </div>
 
+    {#if listening}
+      <div class="reclabel">
+        <span class="recdot"></span>
+        {t('sureyListening')}
+      </div>
+    {/if}
     <form class="composer" onsubmit={(e) => (e.preventDefault(), send())}>
       <button
         type="button"
@@ -472,8 +537,17 @@
         class:on={listening}
         disabled={!voiceSupported}
         title={voiceSupported ? t('sureyMic') : t('sureyMicUnavailable')}
-        onclick={toggleVoice}>🎤</button
+        onclick={toggleVoice}
       >
+        {#if listening}
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" /></svg>
+        {:else}
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="9" y="3" width="6" height="11" rx="3" />
+            <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+          </svg>
+        {/if}
+      </button>
       <textarea
         bind:value={input}
         rows="1"
@@ -485,7 +559,9 @@
           }
         }}
       ></textarea>
-      <button class="primary send" disabled={busy || !input.trim()}>➤</button>
+      <button class="primary send" disabled={busy || !input.trim()} aria-label={t('sureyAsk')}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-5 16-3.5-6.5L4 12Z" fill="currentColor" stroke="none" /></svg>
+      </button>
     </form>
   {/if}
 
@@ -556,11 +632,26 @@
     background: var(--accent, #6ea8fe);
     box-shadow: 0 0 8px var(--accent, #6ea8fe);
   }
+  /* Every icon in the panel is a stroke SVG, sized and aligned the same so nothing drifts. */
+  .surey :global(svg) {
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .tools button :global(svg) {
+    display: block;
+    width: 15px;
+    height: 15px;
+  }
   .tools {
     display: flex;
     gap: 2px;
   }
   .tools button {
+    display: grid;
+    place-items: center;
     width: 26px;
     height: 26px;
     padding: 0;
@@ -727,25 +818,60 @@
   }
   .mic,
   .send {
+    display: grid;
+    place-items: center;
     width: 34px;
     height: 34px;
     flex: none;
     border-radius: 9px;
     cursor: pointer;
   }
+  .mic :global(svg),
+  .send :global(svg) {
+    display: block;
+    width: 18px;
+    height: 18px;
+  }
   .mic {
+    color: var(--muted);
     background: var(--bg);
     border: 1px solid var(--line);
   }
+  .mic:hover:not(:disabled) {
+    color: inherit;
+  }
   .mic.on {
-    border-color: var(--danger, #e5484d);
     color: var(--danger, #e5484d);
+    border-color: var(--danger, #e5484d);
     animation: pulse 1.2s ease-in-out infinite;
+  }
+  .mic:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   @keyframes pulse {
     50% {
       box-shadow: 0 0 0 4px rgba(229, 72, 77, 0.25);
     }
+  }
+
+  .reclabel {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 12px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--danger, #e5484d);
+    background: rgba(229, 72, 77, 0.1);
+    border-radius: 8px;
+  }
+  .recdot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--danger, #e5484d);
+    animation: pulse 1.2s ease-in-out infinite;
   }
 
   .settings {
@@ -787,6 +913,70 @@
   .smsg {
     font-size: 12px;
     color: var(--muted);
+  }
+
+  .subcard {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 6px;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+  .subhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .plan {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 3px 9px;
+    border-radius: 999px;
+  }
+  .plan-free {
+    color: var(--muted);
+    border: 1px solid var(--line);
+  }
+  .plan-custom {
+    color: #fff;
+    background: var(--accent, #3b6fd4);
+  }
+  .subcard button:not(.primary) {
+    padding: 6px 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    color: inherit;
+    cursor: pointer;
+  }
+  .subcard button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .sessions .iconbtn {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    padding: 0;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .sessions .iconbtn:hover {
+    color: var(--danger, #e5484d);
+    border-color: var(--danger, #e5484d);
+  }
+  .sessions .iconbtn :global(svg) {
+    width: 15px;
+    height: 15px;
   }
 
   .resize {
