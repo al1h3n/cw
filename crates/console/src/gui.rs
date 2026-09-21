@@ -1024,11 +1024,9 @@ async fn start_broadcast(
         let source_lost = Arc::clone(&source_lost);
         let start_kind = source_kind.clone();
         std::thread::spawn(move || {
-            /// How often an unchanged frame is re-sent, so late joiners catch up.
+            /// How often an unchanged (or held) frame is re-sent, so a client that joins mid-broadcast
+            /// catches up within a second or two.
             const KEEPALIVE: Duration = Duration::from_millis(1500);
-            /// A window uncapturable (minimized) this long is treated like it was closed, so a class is
-            /// never left staring at a frozen frame — the `on_close` policy kicks in.
-            const GRACE: Duration = Duration::from_secs(8);
             // Both are `mut` because a window source can be swapped for the host desktop mid-broadcast.
             let mut kind = start_kind;
             let mut src = source_id;
@@ -1041,8 +1039,6 @@ async fn start_broadcast(
             let mut last_sent = std::time::Instant::now()
                 .checked_sub(Duration::from_secs(10))
                 .unwrap_or_else(std::time::Instant::now);
-            // When a window first became uncapturable, so a brief minimize does not trip the policy.
-            let mut unavailable_since: Option<std::time::Instant> = None;
             while !stop.load(Ordering::SeqCst) {
                 let frame = if kind == "window" {
                     media::window_capture::capture_window_jpeg(src, width).ok()
@@ -1055,7 +1051,6 @@ async fn start_broadcast(
                 };
                 match frame {
                     Some(jpeg) => {
-                        unavailable_since = None;
                         let changed = last.as_deref() != Some(jpeg.as_slice());
                         if changed || last_sent.elapsed() >= KEEPALIVE {
                             // Blocking send paces us to the fan-out; a full channel = a frame in flight.
@@ -1066,35 +1061,44 @@ async fn start_broadcast(
                             last_sent = std::time::Instant::now();
                         }
                     }
-                    // A monitor is always capturable, so `None` only happens for a window: it is either
-                    // closed (gone) or minimized/occluded. Keep showing the last good frame — never send
-                    // a black one — until it is truly gone or has been unavailable past the grace time.
+                    // A monitor is always capturable, so `None` only happens for a window. Two very
+                    // different cases, kept apart:
+                    //   * the window is **closed** — apply the `on_close` policy (bug 12);
+                    //   * the window is **minimized or momentarily occluded** but still alive — keep
+                    //     showing the last good frame and never a black one, and resume live updates
+                    //     automatically the instant it is restored (bug 10). Windows does not render a
+                    //     minimized window, so its live pixels cannot be captured; holding the last
+                    //     real frame is the correct, non-black behaviour.
                     None if kind == "window" => {
-                        let gone = !media::window_capture::window_alive(src);
-                        let stale = unavailable_since
-                            .get_or_insert_with(std::time::Instant::now)
-                            .elapsed()
-                            >= GRACE;
-                        if gone || stale {
-                            if on_close == "desktop" {
-                                // Fall back to presenting the host's primary desktop.
-                                let mut cap = media::ThumbnailCapturer::new().ok();
-                                let index = cap
-                                    .as_ref()
-                                    .and_then(|c| {
-                                        c.monitors().iter().find(|m| m.primary).map(|m| m.index)
-                                    })
-                                    .unwrap_or(0);
-                                monitor = cap.take();
-                                kind = "monitor".to_string();
-                                src = u64::from(index);
-                                unavailable_since = None;
-                            } else {
-                                // Policy is "stop": signal why, then end. Dropping `tx` closes the
-                                // channel, which lets the fan-out notice and clear the clients.
-                                source_lost.store(true, Ordering::SeqCst);
-                                break;
+                        if media::window_capture::window_alive(src) {
+                            // Minimized/occluded: re-send the held frame on the keepalive cadence so a
+                            // client that (re)connects while it is minimized still sees the last screen
+                            // instead of nothing.
+                            if let Some(held) = last.clone()
+                                && last_sent.elapsed() >= KEEPALIVE
+                            {
+                                if tx.blocking_send(held).is_err() {
+                                    break;
+                                }
+                                last_sent = std::time::Instant::now();
                             }
+                        } else if on_close == "desktop" {
+                            // Closed: fall back to presenting the host's primary desktop.
+                            let mut cap = media::ThumbnailCapturer::new().ok();
+                            let index = cap
+                                .as_ref()
+                                .and_then(|c| {
+                                    c.monitors().iter().find(|m| m.primary).map(|m| m.index)
+                                })
+                                .unwrap_or(0);
+                            monitor = cap.take();
+                            kind = "monitor".to_string();
+                            src = u64::from(index);
+                        } else {
+                            // Closed, policy "stop": signal why, then end. Dropping `tx` closes the
+                            // channel, which lets the fan-out notice and clear the clients.
+                            source_lost.store(true, Ordering::SeqCst);
+                            break;
                         }
                     }
                     None => {}

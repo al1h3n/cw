@@ -178,7 +178,9 @@ mod imp {
             // For those, copy the window's on-screen pixels instead — correct as long as it is not
             // covered by another window (a foreground window being presented usually is not). The
             // complete fix for occluded/GPU windows is Windows.Graphics.Capture (a later change).
+            let mut used_fallback = false;
             if !printed || looks_blank(&pixels, width, height) {
+                used_fallback = true;
                 let _ = BitBlt(
                     mem,
                     0,
@@ -192,6 +194,11 @@ mod imp {
                 );
                 pixels = read_bgra(mem, bitmap, width, height);
             }
+            // If even the on-screen fallback came back blank, the window is not actually showing
+            // anything right now — a window mid-minimize is briefly not iconic but renders black, and
+            // returning that black as a "successful" frame is exactly what made a broadcast flash to
+            // black. Report it as unavailable so the broadcaster holds the last real frame instead.
+            let blank_after_fallback = used_fallback && looks_blank(&pixels, width, height);
 
             SelectObject(mem, old);
             let _ = DeleteObject(HGDIOBJ(bitmap.0));
@@ -200,6 +207,9 @@ mod imp {
 
             if pixels.is_empty() {
                 return Err(CaptureError::new("the window could not be captured"));
+            }
+            if blank_after_fallback {
+                return Err(CaptureError::new("the window is not showing any content"));
             }
             Ok((
                 pixels,
