@@ -22,6 +22,8 @@ export interface Device {
   monitor: number
   /** MAC addresses learned while online, so an offline PC can be woken. */
   macs: string[]
+  /** The PC's direct IP (host:port) once a direct path is open; null while relay-only or offline. */
+  ip: string | null
   /** The answer to the last lock/power action sent to this PC. */
   last_action: ActionReport | null
 }

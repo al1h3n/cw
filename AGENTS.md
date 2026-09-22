@@ -6,6 +6,45 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-22, toolbar reorg + restrictions):** `PROTOCOL_VERSION` is **19**. A large UI
+reorganization plus new restrictions:
+- **Grouped toolbars (features 1, 2):** the header row is now icon buttons + grouped dropdowns
+  (`Menu.svelte`, `Icon.svelte`): **Watch**, **Add PC**, **Content** (Broadcast, Recordings),
+  **Restrictions** (Wallpaper…, wallpaper lock/unlock, Blocked apps, freeze-all input, exam-all),
+  **Power** (`ActionMenu`, now with a custom-minutes timer), then icon-only **Settings** and **Help**.
+  The opened-PC view is grouped the same way: a **Control** toggle, a **Preview** menu (live view,
+  live control, listen, resolution + fps), a **Restrictions** menu (screen lock, exam, wallpaper
+  policy, apps) and **Power**.
+- **Screen lock (feature 3):** `SetScreenLock` freezes a student's own mouse+keyboard *without* taking
+  control, so a class can be stopped and inspected; per-PC in the focused view and "freeze all" in the
+  header. Released automatically if the console disconnects.
+- **Push wallpaper with layout (feature 4):** the wallpaper dialog picks an image (the WebView file
+  input already opens the native OS picker) and a **fit** (fill/fit/stretch/centre/tile) applied via
+  the Windows `WallpaperStyle`/`TileWallpaper` registry values.
+- **Preview persistence (feature 6):** a Settings toggle — keep each PC's last screen after watching
+  stops / it goes offline, or clear previews the moment watching stops.
+- **Right-click anywhere (feature 7):** a background context menu with Reload PCs (manual refresh of
+  the live list), watch, add PC, broadcast, settings.
+- **IP addresses (feature 8):** each PC shows its direct IP beside its id/name once hole-punching
+  promotes off the relay (`ControlSession::remote_ip`).
+- **About (feature 9):** the Settings dialog credits **Alikhan Aitugan** as the author, with a short
+  description and a quiet (semi-transparent) acknowledgements list of the main dependencies.
+- **Running-process icons (feature 3 of the prior round's list, completed here):** the Apps dialog now
+  shows icons for running processes too (`FetchRunningIcon`, v18).
+
+**Still to verify on the VM/2nd machine:** screen lock (it blocks a real student's input) and the
+wallpaper-fit registry path. **Deferred (not started):** *different broadcasts to different PC groups
+in parallel* (feature 5) — today `AppState.broadcast` holds a single broadcast, so starting a second
+replaces the first; running several concurrently is a real refactor (a keyed set of broadcast handles
++ overlapping-target fan-out) and is the next broadcast task. The **fancy animated Apple-style timer**
+is a plain custom-minutes field for now.
+
+**Dependencies:** `cargo update` still reports `generic-array 0.14.7`, `toml`/`toml_datetime`/
+`toml_edit` as unchanged — re-confirmed transitive: `generic-array` is pinned by `crypto-common 0.1.7`
+(under **iroh**'s `aes-gcm`/`aead`), and the `toml` chain comes from **tauri**'s Linux GTK stack
+(`system-deps → gdk-sys → webkit2gtk`) where bumping one conflicts with tauri's newer `toml`. They move
+only when iroh and tauri themselves upgrade; every dependency in our own manifests is already latest.
+
 **Status (2026-09-22, second two-machine batch):** more fixes from live testing. `PROTOCOL_VERSION`
 is **18** (added `FetchRunningIcon`). Highlights:
 - **Grid drag no longer freezes the app (bug 1):** the drag-and-drop reordered the list on *every*

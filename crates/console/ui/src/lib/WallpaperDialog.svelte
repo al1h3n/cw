@@ -18,6 +18,8 @@
   let preview = $state('')
   let bytes = $state<Uint8Array | null>(null)
   let busy = $state(false)
+  // How the image is laid out on each desktop (crop/fit/stretch/centre/tile).
+  let fit = $state<'fill' | 'fit' | 'stretch' | 'center' | 'tile'>('fill')
   // Default: every paired PC. Deselect to change a subset.
   let targets = $state<Set<string>>(new Set(devices.map((d) => d.device_id)))
 
@@ -59,6 +61,7 @@
       const result = await invoke<{ ok: number; failed: number }>('set_wallpaper', {
         targets: [...targets],
         image: Array.from(bytes),
+        fit,
       })
       if (result.failed > 0 && result.ok === 0) {
         onerror(t('wallpaperAllFailed', result.failed))
@@ -93,11 +96,28 @@
         {#if preview}
           <img src={preview} alt="" />
         {:else}
-          <span class="noimg">🖼</span>
+          <span class="noimg">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <circle cx="9" cy="9" r="1.6" />
+              <path d="m4 17 5-4 4 3 3-2 4 3" />
+            </svg>
+          </span>
         {/if}
       </div>
       <span class="fname">{fileName || t('wallpaperNoFile')}</span>
     </div>
+
+    <label class="fitrow">
+      <span class="fitlbl">{t('wallpaperFit')}</span>
+      <select bind:value={fit}>
+        <option value="fill">{t('fitFill')}</option>
+        <option value="fit">{t('fitFit')}</option>
+        <option value="stretch">{t('fitStretch')}</option>
+        <option value="center">{t('fitCenter')}</option>
+        <option value="tile">{t('fitTile')}</option>
+      </select>
+    </label>
 
     <h3>{t('wallpaperPickTargets')}</h3>
     <div class="targets">
@@ -221,8 +241,37 @@
   }
 
   .noimg {
-    font-size: 28px;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
     opacity: 0.5;
+  }
+
+  .noimg svg {
+    width: 30px;
+    height: 30px;
+  }
+
+  .fitrow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .fitlbl {
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .fitrow select {
+    padding: 5px 8px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
   }
 
   .fname {

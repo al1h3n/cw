@@ -88,12 +88,22 @@
             </button>
           {/each}
         </div>
+        <!-- Custom timer: type any number of minutes; the chosen value drives the confirmation note. -->
+        <label class="custom">
+          <span>{t('delayCustom')}</span>
+          <input
+            type="number"
+            min="0"
+            max="600"
+            value={Math.round(delay / 60)}
+            oninput={(e) =>
+              (delay = Math.max(0, Math.min(600, Number((e.currentTarget as HTMLInputElement).value))) * 60)}
+          />
+          <span class="unit">{t('minutesUnit')}</span>
+        </label>
         {#each ['shutdown', 'reboot', 'log-off'] as const as action (action)}
           <button class="item" role="menuitem" onclick={() => (confirming = action)}>{label(action)}</button>
         {/each}
-        <hr />
-        <button class="item" role="menuitem" onclick={() => send('lock-wallpaper')}>{t('actLockWallpaper')}</button>
-        <button class="item" role="menuitem" onclick={() => send('unlock-wallpaper')}>{t('actUnlockWallpaper')}</button>
         <hr />
         <button class="item" role="menuitem" onclick={() => send('cancel-shutdown')}>{t('actCancel')}</button>
       {/if}
@@ -137,6 +147,26 @@
     display: flex;
     gap: 6px;
     padding-bottom: 4px;
+  }
+
+  .custom {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px 6px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .custom input {
+    width: 4.5em;
+    padding: 4px 6px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
   }
 
   .chip {

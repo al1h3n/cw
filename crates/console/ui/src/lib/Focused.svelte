@@ -6,6 +6,8 @@
   import ActionResult from './ActionResult.svelte'
   import RecordButton from './RecordButton.svelte'
   import AppsDialog from './AppsDialog.svelte'
+  import Menu from './Menu.svelte'
+  import Icon from './Icon.svelte'
 
   let {
     device,
@@ -29,6 +31,28 @@
 
   let showApps = $state(false)
   let examOn = $state(false)
+  let screenLockOn = $state(false)
+
+  async function toggleScreenLock() {
+    try {
+      const [locked, problem] = await invoke<[boolean, string]>('set_screen_lock', {
+        deviceId: device.device_id,
+        on: !screenLockOn,
+      })
+      screenLockOn = locked
+      if (!locked && problem) onerror(problem)
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
+
+  async function wallpaperPolicy(action: 'lock-wallpaper' | 'unlock-wallpaper') {
+    try {
+      await invoke('perform', { deviceId: device.device_id, action, delaySeconds: 0 })
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
 
   // The opened view is resizable: drag the bottom-right corner. `null` means "use the default size"
   // (a large centred card). The chosen size is remembered so it opens the same next time.
@@ -252,6 +276,7 @@
         <span class="name">{device.name}</span>
       {/if}
       <span class="id">{device.device_id}</span>
+      {#if device.ip}<span class="ip" title={t('ipLabel')}>{device.ip}</span>{/if}
       <span class="status"><i class="dot {device.status}"></i>{device.detail ?? device.status}</span>
 
       {#if device.monitors.length > 1}
@@ -269,14 +294,9 @@
         </span>
       {/if}
 
-      <button
-        class="listen"
-        class:on={listening}
-        onclick={() => onlisten(!listening)}
-        title={t('listenHint')}
-      >
-        {listening ? t('listenStop') : t('listenStart')}
-      </button>
+      <span class="gspace"></span>
+
+      <!-- Control: take/give control here (JPEG preview) or open the native viewer, and listen. -->
       <button
         class="listen"
         class:on={controlling}
@@ -285,28 +305,53 @@
       >
         {controlling ? t('controlStop') : t('controlStart')}
       </button>
-      <span class="liveview" role="group" aria-label={t('liveView')}>
-        <select bind:value={res} aria-label={t('resolution')} title={t('resolution')}>
-          <option value="1280x720">720p</option>
-          <option value="1920x1080">1080p</option>
-          <option value="2560x1440">1440p</option>
-          <option value="3840x2160">4K</option>
-        </select>
-        <input
-          type="number"
-          min="1"
-          max="60"
-          bind:value={fps}
-          aria-label={t('fpsLabel')}
-          title={t('fpsLabel')}
-        />
-        <button onclick={() => openViewer(false)} title={t('liveViewHint')}>{t('liveView')}</button>
-        <button onclick={() => openViewer(true)} title={t('liveControlHint')}>{t('liveControl')}</button>
-      </span>
-      <button onclick={() => (showApps = true)}>{t('appsButton')}</button>
-      <button class="listen" class:on={examOn} onclick={toggleExam} title={t('examHint')}>
-        {examOn ? t('examStop') : t('examStart')}
-      </button>
+      <Menu label={t('groupPreview')} align="right">
+        {#snippet icon()}<Icon name="monitor" />{/snippet}
+        <button class="mi" onclick={() => openViewer(false)} title={t('liveViewHint')}>
+          <Icon name="monitor" />{t('liveView')}
+        </button>
+        <button class="mi" onclick={() => openViewer(true)} title={t('liveControlHint')}>
+          <Icon name="cast" />{t('liveControl')}
+        </button>
+        <button class="mi" class:on={listening} onclick={() => onlisten(!listening)}>
+          <Icon name="cast" />{listening ? t('listenStop') : t('listenStart')}
+        </button>
+        <span class="sep"></span>
+        <p class="mhead">{t('resolution')}</p>
+        <label class="mrow">
+          <select bind:value={res} aria-label={t('resolution')}>
+            <option value="1280x720">720p</option>
+            <option value="1920x1080">1080p</option>
+            <option value="2560x1440">1440p</option>
+            <option value="3840x2160">4K</option>
+          </select>
+          <input type="number" min="1" max="60" bind:value={fps} aria-label={t('fpsLabel')} />
+          <span class="unit">{t('fpsLabel')}</span>
+        </label>
+      </Menu>
+
+      <!-- Restrictions: freeze input, exam lock, wallpaper policy, and the app manager. -->
+      <Menu label={t('groupRestrictions')} align="right">
+        {#snippet icon()}<Icon name="shield" />{/snippet}
+        <button class="mi" class:on={screenLockOn} onclick={toggleScreenLock} title={t('screenLockHint')}>
+          <Icon name="freeze" />{screenLockOn ? t('screenLockStop') : t('screenLockStart')}
+        </button>
+        <button class="mi" class:on={examOn} onclick={toggleExam} title={t('examHint')}>
+          <Icon name="lock" />{examOn ? t('examStop') : t('examStart')}
+        </button>
+        <span class="sep"></span>
+        <button class="mi" onclick={() => wallpaperPolicy('lock-wallpaper')}>
+          <Icon name="lock" />{t('actLockWallpaper')}
+        </button>
+        <button class="mi" onclick={() => wallpaperPolicy('unlock-wallpaper')}>
+          <Icon name="image" />{t('actUnlockWallpaper')}
+        </button>
+        <span class="sep"></span>
+        <button class="mi" onclick={() => (showApps = true)}>
+          <Icon name="ban" />{t('appsButton')}
+        </button>
+      </Menu>
+
       <RecordButton deviceId={device.device_id} {onerror} />
       <ActionResult report={device.last_action} />
       <ActionMenu deviceId={device.device_id} liveCount={device.status === 'live' ? 1 : 0} {onerror} />
@@ -429,6 +474,45 @@
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
     font-size: 14px;
     color: var(--muted);
+  }
+
+  .ip {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11.5px;
+    color: var(--muted);
+    opacity: 0.7;
+  }
+
+  .gspace {
+    flex: 1;
+  }
+
+  /* A form row inside a Preview/Restrictions dropdown (resolution + fps). */
+  .mrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px 2px;
+  }
+
+  .mrow select,
+  .mrow input {
+    padding: 4px 6px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+  }
+
+  .mrow input {
+    width: 3.5em;
+  }
+
+  .mrow .unit {
+    color: var(--muted);
+    font-size: 12px;
   }
 
   .liveview {

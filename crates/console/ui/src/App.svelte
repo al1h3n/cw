@@ -21,6 +21,9 @@
   import RoomCard from './lib/RoomCard.svelte'
   import LanguagePicker from './lib/LanguagePicker.svelte'
   import QualityPicker from './lib/QualityPicker.svelte'
+  import Menu from './lib/Menu.svelte'
+  import Icon from './lib/Icon.svelte'
+  import SettingsDialog from './lib/SettingsDialog.svelte'
   import Toasts from './lib/Toasts.svelte'
   import { i18n, t } from './lib/i18n.svelte'
   import type { ConsoleInfo, Device } from './lib/types'
@@ -35,6 +38,65 @@
   let sureyOpen = $state(false)
   let editingBlocklist = $state(false)
   let showTutorial = $state(false)
+  let showSettings = $state(false)
+  // Right-click-anywhere menu of class-wide actions.
+  let bgMenu = $state<{ x: number; y: number } | null>(null)
+  // Whether a tile keeps showing its last screen after watching stops / it goes offline. Persisted.
+  let keepPreviews = $state<boolean>(loadKeepPreviews())
+
+  function loadKeepPreviews(): boolean {
+    try {
+      return localStorage.getItem('cowatcher.keepPreviews') !== 'no'
+    } catch {
+      return true
+    }
+  }
+  function setKeepPreviews(value: boolean) {
+    keepPreviews = value
+    try {
+      localStorage.setItem('cowatcher.keepPreviews', value ? 'yes' : 'no')
+    } catch {
+      // storage unavailable; the choice just will not persist
+    }
+  }
+
+  const liveDevices = $derived(devices.filter((d) => d.status === 'live').map((d) => d.device_id))
+
+  /** Freeze or release every connected PC's own input (screen lock), without taking control. */
+  async function screenLockAll(on: boolean) {
+    for (const id of liveDevices) {
+      try {
+        await invoke('set_screen_lock', { deviceId: id, on })
+      } catch (e) {
+        error = String(e)
+      }
+    }
+  }
+  /** Exam-lock (or release) every connected PC at once. */
+  async function examAll(on: boolean) {
+    for (const id of liveDevices) {
+      try {
+        await invoke('set_exam', { deviceId: id, on, message: t('examMessage') })
+      } catch (e) {
+        error = String(e)
+      }
+    }
+  }
+  /** Apply the wallpaper-change policy (lock/unlock) to every connected PC. */
+  async function wallpaperPolicy(action: 'lock-wallpaper' | 'unlock-wallpaper') {
+    try {
+      await invoke('perform', { deviceId: null, action, delaySeconds: 0 })
+    } catch (e) {
+      error = String(e)
+    }
+  }
+  function openBgMenu(event: MouseEvent) {
+    event.preventDefault()
+    bgMenu = {
+      x: Math.min(event.clientX, window.innerWidth - 210),
+      y: Math.min(event.clientY, window.innerHeight - 260),
+    }
+  }
   let controllingId = $state<string | null>(null)
   let focused = $state<string | null>(null)
   let listeningTo = $state<string | null>(null)
@@ -175,6 +237,7 @@
   function closeMenus() {
     tileMenu = null
     groupMenu = null
+    bgMenu = null
   }
   function moveToGroup(id: string, groupId: string) {
     groups.move(id, groupId, groups.members(groupId).length)
@@ -347,28 +410,68 @@
 
     <div class="actions">
       <button
+        class="withicon"
         class:primary={!watching}
         onclick={toggleWatching}
         disabled={devices.length === 0}
         title={devices.length === 0 ? t('addFirst') : ''}
       >
+        <Icon name={watching ? 'eye-off' : 'eye'} />
         {watching ? t('stopWatching') : t('startWatching')}
       </button>
-      <button onclick={() => (pairing = true)}>{t('addPc')}</button>
-      <button onclick={() => (broadcasting = true)} disabled={devices.length === 0}>
-        {t('broadcastButton')}
+      <button class="withicon" onclick={() => (pairing = true)}>
+        <Icon name="plus" />
+        {t('addPc')}
       </button>
-      <button onclick={() => (showRecordings = true)} disabled={devices.length === 0}>
-        {t('recordingsButton')}
+
+      <Menu label={t('groupContent')} disabled={devices.length === 0}>
+        {#snippet icon()}<Icon name="cast" />{/snippet}
+        <button class="mi" onclick={() => (broadcasting = true)}>
+          <Icon name="cast" />{t('broadcastButton')}
+        </button>
+        <button class="mi" onclick={() => (showRecordings = true)}>
+          <Icon name="film" />{t('recordingsButton')}
+        </button>
+      </Menu>
+
+      <Menu label={t('groupRestrictions')}>
+        {#snippet icon()}<Icon name="shield" />{/snippet}
+        <button class="mi" onclick={() => (settingWallpaper = true)} disabled={devices.length === 0}>
+          <Icon name="image" />{t('wallpaperButton')}…
+        </button>
+        <button class="mi" onclick={() => wallpaperPolicy('lock-wallpaper')} disabled={!watching}>
+          <Icon name="lock" />{t('actLockWallpaper')}
+        </button>
+        <button class="mi" onclick={() => wallpaperPolicy('unlock-wallpaper')} disabled={!watching}>
+          <Icon name="image" />{t('actUnlockWallpaper')}
+        </button>
+        <span class="sep"></span>
+        <button class="mi" onclick={() => (editingBlocklist = true)}>
+          <Icon name="ban" />{t('blockButton')}…
+        </button>
+        <span class="sep"></span>
+        <button class="mi" onclick={() => screenLockAll(true)} disabled={!watching}>
+          <Icon name="freeze" />{t('screenLockAll')}
+        </button>
+        <button class="mi" onclick={() => screenLockAll(false)} disabled={!watching}>
+          <Icon name="freeze" />{t('screenLockStopAll')}
+        </button>
+        <button class="mi" onclick={() => examAll(true)} disabled={!watching}>
+          <Icon name="lock" />{t('examAll')}
+        </button>
+        <button class="mi" onclick={() => examAll(false)} disabled={!watching}>
+          <Icon name="lock" />{t('examStopAll')}
+        </button>
+      </Menu>
+
+      <ActionMenu deviceId={null} liveCount={live} onerror={(m) => (error = m)} />
+
+      <button class="icononly" onclick={() => (showSettings = true)} title={t('settings')} aria-label={t('settings')}>
+        <Icon name="settings" />
       </button>
-      <button onclick={() => (settingWallpaper = true)} disabled={devices.length === 0}>
-        {t('wallpaperButton')}
+      <button class="icononly" onclick={() => (showTutorial = true)} title={t('helpHint')} aria-label={t('help')}>
+        <Icon name="info" />
       </button>
-      <button onclick={() => (editingBlocklist = true)}>{t('blockButton')}</button>
-      <button onclick={() => (showTutorial = true)} title={t('helpHint')}>{t('help')}</button>
-      {#if watching}
-        <ActionMenu deviceId={null} liveCount={live} onerror={(m) => (error = m)} />
-      {/if}
     </div>
   </header>
 
@@ -388,7 +491,7 @@
     </div>
   {/if}
 
-  <main>
+  <main oncontextmenu={openBgMenu}>
     {#if !loaded}
       <p class="placeholder">{t('loading')}</p>
     {:else if devices.length === 0}
@@ -477,6 +580,7 @@
                     <DeviceTile
                       {device}
                       {watching}
+                      {keepPreviews}
                       onopen={() => open(device.device_id)}
                       onmonitor={(i) => chooseMonitor(device.device_id, i)}
                       onwake={() => wake(device.device_id)}
@@ -528,7 +632,7 @@
 </div>
 {/if}
 
-{#if tileMenu || groupMenu}
+{#if tileMenu || groupMenu || bgMenu}
   <!-- Invisible scrim: a click anywhere else closes the menu. -->
   <div
     class="menuscrim"
@@ -536,6 +640,30 @@
     onclick={closeMenus}
     oncontextmenu={(e) => (e.preventDefault(), closeMenus())}
   ></div>
+{/if}
+
+{#if bgMenu}
+  <!-- Right-click-anywhere menu of class-wide actions, including a manual reload of the PC list. -->
+  <div class="popover" style="left:{bgMenu.x}px; top:{bgMenu.y}px" transition:fade={{ duration: 90 }}>
+    <p class="pop-label">{t('menuTitle')}</p>
+    <button class="pop-item" onclick={() => (refresh(), closeMenus())}>{t('menuReload')}</button>
+    <button
+      class="pop-item"
+      onclick={() => (toggleWatching(), closeMenus())}
+      disabled={devices.length === 0}
+    >
+      {watching ? t('stopWatching') : t('startWatching')}
+    </button>
+    <button class="pop-item" onclick={() => ((pairing = true), closeMenus())}>{t('addPc')}</button>
+    <button
+      class="pop-item"
+      onclick={() => ((broadcasting = true), closeMenus())}
+      disabled={devices.length === 0}
+    >
+      {t('broadcastButton')}
+    </button>
+    <button class="pop-item" onclick={() => ((showSettings = true), closeMenus())}>{t('settings')}</button>
+  </div>
 {/if}
 
 {#if tileMenu}
@@ -598,6 +726,14 @@
 
 {#if showTutorial}
   <Tutorial onclose={() => (showTutorial = false)} />
+{/if}
+
+{#if showSettings}
+  <SettingsDialog
+    {keepPreviews}
+    onKeepPreviews={setKeepPreviews}
+    onclose={() => (showSettings = false)}
+  />
 {/if}
 
 {#if editingBlocklist}
@@ -684,7 +820,29 @@
   .actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Buttons that pair an icon with their label, and icon-only buttons (settings, help). */
+  .actions :global(.withicon) {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .actions :global(.icononly) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    padding: 0;
+    color: var(--muted);
+  }
+
+  .actions :global(.icononly:hover) {
+    color: var(--text);
+    border-color: var(--accent, var(--line));
   }
 
   .banner {

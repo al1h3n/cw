@@ -6,6 +6,7 @@
   let {
     device,
     watching,
+    keepPreviews = true,
     onopen,
     onmonitor,
     onwake,
@@ -13,11 +14,16 @@
   }: {
     device: Device
     watching: boolean
+    /** When false, a tile's last screen is hidden once you stop watching (or it goes offline). */
+    keepPreviews?: boolean
     onopen: () => void
     onmonitor: (index: number) => void
     onwake: () => void
     onrename: (name: string) => void
   } = $props()
+
+  // Show the picture only while watching, or when the teacher asked to keep the last preview around.
+  const showPreview = $derived(!!device.screen && (watching || keepPreviews))
 
   let editing = $state(false)
   let draft = $state('')
@@ -50,7 +56,7 @@
 <div class="card">
   <!-- The screen is the tile. Everything else sits quietly under it. -->
   <button class="screen" onclick={onopen} aria-label={t('screenOf', device.device_id)}>
-    {#if device.screen}
+    {#if showPreview}
       <img src={device.screen} alt={t('screenOf', device.device_id)} />
     {:else}
       <p class="hint">{watching ? t('waitingFirst') : t('notWatching')}</p>
@@ -75,6 +81,7 @@
       <button class="title" onclick={startEdit} title={t('rename')}>
         <span class="primary">{device.name ?? device.device_id}</span>
         {#if device.name}<span class="idsub">{device.device_id}</span>{/if}
+        {#if device.ip}<span class="ipsub" title={t('ipLabel')}>{device.ip}</span>{/if}
         <span class="pencil" aria-hidden="true">✎</span>
       </button>
     {/if}
@@ -194,6 +201,17 @@
     letter-spacing: 0.4px;
     color: var(--muted);
     flex-shrink: 0;
+  }
+
+  .ipsub {
+    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+    font-size: 10.5px;
+    color: var(--muted);
+    opacity: 0.7;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
 
   .pencil {
