@@ -6920,6 +6920,7 @@ dependencies = [
  "iroh",
  "media",
  "net",
+ "platform",
  "proto",
  "softbuffer",
  "tokio",

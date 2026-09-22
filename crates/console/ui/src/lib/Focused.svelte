@@ -30,6 +30,63 @@
   let showApps = $state(false)
   let examOn = $state(false)
 
+  // The opened view is resizable: drag the bottom-right corner. `null` means "use the default size"
+  // (a large centred card). The chosen size is remembered so it opens the same next time.
+  let size = $state<{ w: number; h: number } | null>(loadSize())
+  let resizing = $state(false)
+  let resizeStart = { px: 0, py: 0, w: 0, h: 0 }
+
+  function loadSize(): { w: number; h: number } | null {
+    try {
+      const raw = localStorage.getItem('cowatcher.focused.size')
+      if (raw) {
+        const s = JSON.parse(raw) as { w: number; h: number }
+        if (s.w > 320 && s.h > 240) return s
+      }
+    } catch {
+      // storage unavailable; fall back to the default size
+    }
+    return null
+  }
+  function beginResize(e: PointerEvent) {
+    const frame = (e.currentTarget as HTMLElement).closest('.frame') as HTMLElement | null
+    if (!frame) return
+    const r = frame.getBoundingClientRect()
+    resizing = true
+    resizeStart = { px: e.clientX, py: e.clientY, w: r.width, h: r.height }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    e.preventDefault()
+  }
+  function moveResize(e: PointerEvent) {
+    if (!resizing) return
+    const w = Math.max(360, Math.min(window.innerWidth - 24, resizeStart.w + (e.clientX - resizeStart.px)))
+    const h = Math.max(260, Math.min(window.innerHeight - 24, resizeStart.h + (e.clientY - resizeStart.py)))
+    size = { w, h }
+  }
+  function endResize(e: PointerEvent) {
+    resizing = false
+    try {
+      ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+    } catch {
+      // already released
+    }
+    if (size) {
+      try {
+        localStorage.setItem('cowatcher.focused.size', JSON.stringify(size))
+      } catch {
+        // storage unavailable; the size just will not persist
+      }
+    }
+  }
+  function resetSize() {
+    size = null
+    try {
+      localStorage.removeItem('cowatcher.focused.size')
+    } catch {
+      // ignore
+    }
+  }
+
   async function toggleExam() {
     try {
       const [locked, problem] = await invoke<[boolean, string]>('set_exam', {
@@ -150,7 +207,10 @@
 
   function onKeyDown(event: KeyboardEvent) {
     if (controlling) {
-      // Ctrl+Alt+Esc releases control (matches platform::input::KeyGate); never forwarded.
+      // Ctrl+Alt+Esc releases control; never forwarded. (This in-console preview can only forward the
+      // keys the WebView actually receives — the Windows key, Alt+Tab and Ctrl+Esc are eaten by the
+      // teacher's own shell first. For true full capture use the "Live control" button, which opens
+      // the native viewer with a low-level keyboard grab.)
       if (event.key === 'Escape' && event.ctrlKey && event.altKey) {
         event.preventDefault()
         oncontrol(false)
@@ -163,7 +223,8 @@
       event.preventDefault()
       return
     }
-    if (event.key === 'Escape') onclose()
+    // Not controlling: Escape closes the view — but only bare Escape, so Ctrl+Alt+Esc never does.
+    if (event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.shiftKey) onclose()
   }
 
   function onKeyUp(event: KeyboardEvent) {
@@ -179,7 +240,13 @@
 
 <!-- One screen, as large as the window allows: what the teacher opens to actually look at a PC. -->
 <div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose()}>
-  <div class="frame" role="dialog" aria-modal="true" aria-label={t('screenOf', device.device_id)}>
+  <div
+    class="frame"
+    role="dialog"
+    aria-modal="true"
+    aria-label={t('screenOf', device.device_id)}
+    style={size ? `width:${size.w}px; height:${size.h}px; max-height:none;` : ''}
+  >
     <header>
       {#if device.name}
         <span class="name">{device.name}</span>
@@ -262,6 +329,19 @@
         <p class="hint">{t('waitingFirst')}</p>
       {/if}
     </div>
+    <!-- Drag to resize the opened view; double-click to reset to the default size. -->
+    <div
+      class="resize"
+      role="button"
+      tabindex="-1"
+      aria-label={t('resizeHint')}
+      title={t('resizeHint')}
+      onpointerdown={beginResize}
+      onpointermove={moveResize}
+      onpointerup={endResize}
+      onpointercancel={endResize}
+      ondblclick={resetSize}
+    ></div>
   </div>
 </div>
 
@@ -280,9 +360,11 @@
   }
 
   .frame {
+    position: relative;
     display: grid;
     grid-template-rows: auto 1fr;
-    /* Fill most of the window: the opened screen should be large, not a small centred card. */
+    /* Fill most of the window: the opened screen should be large, not a small centred card. A dragged
+       size (inline width/height) overrides this default. */
     width: min(1600px, 96vw);
     max-height: 100%;
     background: var(--panel);
@@ -291,6 +373,31 @@
     /* Not `hidden`: a dropdown opened from the header (the record menu) must be able to spill past the
        frame edge instead of being clipped. The picture area below clips its own corners itself. */
     overflow: visible;
+  }
+
+  /* Corner grip to resize the opened view (custom, so the frame can keep overflow: visible). */
+  .resize {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 18px;
+    height: 18px;
+    cursor: nwse-resize;
+    touch-action: none;
+    z-index: 5;
+    background:
+      linear-gradient(
+        135deg,
+        transparent 0 46%,
+        var(--muted) 46% 54%,
+        transparent 54% 100%
+      );
+    opacity: 0.6;
+    border-bottom-right-radius: 14px;
+  }
+
+  .resize:hover {
+    opacity: 1;
   }
 
   header {

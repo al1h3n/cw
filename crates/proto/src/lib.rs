@@ -9,7 +9,8 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 ///
 /// Bump it on every breaking change to message layout or meaning. Peers with different
 /// versions must refuse the session with a clear error instead of guessing.
-/// Version 17 added a per-request JPEG `quality` to `RequestThumbnail` (compression separate from
+/// Version 18 added `FetchRunningIcon` (a running process's icon, replied via `AppIcon`);
+/// version 17 added a per-request JPEG `quality` to `RequestThumbnail` (compression separate from
 /// size), so a teacher can pick preview sharpness;
 /// version 16 added setting a chosen desktop wallpaper on students (`SetWallpaper`);
 /// version 9 added full-resolution H.264 streaming (`StartStream`, on its own uni-stream);
@@ -21,7 +22,7 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 /// added remote mouse/keyboard input; version 2 added remote actions. Each shifted the later
 /// `Control` discriminants, so a peer on an older version would decode them as the wrong message and
 /// the handshake refuses it outright.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 /// Default JPEG quality (`1..=100`) for screen thumbnails when the Console does not specify one, and
 /// what non-preview callers (diagnostics, the MCP screenshot tool) pass. 60 measured ~5–7 KB at

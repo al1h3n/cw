@@ -675,6 +675,13 @@ pub enum Control {
         /// True if it started.
         started: bool,
     },
+    /// Console → Agent: send the icon for this *running* process (lazy, like [`Control::FetchAppIcon`]).
+    /// The Agent resolves the process's executable and returns its icon in an [`Control::AppIcon`]
+    /// reply (with `id` echoing the pid).
+    FetchRunningIcon {
+        /// A process id from a previous [`Control::Running`] reply.
+        pid: u32,
+    },
     /// Console → Agent: what is running right now?
     ListRunning,
     /// Agent → Console: the running programs a teacher may close.

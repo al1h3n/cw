@@ -763,6 +763,24 @@ async fn app_icon(
         }))
 }
 
+/// Fetches a running process's icon (lazy — the UI asks per visible row), resolved from its exe.
+#[tauri::command]
+async fn running_icon(
+    state: State<'_, AppState>,
+    device_id: String,
+    pid: u32,
+) -> Result<Option<IconReply>, String> {
+    Ok(state
+        .manager
+        .running_icon(&device_id, pid)
+        .await?
+        .map(|(width, height, bgra)| IconReply {
+            width,
+            height,
+            bgra,
+        }))
+}
+
 /// Starts one of the programs a PC published.
 #[tauri::command]
 async fn launch_app(
@@ -1347,6 +1365,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             set_exam,
             list_apps,
             app_icon,
+            running_icon,
             launch_app,
             list_running,
             close_app,

@@ -61,18 +61,20 @@ mod imp {
             Graphics::Gdi::{
                 BeginPaint, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
                 DEFAULT_QUALITY, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW,
-                EndPaint, FF_SWISS, FW_SEMIBOLD, FillRect, HBRUSH, HFONT, InvalidateRect,
-                OUT_TT_PRECIS, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+                EndPaint, FF_SWISS, FW_SEMIBOLD, FillRect, HBRUSH, HFONT, OUT_TT_PRECIS,
+                PAINTSTRUCT, RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, SelectObject,
+                SetBkMode, SetTextColor, TRANSPARENT,
             },
             System::StationsAndDesktops::{
                 CloseDesktop, CreateDesktopW, DESKTOP_ACCESS_FLAGS, HDESK, OpenDesktopW,
                 OpenInputDesktop, SetThreadDesktop, SwitchDesktop,
             },
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
-                GetSystemMetrics, HMENU, KillTimer, MSG, PostMessageW, PostQuitMessage,
-                RegisterClassExW, SC_CLOSE, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow,
-                SetTimer, ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_PAINT,
+                BringWindowToTop, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
+                GetMessageW, GetSystemMetrics, HMENU, HWND_TOPMOST, KillTimer, MSG, PostMessageW,
+                PostQuitMessage, RegisterClassExW, SC_CLOSE, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
+                SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetTimer,
+                SetWindowPos, ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_PAINT,
                 WM_SYSCOMMAND, WM_TIMER, WNDCLASSEXW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
             },
         },
@@ -390,10 +392,27 @@ mod imp {
                         let _ = SwitchDesktop(HDESK(exam as *mut std::ffi::c_void));
                         // After a Win+L / unlock cycle the desktop comes back but our window can lose
                         // the foreground and its client area is not repainted — it showed as a blank
-                        // black screen with no message. Pull it back to the front and force a repaint
-                        // so the "exam in progress" text is visible again.
+                        // black screen with no message. Force it visible, topmost and to the front, then
+                        // repaint *synchronously* (RDW_UPDATENOW) so the "exam in progress" text is
+                        // drawn again immediately rather than waiting for a WM_PAINT that may not come.
+                        let _ = ShowWindow(window, SW_SHOW);
+                        let _ = SetWindowPos(
+                            window,
+                            Some(HWND_TOPMOST),
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                        );
+                        let _ = BringWindowToTop(window);
                         let _ = SetForegroundWindow(window);
-                        let _ = InvalidateRect(Some(window), None, true);
+                        let _ = RedrawWindow(
+                            Some(window),
+                            None,
+                            None,
+                            RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW,
+                        );
                     }
                 }
                 LRESULT(0)

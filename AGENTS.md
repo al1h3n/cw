@@ -6,6 +6,41 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-22, second two-machine batch):** more fixes from live testing. `PROTOCOL_VERSION`
+is **18** (added `FetchRunningIcon`). Highlights:
+- **Grid drag no longer freezes the app (bug 1):** the drag-and-drop reordered the list on *every*
+  `dragover`, which reshuffled the DOM under the cursor mid-`flip`-animation and triggered a
+  dragover/dragleave storm that hard-hung the WebView. Rewrote it to **apply the move only on drop**
+  (dragover just records the target and shows a highlight), the standard robust pattern.
+- **Grid/opened sizing (bug 6, Q1/Q2):** a higher grid *resolution* was invisible because every tile
+  was a fixed size, so a bigger JPEG just downscaled to the same pixels. Added a footer **tile-size
+  (zoom)** slider (persisted) so resolution is actually visible, and made the **opened view
+  resizable** (drag the corner, persisted; double-click resets). Clarified in the UI/docs: the
+  in-console preview is a **JPEG** (periodic thumbnails); the real, resizable **H.264 stream** is the
+  native viewer opened by *Live view* / *Live control*. The Grid selector applies to all tiles; the
+  Opened selector only to the focused screen.
+- **Running-process icons (bug 3):** `FetchRunningIcon { pid }` → the Agent resolves the process's
+  exe via `QueryFullProcessImageNameW` and returns its shell icon (replied through `AppIcon`); the
+  Apps dialog now shows icons for running processes too, fetched lazily per visible row.
+- **Full control like RustDesk (bugs 2, 5):** the **native viewer** now takes the whole keyboard and
+  mouse. `platform::keygrab` is a `WH_KEYBOARD_LL` hook that, while controlling, **swallows every key
+  locally and forwards it** (Windows key, Alt+Tab, Ctrl+Esc, Alt+F4 — the keys a normal/WebView window
+  never sees), with **Ctrl+Alt+Esc** as the release chord; `platform::input::confine_cursor`
+  (`ClipCursor`) keeps the pointer in the window. Capture pauses when the viewer loses focus and
+  releases on exit. The in-console JPEG preview *cannot* do this (a WebView never receives system
+  keys), so it now says so and points to *Live control*. **Unverified live** (it grabs the host's
+  input — needs the VM/2nd machine). Ctrl+Alt+Del / Win+L remain OS-reserved and unblockable.
+- **Exam lock repaint after Win+L (bug 4):** the watchdog now forces the lock window visible +
+  topmost + foreground and repaints it **synchronously** (`RedrawWindow` with `RDW_UPDATENOW`) after a
+  Win+L/unlock, instead of relying on a WM_PAINT that may not arrive. Still needs the VM to confirm.
+- **Student input still blocked on take-control (bug 7)** via the agent-side `BlockInput` from the
+  previous batch (control release always lifts it); unchanged this round.
+
+All gates green: fmt, clippy `-D warnings`, `vite build`, 209 tests, `cargo deny`. **Transport is
+already encrypted** — iroh is QUIC/TLS 1.3, dial-by-public-key, per-pairing `TrustStore`; a third PC
+cannot sniff or connect. Only malware/local-admin *on an endpoint itself* can see that PC's own
+plaintext (inherent; documented under D10/D20).
+
 **Status (2026-09-21, two-machine bug batch):** a round of fixes from live two-PC testing.
 `PROTOCOL_VERSION` is **17** (added a per-request JPEG `quality` to `RequestThumbnail`, so preview
 compression is chosen separately from size). Highlights:

@@ -41,6 +41,27 @@
   let error = $state<string | null>(null)
   let loaded = $state(false)
   let keyCopied = $state(false)
+  // Grid tile size (px, the min column width). Bigger tiles are what actually make a higher grid
+  // *resolution* visible — a small tile downscales any resolution to the same pixels. Persisted.
+  let tileMin = $state<number>(loadTileMin())
+
+  function loadTileMin(): number {
+    try {
+      const v = Number(localStorage.getItem('cowatcher.tile'))
+      if (v >= 180 && v <= 640) return v
+    } catch {
+      // storage unavailable; fall through to the default
+    }
+    return 260
+  }
+  function setTileMin(v: number) {
+    tileMin = v
+    try {
+      localStorage.setItem('cowatcher.tile', String(v))
+    } catch {
+      // storage unavailable; the size just will not persist across restarts
+    }
+  }
   // A broadcast keeps running after its picker dialog is closed, so a small header banner shows it is
   // live and offers a one-click Stop.
   let presenting = $state<{ running: boolean; targets: number; label: string }>({
@@ -86,6 +107,8 @@
   }
 
   let draggingId = $state<string | null>(null)
+  // Where the drop would land, shown as a highlight. Set on dragover, applied only on drop.
+  let dropTarget = $state<{ groupId: string; index: number } | null>(null)
   let tileMenu = $state<{ id: string; x: number; y: number } | null>(null)
   let groupMenu = $state<{ id: string; x: number; y: number } | null>(null)
   let editingGroup = $state<string | null>(null)
@@ -101,24 +124,33 @@
   }
   function dragEnd() {
     draggingId = null
-    groups.save()
+    dropTarget = null
   }
+  // IMPORTANT: dragover must NOT reorder the list. Reordering the DOM under the cursor while a flip
+  // animation runs makes the dragged tile jump under the pointer, which fires a dragleave/dragover
+  // storm that hard-freezes the whole webview (bug: "moving a tile out of a group freezes the app").
+  // So dragover only records where the drop would land; the actual move happens once, on drop.
   function onCellDragOver(event: DragEvent, groupId: string, index: number) {
     if (!draggingId) return
     event.preventDefault()
-    // Live reorder: only move when the target slot actually differs, so it does not thrash.
-    const members = groups.members(groupId)
-    if (members[index] !== draggingId) groups.move(draggingId, groupId, index)
+    if (dropTarget?.groupId !== groupId || dropTarget?.index !== index) {
+      dropTarget = { groupId, index }
+    }
   }
   function onGroupDragOver(event: DragEvent, groupId: string) {
     if (!draggingId) return
     event.preventDefault()
-    // Over the group's own area (not a tile): drop at the end.
-    const members = groups.members(groupId)
-    if (!members.includes(draggingId)) groups.move(draggingId, groupId, members.length)
+    const end = groups.members(groupId).length
+    if (dropTarget?.groupId !== groupId || dropTarget?.index !== end) {
+      dropTarget = { groupId, index: end }
+    }
   }
   function onDrop(event: DragEvent) {
     event.preventDefault()
+    if (draggingId && dropTarget) {
+      groups.move(draggingId, dropTarget.groupId, dropTarget.index)
+      groups.save()
+    }
     dragEnd()
   }
 
@@ -366,10 +398,11 @@
         <button class="primary" onclick={() => (pairing = true)}>{t('addPc')}</button>
       </div>
     {:else}
-      <div class="board">
+      <div class="board" style="--tile-min: {tileMin}px">
         {#each groups.groups as group (group.id)}
           <section
             class="group"
+            class:droptarget={draggingId && dropTarget?.groupId === group.id}
             animate:flip={{ duration: 200, easing: cubicOut }}
             ondragover={(e) => onGroupDragOver(e, group.id)}
             ondrop={onDrop}
@@ -419,6 +452,9 @@
                   <div
                     class="cell"
                     class:dragging={draggingId === device.device_id}
+                    class:dropbefore={draggingId &&
+                      dropTarget?.groupId === group.id &&
+                      dropTarget?.index === index}
                     animate:flip={{ duration: 200, easing: cubicOut }}
                     ondragover={(e) => onCellDragOver(e, group.id, index)}
                     ondrop={onDrop}
@@ -470,6 +506,17 @@
     {/if}
     <RoomCard onerror={(m) => (error = m)} />
     <span class="right">
+      <label class="tilezoom" title={t('tileSizeHint')}>
+        <span>{t('tileSize')}</span>
+        <input
+          type="range"
+          min="180"
+          max="640"
+          step="20"
+          value={tileMin}
+          oninput={(e) => setTileMin(Number((e.currentTarget as HTMLInputElement).value))}
+        />
+      </label>
       <QualityPicker />
       <span class="dot-label">
         <i class="dot" class:live={watching}></i>
@@ -713,7 +760,7 @@
 
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(var(--tile-min, 260px), 1fr));
     gap: 14px;
   }
 
@@ -801,6 +848,27 @@
 
   .cell.dragging {
     opacity: 0.35;
+  }
+
+  /* Drop hints while dragging: a bar before the target tile, a soft ring around the target group. */
+  .cell.dropbefore {
+    position: relative;
+  }
+
+  .cell.dropbefore::before {
+    content: '';
+    position: absolute;
+    inset: -7px auto -7px -8px;
+    width: 3px;
+    border-radius: 3px;
+    background: var(--accent);
+    z-index: 4;
+  }
+
+  .group.droptarget {
+    outline: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+    outline-offset: 6px;
+    border-radius: 10px;
   }
 
   .grip,
@@ -996,6 +1064,18 @@
     display: inline-flex;
     align-items: center;
     gap: 7px;
+  }
+
+  .tilezoom {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .tilezoom input {
+    width: 96px;
   }
 
   .dot {

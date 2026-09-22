@@ -254,6 +254,13 @@ pub trait AgentDevice {
         Vec::new()
     }
 
+    /// The icon for a running process, as `(width, height, top-down BGRA)`, resolved from its
+    /// executable. The default has none, so a device without icons simply shows names only.
+    fn running_icon(&self, pid: u32) -> Option<(u16, u16, Vec<u8>)> {
+        let _ = pid;
+        None
+    }
+
     /// Closes a running program by process id.
     fn close_app(&self, from: &PeerInfo, pid: u32) -> bool {
         let _ = (from, pid);
@@ -758,6 +765,33 @@ impl ControlSession {
         }
     }
 
+    /// Console side: ask for the icon of a running process (lazy, matches [`Self::request_app_icon`]).
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn request_running_icon(
+        &mut self,
+        pid: u32,
+    ) -> Result<Option<(u16, u16, Vec<u8>)>, EndpointError> {
+        write_message(&mut self.send, &Control::FetchRunningIcon { pid }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::AppIcon {
+                width,
+                height,
+                bgra,
+                ..
+            } => {
+                if bgra.is_empty() || width == 0 || height == 0 {
+                    Ok(None)
+                } else {
+                    Ok(Some((width, height, bgra)))
+                }
+            }
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Console side: start one of the programs this PC published.
     ///
     /// # Errors
@@ -1071,6 +1105,20 @@ impl ControlSession {
                         &mut self.send,
                         &Control::AppIcon {
                             id,
+                            width,
+                            height,
+                            bgra,
+                        },
+                    )
+                    .await?;
+                }
+                Control::FetchRunningIcon { pid } => {
+                    let (width, height, bgra) =
+                        source.running_icon(pid).unwrap_or((0, 0, Vec::new()));
+                    write_message(
+                        &mut self.send,
+                        &Control::AppIcon {
+                            id: pid,
                             width,
                             height,
                             bgra,

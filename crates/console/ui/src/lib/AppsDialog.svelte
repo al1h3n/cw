@@ -76,6 +76,24 @@
     }
   }
 
+  // The same, for running processes — keyed by pid, resolved from the process's executable.
+  let runIcons = $state<Record<number, string>>({})
+  const runRequested = new Set<number>()
+
+  async function fetchRunIcon(pid: number) {
+    if (pid in runIcons || runRequested.has(pid)) return
+    runRequested.add(pid)
+    try {
+      const icon = await invoke<{ width: number; height: number; bgra: number[] } | null>(
+        'running_icon',
+        { deviceId, pid },
+      )
+      runIcons = { ...runIcons, [pid]: icon ? bgraToUrl(icon.width, icon.height, icon.bgra) : '' }
+    } catch {
+      runIcons = { ...runIcons, [pid]: '' }
+    }
+  }
+
   // The Agent sends raw top-down BGRA; the browser's canvas is the encoder (no image lib on the Rust
   // side). BGRA -> RGBA is a per-pixel red/blue swap.
   function bgraToUrl(width: number, height: number, bgra: number[]): string {
@@ -100,6 +118,18 @@
     const io = new IntersectionObserver((entries) => {
       if (entries.some((e) => e.isIntersecting)) {
         fetchIcon(id)
+        io.disconnect()
+      }
+    })
+    io.observe(node)
+    return { destroy: () => io.disconnect() }
+  }
+
+  // Same, for a running process row (keyed by pid).
+  function lazyRunIcon(node: HTMLElement, pid: number) {
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        fetchRunIcon(pid)
         io.disconnect()
       }
     })
@@ -236,6 +266,11 @@
           <ul>
             {#each runningMatches.slice(0, 80) as app (app.pid)}
               <li>
+                <span class="ico" use:lazyRunIcon={app.pid}>
+                  {#if runIcons[app.pid]}
+                    <img src={runIcons[app.pid]} alt="" />
+                  {/if}
+                </span>
                 <span class="name">{app.name}</span>
                 <button class="danger" onclick={() => close(app)} disabled={busy}>
                   {t('appsClose')}

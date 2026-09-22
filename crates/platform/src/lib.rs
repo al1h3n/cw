@@ -10,6 +10,7 @@ pub mod browser;
 pub mod console;
 pub mod examlock;
 pub mod input;
+pub mod keygrab;
 pub mod keyguard;
 pub mod power;
 pub mod present;

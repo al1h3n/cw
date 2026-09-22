@@ -64,6 +64,15 @@ enum UserEvent {
     NewFrame,
     /// The stream ended (teacher stopped watching) — switch to the bouncing "disabled" screen.
     StreamEnded,
+    /// The keyboard grab captured the release chord (Ctrl+Alt+Esc): toggle control off.
+    ToggleControl,
+    /// The keyboard grab captured a key while controlling; forward it to the student PC.
+    GrabbedKey {
+        /// Windows virtual-key code.
+        vk: u16,
+        /// True on press.
+        down: bool,
+    },
 }
 
 /// What the window asks the network task to do.
@@ -183,7 +192,8 @@ fn run(args: Args) -> Result<()> {
         thread::spawn(move || decode_main(&packets_rx, &latest, &proxy));
     }
 
-    let mut app = App::new(latest, input_tx, initial_control);
+    let grab_proxy = event_loop.create_proxy();
+    let mut app = App::new(latest, input_tx, initial_control, grab_proxy);
     event_loop.run_app(&mut app).context("run window")?;
     // Give the network task a moment to deliver the "release control" it was sent on close, so no
     // modifier is left held down on the student's PC.
@@ -440,6 +450,11 @@ struct App {
     controlling: bool,
     ctrl_down: bool,
     alt_down: bool,
+    /// A proxy the low-level keyboard grab uses to hand captured keys back to the window thread.
+    grab_proxy: EventLoopProxy<UserEvent>,
+    /// The installed keyboard grab (RAII: removed on exit). `None` if it could not be installed, in
+    /// which case control still works but the shell keeps eating Win/Alt+Tab (partial capture).
+    grab: Option<platform::keygrab::KeyGrab>,
     /// Once the stream ends, the window shows a bouncing "CO-WATCHER DISABLED" sign (a DVD-logo
     /// easter egg) instead of frozen video.
     bounce: Option<Bounce>,
@@ -460,6 +475,7 @@ impl App {
         latest: Arc<Mutex<Option<Frame>>>,
         input_tx: UnboundedSender<InputCmd>,
         controlling: bool,
+        grab_proxy: EventLoopProxy<UserEvent>,
     ) -> Self {
         Self {
             latest,
@@ -470,6 +486,8 @@ impl App {
             controlling,
             ctrl_down: false,
             alt_down: false,
+            grab_proxy,
+            grab: None,
             bounce: None,
             last_tick: std::time::Instant::now(),
         }
@@ -479,12 +497,36 @@ impl App {
         let _ = self.input_tx.send(InputCmd::Events(vec![event]));
     }
 
+    /// Confines the mouse to the window and makes the keyboard grab swallow+forward keys, or lifts
+    /// both. This is the "full capture" half: while `on`, every key and the pointer belong to the
+    /// remote PC (except Ctrl+Alt+Del / Win+L, which the OS reserves).
+    fn set_capture(&self, on: bool) {
+        platform::keygrab::set_active(on);
+        if on {
+            if let Some(window) = &self.window
+                && let (Ok(pos), size) = (window.inner_position(), window.inner_size())
+            {
+                let _ = platform::input::confine_cursor(
+                    pos.x,
+                    pos.y,
+                    pos.x + size.width as i32,
+                    pos.y + size.height as i32,
+                );
+            }
+        } else {
+            platform::input::release_cursor();
+        }
+    }
+
     fn set_control(&mut self, on: bool) {
         self.controlling = on;
         let _ = self.input_tx.send(InputCmd::Control(on));
         if !on {
             self.send(InputEvent::ReleaseAll);
         }
+        // Grab (or release) the teacher's whole keyboard + mouse so control is full, not just the keys
+        // a normal window sees (RustDesk-style). Only meaningful while the window has focus.
+        self.set_capture(on);
         self.retitle();
         // Toggling with Ctrl+Alt+Esc must show up at once — the green "you are driving" frame and the
         // bottom hint are only redrawn on a present, and a still student screen sends no new frame. So
@@ -685,6 +727,26 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         self.window = Some(window);
+
+        // Install the low-level keyboard grab on this (the event-loop) thread, routing captured keys
+        // back to us as user events. It stays inactive until we take control, so the teacher's own PC
+        // is unaffected until then. If it fails to install, control still works — the shell just keeps
+        // eating Win/Alt+Tab (partial capture), which we note rather than fail over.
+        if self.grab.is_none() {
+            let proxy = self.grab_proxy.clone();
+            self.grab = platform::keygrab::KeyGrab::install(move |event| match event {
+                platform::keygrab::GrabEvent::Release => {
+                    let _ = proxy.send_event(UserEvent::ToggleControl);
+                }
+                platform::keygrab::GrabEvent::Key { vk, down } => {
+                    let _ = proxy.send_event(UserEvent::GrabbedKey { vk, down });
+                }
+            });
+        }
+        // If we launched straight into control, start capturing now that the window exists.
+        if self.controlling {
+            self.set_capture(true);
+        }
         self.retitle();
     }
 
@@ -692,6 +754,15 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             // A decoded frame means the signal is back — leave the bouncing sign and show the screen.
             UserEvent::NewFrame => self.bounce = None,
+            UserEvent::ToggleControl => self.set_control(!self.controlling),
+            UserEvent::GrabbedKey { vk, down } => {
+                if self.controlling {
+                    self.send(InputEvent::Key {
+                        virtual_key: vk,
+                        down,
+                    });
+                }
+            }
             UserEvent::StreamEnded => {
                 if self.bounce.is_none() {
                     // Signal lost: start the bouncing "CO-WATCHER DISABLED" sign.
@@ -741,12 +812,19 @@ impl ApplicationHandler<UserEvent> for App {
                     eprintln!("present: {err:#}");
                 }
             }
-            WindowEvent::Focused(false) => {
-                // Alt-tabbing away must not leave a key held on the student's PC.
+            WindowEvent::Focused(focused) => {
+                // Alt-tabbing away must not leave a key held on the student's PC, and an unfocused
+                // viewer must not keep the teacher's keyboard/mouse grabbed — pause capture while it
+                // is in the background, and resume it (still controlling) when focus returns.
                 self.ctrl_down = false;
                 self.alt_down = false;
                 if self.controlling {
-                    self.send(InputEvent::ReleaseAll);
+                    if focused {
+                        self.set_capture(true);
+                    } else {
+                        self.send(InputEvent::ReleaseAll);
+                        self.set_capture(false);
+                    }
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {

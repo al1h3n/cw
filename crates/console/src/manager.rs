@@ -144,6 +144,11 @@ enum DeviceRequest {
         id: u32,
         reply: tokio::sync::oneshot::Sender<Option<(u16, u16, Vec<u8>)>>,
     },
+    /// A running process's icon (lazy), by pid.
+    RunningIcon {
+        pid: u32,
+        reply: tokio::sync::oneshot::Sender<Option<(u16, u16, Vec<u8>)>>,
+    },
     /// Start one published program.
     LaunchApp {
         id: u32,
@@ -773,6 +778,19 @@ impl DeviceManager {
             .await
     }
 
+    /// A running process's icon, as `(width, height, top-down BGRA)` or `None`.
+    ///
+    /// # Errors
+    /// See [`DeviceManager::ask`].
+    pub async fn running_icon(
+        &self,
+        device_id: &str,
+        pid: u32,
+    ) -> Result<Option<(u16, u16, Vec<u8>)>, String> {
+        self.ask(device_id, |reply| DeviceRequest::RunningIcon { pid, reply })
+            .await
+    }
+
     /// Starts one published program on a PC.
     ///
     /// # Errors
@@ -1144,6 +1162,13 @@ impl DeviceManager {
                     DeviceRequest::AppIcon { id, reply } => {
                         let icon = session
                             .request_app_icon(id)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let _ = reply.send(icon);
+                    }
+                    DeviceRequest::RunningIcon { pid, reply } => {
+                        let icon = session
+                            .request_running_icon(pid)
                             .await
                             .map_err(|e| e.to_string())?;
                         let _ = reply.send(icon);

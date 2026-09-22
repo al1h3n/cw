@@ -106,6 +106,25 @@ pub fn release_all_modifiers() {
     }
 }
 
+/// Confines the mouse pointer to a screen rectangle (the controller's viewer window), so while a
+/// teacher drives a PC their cursor cannot slide onto their own desktop mid-control — every movement
+/// stays in the window and maps to the remote screen. This is the mouse half of full capture.
+///
+/// Coordinates are in physical screen pixels. Windows also releases the clip automatically on a
+/// desktop switch (Ctrl+Alt+Del), so a teacher can never be permanently trapped.
+///
+/// # Errors
+/// [`InputError`] if the OS refuses.
+pub fn confine_cursor(left: i32, top: i32, right: i32, bottom: i32) -> Result<(), InputError> {
+    imp::confine_cursor(left, top, right, bottom)
+}
+
+/// Releases any cursor confinement set by [`confine_cursor`]. Called on release, and whenever the
+/// viewer loses focus, so the pointer is free again.
+pub fn release_cursor() {
+    imp::release_cursor();
+}
+
 /// Blocks or unblocks the student's own physical mouse and keyboard.
 ///
 /// While the teacher is driving a PC the student must not be able to fight for the pointer or type
@@ -267,6 +286,25 @@ mod imp {
         unsafe { BlockInput(blocked) }.map_err(|_| InputError::Refused)
     }
 
+    pub fn confine_cursor(left: i32, top: i32, right: i32, bottom: i32) -> Result<(), InputError> {
+        let rect = windows::Win32::Foundation::RECT {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        // SAFETY: ClipCursor with a valid rectangle pointer that outlives the call.
+        unsafe { windows::Win32::UI::WindowsAndMessaging::ClipCursor(Some(&rect)) }
+            .map_err(|_| InputError::Refused)
+    }
+
+    pub fn release_cursor() {
+        // SAFETY: passing null lifts any active clip; documented and side-effect-free.
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::ClipCursor(None);
+        }
+    }
+
     /// How Windows counts one wheel notch.
     const WHEEL_DELTA: i32 = 120;
     /// `SendInput`'s absolute coordinates are always 0..=65535 across the virtual desktop.
@@ -395,6 +433,10 @@ mod imp {
     pub fn set_local_input_blocked(_blocked: bool) -> Result<(), InputError> {
         Err(InputError::NotSupported)
     }
+    pub fn confine_cursor(_l: i32, _t: i32, _r: i32, _b: i32) -> Result<(), InputError> {
+        Err(InputError::NotSupported)
+    }
+    pub fn release_cursor() {}
 }
 
 #[cfg(test)]

@@ -167,25 +167,68 @@ pub fn icon_bgra(id: u32) -> Option<(u16, u16, Vec<u8>)> {
     imp::icon_bgra(&app.path)
 }
 
+/// The icon of a **running** process, as `(width, height, top-down BGRA)`, resolved from its
+/// executable. `None` when the process is gone, its path is unreadable, or it has no icon — a missing
+/// icon is never an error, just an absent picture.
+#[must_use]
+pub fn icon_for_pid(pid: u32) -> Option<(u16, u16, Vec<u8>)> {
+    imp::icon_for_pid(pid)
+}
+
 #[cfg(windows)]
 mod imp {
     use std::{os::windows::ffi::OsStrExt, path::Path};
 
     use windows::{
         Win32::{
+            Foundation::{CloseHandle, MAX_PATH},
             Graphics::Gdi::{
                 BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC,
                 GetDIBits, GetObjectW, HGDIOBJ, ReleaseDC,
+            },
+            System::Threading::{
+                OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
+                QueryFullProcessImageNameW,
             },
             UI::{
                 Shell::{SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGetFileInfoW, ShellExecuteW},
                 WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO, SW_SHOWNORMAL},
             },
         },
-        core::PCWSTR,
+        core::{PCWSTR, PWSTR},
     };
 
     use super::AppError;
+
+    /// The icon of a running process, resolved from its executable path.
+    pub fn icon_for_pid(pid: u32) -> Option<(u16, u16, Vec<u8>)> {
+        let path = process_path(pid)?;
+        icon_bgra(&path)
+    }
+
+    /// The full path of a running process's executable, or `None` if it cannot be read (the process
+    /// is gone, or it is a protected/system process this token cannot open).
+    fn process_path(pid: u32) -> Option<std::path::PathBuf> {
+        // SAFETY: OpenProcess with a query-only right; the handle is closed on every path and the
+        // buffer is sized to MAX_PATH before QueryFullProcessImageNameW writes into it.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+            let mut buf = [0u16; MAX_PATH as usize];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_FORMAT(0),
+                PWSTR(buf.as_mut_ptr()),
+                &mut len,
+            );
+            let _ = CloseHandle(handle);
+            if ok.is_err() || len == 0 {
+                return None;
+            }
+            let s = String::from_utf16_lossy(&buf[..len as usize]);
+            Some(std::path::PathBuf::from(s))
+        }
+    }
 
     /// The largest icon we will read; a shortcut icon is at most 256×256 and usually 32–48.
     const MAX_ICON: i32 = 256;
@@ -344,6 +387,10 @@ mod imp {
     }
 
     pub fn icon_bgra(_path: &Path) -> Option<(u16, u16, Vec<u8>)> {
+        None
+    }
+
+    pub fn icon_for_pid(_pid: u32) -> Option<(u16, u16, Vec<u8>)> {
         None
     }
 }
