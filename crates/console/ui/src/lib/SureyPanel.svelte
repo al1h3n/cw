@@ -317,6 +317,16 @@
     dock = d
     savePlacement()
   }
+  // Keep a floating panel on-screen when the window shrinks (e.g. restoring a maximized window), so it
+  // can never end up dragged off into a corner that no longer exists.
+  function onResize() {
+    if (dock !== 'float') return
+    pos = {
+      x: Math.max(0, Math.min(pos.x, window.innerWidth - 120)),
+      y: Math.max(0, Math.min(pos.y, window.innerHeight - 60)),
+    }
+    savePlacement()
+  }
 
   const style = $derived(
     dock === 'float'
@@ -363,7 +373,7 @@
   on:keydown={onGlobalKey}
   on:pointermove={onDrag}
   on:pointerup={endDrag}
-  on:resize={() => dock !== 'float' || savePlacement()}
+  on:resize={onResize}
 />
 
 <div class="surey" class:float={dock === 'float'} {style} role="dialog" aria-label="Surey">

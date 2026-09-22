@@ -14,11 +14,16 @@
   } catch {
     /* first run / private window */
   }
-  // Keep it on-screen if the window shrank since last time.
-  pos = {
-    x: Math.min(pos.x, window.innerWidth - 60),
-    y: Math.min(pos.y, window.innerHeight - 60),
+
+  // Keep the button fully on-screen. Runs at start and on every window resize, so restoring a
+  // maximized window (or any shrink) never strands the launcher off-screen where it "disappears".
+  function clampToView() {
+    pos = {
+      x: Math.max(8, Math.min(pos.x, window.innerWidth - 56)),
+      y: Math.max(8, Math.min(pos.y, window.innerHeight - 56)),
+    }
   }
+  clampToView()
 
   function down(e: PointerEvent) {
     moved = false
@@ -49,6 +54,8 @@
     }
   }
 </script>
+
+<svelte:window on:resize={clampToView} />
 
 <button
   class="launcher"

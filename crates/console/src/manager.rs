@@ -18,8 +18,10 @@ use proto::{Capabilities, DeviceId, Role};
 use tokio::task::JoinHandle;
 
 /// How often a watched device is asked for a fresh screen in the grid. Capture is change-only, so an
-/// idle screen costs nothing; a faster cadence just lowers the delay before a change shows.
-const REFRESH: Duration = Duration::from_millis(700);
+/// idle screen costs nothing and only a *changing* screen pays; a faster cadence just lowers the delay
+/// before that change shows. Kept low so the grid tracks "what students are doing right now" closely
+/// (was 700 ms, which lagged noticeably behind reality); the native Live view stays the real-time path.
+const REFRESH: Duration = Duration::from_millis(250);
 /// How often the screen a teacher has opened is refreshed: smooth enough to follow what is happening.
 const FOCUSED_REFRESH: Duration = Duration::from_millis(150);
 /// How long to wait before retrying a device that failed to connect.

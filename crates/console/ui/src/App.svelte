@@ -409,9 +409,10 @@
       showTutorial = false
     }
     await refresh()
-    // One poll drives the whole grid; the agents only capture while watching is on. Twice a second
-    // keeps the displayed frames close to live without re-rendering the grid too aggressively.
-    timer = window.setInterval(refresh, 500)
+    // One poll drives the whole grid; the agents only capture while watching is on. ~3×/second keeps
+    // the displayed thumbnails close to live (the backend now refreshes each screen every 250 ms), so
+    // the grid tracks what students are doing without waiting on a slow poll.
+    timer = window.setInterval(refresh, 300)
     // A PC dropping the broadcast (closed, crashed or disconnected) toasts the teacher (bug #6).
     unlistenBroadcast = await tauriListen<string>('cowatcher://broadcast-ended', (e) => {
       const dev = devices.find((d) => d.device_id === e.payload)
@@ -953,12 +954,16 @@
     gap: 7px;
   }
 
+  /* Icon-only buttons (Settings, Help): a rounded square (squircle), not a short wide oval. Equal
+     width and height with a moderate radius; height matches the neighbouring text buttons in the row. */
   .actions :global(.icononly) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
+    width: 38px;
+    height: 38px;
     padding: 0;
+    border-radius: 11px;
     color: var(--muted);
   }
 
