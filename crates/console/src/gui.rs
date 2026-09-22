@@ -17,18 +17,22 @@ use crate::manager::{DeviceManager, DeviceView};
 /// A running broadcast: the stop flag its capture thread watches, and who is receiving it (so it can
 /// be taken off exactly those screens when it ends). The broadcast keeps running independently of the
 /// picker dialog, so `label` lets the UI show a small "presenting…" banner while it does.
+///
+/// Several can run **at once** to different, non-overlapping sets of PCs — one teacher presenting
+/// slides to the front rows while another source goes to the back — each with its own capture thread
+/// and fan-out. `id` identifies one so the UI can stop just that presentation.
 struct BroadcastHandle {
+    id: u64,
     stop: Arc<AtomicBool>,
     targets: Vec<String>,
     /// A short human label for the source ("Display 1", a window title) for the status banner.
     label: String,
 }
 
-/// What the front end shows in its persistent "you are presenting" banner. `running` is false when no
-/// broadcast is live.
+/// One running broadcast, for the "you are presenting" banners (one per active presentation).
 #[derive(serde::Serialize)]
 struct BroadcastStatus {
-    running: bool,
+    id: u64,
     targets: usize,
     label: String,
 }
@@ -40,8 +44,10 @@ struct AppState {
     pairing_code: Mutex<Option<PairingCode>>,
     /// Stops the current continuous-pairing loop when the teacher closes the panel.
     pairing_stop: Mutex<Option<Arc<tokio::sync::Notify>>>,
-    /// The broadcast in progress, if the teacher is presenting.
-    broadcast: Mutex<Option<BroadcastHandle>>,
+    /// Every broadcast currently running. More than one can run at once, to disjoint sets of PCs.
+    broadcasts: Mutex<Vec<BroadcastHandle>>,
+    /// Hands out a unique id to each new broadcast.
+    next_broadcast_id: std::sync::atomic::AtomicU64,
     /// Surey, the AI assistant: provider config, key store and in-flight selection requests.
     ai: crate::ai::AiState,
     /// The (placeholder) Co-watcher subscription: dashboard URL and licence key.
@@ -1033,9 +1039,13 @@ async fn start_broadcast(
     if targets.is_empty() {
         return Err("choose at least one PC to broadcast to".into());
     }
-    // Replace any broadcast already running.
-    end_broadcast(&state).await;
+    // A PC can only show one broadcast at a time, so end any *overlapping* broadcast — but leave the
+    // others running, which is what lets a teacher present different sources to disjoint groups at once.
+    stop_overlapping(&state, &targets).await;
 
+    let id = state
+        .next_broadcast_id
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let stop = Arc::new(AtomicBool::new(false));
     // Set when a window source is gone and `on_close == "stop"`, so the fan-out can tell the UI why the
     // broadcast ended (rather than the teacher wondering why it just stopped).
@@ -1157,6 +1167,7 @@ async fn start_broadcast(
         let stop = Arc::clone(&stop);
         let source_lost = Arc::clone(&source_lost);
         let window = window.clone();
+        let lost_id = id;
         tokio::spawn(async move {
             let mut showing: std::collections::HashMap<String, bool> =
                 targets.iter().map(|t| (t.clone(), false)).collect();
@@ -1187,57 +1198,105 @@ async fn start_broadcast(
                 }
             }
             // The capture thread ended. If it was because the shared window closed (policy "stop"),
-            // clear the broadcast off every screen and tell the UI so its banner disappears.
+            // clear the broadcast off every screen and tell the UI (with this broadcast's id) so its
+            // banner disappears and the handle is dropped.
             if source_lost.load(Ordering::SeqCst) {
                 for target in &targets {
                     let _ = manager.stop_broadcast(target).await;
                 }
-                let _ = window.emit("cowatcher://broadcast-source-lost", ());
+                let _ = window.emit("cowatcher://broadcast-source-lost", lost_id);
             }
         });
     }
 
-    *state.broadcast.lock().unwrap_or_else(|e| e.into_inner()) = Some(BroadcastHandle {
-        stop,
-        targets,
-        label,
-    });
-    Ok(())
-}
-
-/// The current presentation state, for the persistent "you are presenting" banner in the header.
-#[tauri::command]
-fn broadcast_status(state: State<'_, AppState>) -> BroadcastStatus {
-    let guard = state.broadcast.lock().unwrap_or_else(|e| e.into_inner());
-    match guard.as_ref() {
-        Some(handle) => BroadcastStatus {
-            running: true,
-            targets: handle.targets.len(),
-            label: handle.label.clone(),
-        },
-        None => BroadcastStatus {
-            running: false,
-            targets: 0,
-            label: String::new(),
-        },
-    }
-}
-
-/// Stops the current broadcast and takes it off every screen it was on.
-#[tauri::command]
-async fn stop_broadcast(state: State<'_, AppState>) -> Result<(), String> {
-    end_broadcast(&state).await;
-    Ok(())
-}
-
-/// Shared teardown: flip the capture thread's stop flag and clear the broadcast off each target.
-async fn end_broadcast(state: &AppState) {
-    let handle = state
-        .broadcast
+    state
+        .broadcasts
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .take();
-    if let Some(handle) = handle {
+        .push(BroadcastHandle {
+            id,
+            stop,
+            targets,
+            label,
+        });
+    Ok(())
+}
+
+/// Every presentation currently running, for the "you are presenting" banners (one per broadcast).
+#[tauri::command]
+fn broadcast_status(state: State<'_, AppState>) -> Vec<BroadcastStatus> {
+    state
+        .broadcasts
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .map(|h| BroadcastStatus {
+            id: h.id,
+            targets: h.targets.len(),
+            label: h.label.clone(),
+        })
+        .collect()
+}
+
+/// Stops one broadcast by `id`, or **all** of them when `id` is absent, taking each off its screens.
+#[tauri::command]
+async fn stop_broadcast(state: State<'_, AppState>, id: Option<u64>) -> Result<(), String> {
+    // Remove the matching handles under the lock, then clear them off their PCs without holding it.
+    let ending: Vec<BroadcastHandle> = {
+        let mut list = state.broadcasts.lock().unwrap_or_else(|e| e.into_inner());
+        match id {
+            Some(id) => {
+                let mut taken = Vec::new();
+                list.retain(|h| {
+                    if h.id == id {
+                        taken.push(BroadcastHandle {
+                            id: h.id,
+                            stop: Arc::clone(&h.stop),
+                            targets: h.targets.clone(),
+                            label: h.label.clone(),
+                        });
+                        false
+                    } else {
+                        true
+                    }
+                });
+                taken
+            }
+            None => std::mem::take(&mut *list),
+        }
+    };
+    for handle in ending {
+        handle.stop.store(true, Ordering::SeqCst);
+        for target in &handle.targets {
+            let _ = state.manager.stop_broadcast(target).await;
+        }
+    }
+    Ok(())
+}
+
+/// Ends any broadcast that shares a PC with `targets` (a PC can show only one at a time), leaving the
+/// rest running so disjoint presentations continue in parallel.
+async fn stop_overlapping(state: &AppState, targets: &[String]) {
+    let wanted: std::collections::HashSet<&str> = targets.iter().map(String::as_str).collect();
+    let ending: Vec<BroadcastHandle> = {
+        let mut list = state.broadcasts.lock().unwrap_or_else(|e| e.into_inner());
+        let mut taken = Vec::new();
+        list.retain(|h| {
+            if h.targets.iter().any(|t| wanted.contains(t.as_str())) {
+                taken.push(BroadcastHandle {
+                    id: h.id,
+                    stop: Arc::clone(&h.stop),
+                    targets: h.targets.clone(),
+                    label: h.label.clone(),
+                });
+                false
+            } else {
+                true
+            }
+        });
+        taken
+    };
+    for handle in ending {
         handle.stop.store(true, Ordering::SeqCst);
         for target in &handle.targets {
             let _ = state.manager.stop_broadcast(target).await;
@@ -1344,7 +1403,8 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
                 manager: Arc::clone(&manager),
                 pairing_code: Mutex::new(None),
                 pairing_stop: Mutex::new(None),
-                broadcast: Mutex::new(None),
+                broadcasts: Mutex::new(Vec::new()),
+                next_broadcast_id: std::sync::atomic::AtomicU64::new(1),
                 ai: crate::ai::AiState::load(&data_dir),
                 subscription: crate::subscription::Store::new(&data_dir),
                 data_dir: data_dir.clone(),

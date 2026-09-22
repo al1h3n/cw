@@ -32,12 +32,17 @@ reorganization plus new restrictions:
 - **Running-process icons (feature 3 of the prior round's list, completed here):** the Apps dialog now
   shows icons for running processes too (`FetchRunningIcon`, v18).
 
+**Parallel broadcasts (feature 5) now work:** `AppState.broadcasts` is a list of broadcast handles,
+each with its own id, capture thread and fan-out. Starting a broadcast ends only the *overlapping*
+ones (a PC can show one at a time) and leaves the rest running, so a teacher can present slides to the
+front rows and a different source to the back at once. The header shows one "presenting…" banner per
+broadcast (each with its own Stop); the picker stays open after Start so a second group can be started,
+and offers Stop-all. `broadcast_status` returns the list; `stop_broadcast` takes an optional id (all
+when omitted).
+
 **Still to verify on the VM/2nd machine:** screen lock (it blocks a real student's input) and the
-wallpaper-fit registry path. **Deferred (not started):** *different broadcasts to different PC groups
-in parallel* (feature 5) — today `AppState.broadcast` holds a single broadcast, so starting a second
-replaces the first; running several concurrently is a real refactor (a keyed set of broadcast handles
-+ overlapping-target fan-out) and is the next broadcast task. The **fancy animated Apple-style timer**
-is a plain custom-minutes field for now.
+wallpaper-fit registry path. The **fancy animated Apple-style power timer** is a plain custom-minutes
+field for now.
 
 **Dependencies:** `cargo update` still reports `generic-array 0.14.7`, `toml`/`toml_datetime`/
 `toml_edit` as unchanged — re-confirmed transitive: `generic-array` is pinned by `crypto-common 0.1.7`

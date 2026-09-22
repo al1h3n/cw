@@ -19,22 +19,23 @@
   let loading = $state(true)
   let selected = $state<Source | null>(null)
   let locked = $state(false)
-  let running = $state(false)
   let busy = $state(false)
+  // How many broadcasts are running right now (possibly to different groups): drives the "Stop all".
+  let activeCount = $state(0)
   // What to do if the shared *window* is closed (or minimized too long): keep presenting the host
   // desktop, or stop the broadcast. Ignored for a whole-monitor source.
   let onClose = $state<'desktop' | 'stop'>('desktop')
   // Default: broadcast to every paired PC. Deselect to present to a subset.
   let targets = $state<Set<string>>(new Set(devices.map((d) => d.device_id)))
 
-  // A broadcast started earlier keeps running even though this dialog was closed and reopened, so
-  // reflect that on open: show it as live with a Stop button rather than a fresh Start.
+  // Broadcasts run independently of this dialog and several can run at once, so reflect the live count
+  // (for the "Stop all" button) whenever the dialog opens or after a start/stop.
   async function loadStatus() {
     try {
-      const s = await invoke<{ running: boolean; targets: number }>('broadcast_status')
-      running = s.running
+      const list = await invoke<{ id: number; targets: number; label: string }[]>('broadcast_status')
+      activeCount = list.length
     } catch {
-      // No status is not fatal — the dialog just opens in its idle state.
+      // No status is not fatal — the dialog just opens with no active count.
     }
   }
   loadStatus()
@@ -87,7 +88,9 @@
         onClose: selected.kind === 'window' ? onClose : 'desktop',
         targets: [...targets],
       })
-      running = true
+      // Keep the dialog open so a teacher can pick another source + a different group and start a
+      // second broadcast in parallel; the header banners manage the running ones.
+      await loadStatus()
     } catch (e) {
       onerror(String(e))
     } finally {
@@ -95,14 +98,14 @@
     }
   }
 
-  async function stop() {
+  async function stopAll() {
     busy = true
     try {
-      await invoke('stop_broadcast')
+      await invoke('stop_broadcast', {})
     } catch (e) {
       onerror(String(e))
     } finally {
-      running = false
+      activeCount = 0
       busy = false
     }
   }
@@ -134,7 +137,6 @@
             class="source"
             class:sel={selected?.kind === source.kind && selected?.id === source.id}
             onclick={() => pick(source)}
-            disabled={running}
           >
             <span class="thumb">
               {#if source.thumb}
@@ -171,7 +173,6 @@
           type="checkbox"
           checked={targets.size === devices.length && devices.length > 0}
           onchange={toggleAll}
-          disabled={running}
         />
         {t('broadcastAll', targets.size, devices.length)}
       </label>
@@ -182,7 +183,6 @@
               type="checkbox"
               checked={targets.has(device.device_id)}
               onchange={() => toggleTarget(device.device_id)}
-              disabled={running}
             />
             <span class="dname">{device.name || device.device_id}</span>
           </label>
@@ -191,7 +191,7 @@
     </div>
 
     <label class="lock">
-      <input type="checkbox" bind:checked={locked} disabled={running} />
+      <input type="checkbox" bind:checked={locked} />
       <span>
         <strong>{t('broadcastLock')}</strong>
         <span class="hint">{t('broadcastLockHint')}</span>
@@ -201,7 +201,7 @@
     {#if selected?.kind === 'window'}
       <label class="onclose">
         <span class="lbl">{t('broadcastOnClose')}</span>
-        <select bind:value={onClose} disabled={running}>
+        <select bind:value={onClose}>
           <option value="desktop">{t('broadcastOnCloseDesktop')}</option>
           <option value="stop">{t('broadcastOnCloseStop')}</option>
         </select>
@@ -209,20 +209,19 @@
     {/if}
 
     <footer>
-      <button onclick={loadSources} disabled={running || busy}>{t('broadcastRefresh')}</button>
+      <button onclick={loadSources} disabled={busy}>{t('broadcastRefresh')}</button>
       <span class="spacer"></span>
-      {#if running}
-        <span class="live" aria-live="polite">● {t('broadcastLive', targets.size)}</span>
-        <button class="danger" onclick={stop} disabled={busy}>{t('broadcastStop')}</button>
-      {:else}
-        <button
-          class="primary"
-          onclick={start}
-          disabled={!selected || targets.size === 0 || busy}
-        >
-          {t('broadcastStart')}
-        </button>
+      {#if activeCount > 0}
+        <span class="live" aria-live="polite">● {t('broadcastActive', activeCount)}</span>
+        <button class="danger" onclick={stopAll} disabled={busy}>{t('broadcastStopAll')}</button>
       {/if}
+      <button
+        class="primary"
+        onclick={start}
+        disabled={!selected || targets.size === 0 || busy}
+      >
+        {t('broadcastStart')}
+      </button>
       <button onclick={onclose}>{t('close')}</button>
     </footer>
   </div>

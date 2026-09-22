@@ -124,21 +124,18 @@
       // storage unavailable; the size just will not persist across restarts
     }
   }
-  // A broadcast keeps running after its picker dialog is closed, so a small header banner shows it is
-  // live and offers a one-click Stop.
-  let presenting = $state<{ running: boolean; targets: number; label: string }>({
-    running: false,
-    targets: 0,
-    label: '',
-  })
+  // Broadcasts keep running after their picker dialog is closed — and several can run at once to
+  // different PC groups — so a header banner lists each live one with its own Stop.
+  type Presenting = { id: number; targets: number; label: string }
+  let presenting = $state<Presenting[]>([])
 
-  async function stopPresenting() {
+  async function stopPresenting(id: number) {
     try {
-      await invoke('stop_broadcast')
+      await invoke('stop_broadcast', { id })
     } catch (e) {
       error = String(e)
     }
-    presenting = { running: false, targets: 0, label: '' }
+    presenting = presenting.filter((p) => p.id !== id)
   }
 
   async function copyKey() {
@@ -269,9 +266,7 @@
       error = String(e)
     }
     try {
-      presenting = await invoke<{ running: boolean; targets: number; label: string }>(
-        'broadcast_status',
-      )
+      presenting = await invoke<Presenting[]>('broadcast_status')
     } catch {
       // Status is best-effort; leave the banner as it was on a transient miss.
     }
@@ -375,9 +370,9 @@
       toasts.push(t('broadcastEndedOn', dev?.name || e.payload), 'error')
     })
     // The shared window closed and the teacher chose "stop": the backend already cleared the class, so
-    // just drop the banner and let them know.
-    unlistenSourceLost = await tauriListen('cowatcher://broadcast-source-lost', () => {
-      presenting = { running: false, targets: 0, label: '' }
+    // drop that broadcast's banner (by id) and let them know.
+    unlistenSourceLost = await tauriListen<number>('cowatcher://broadcast-source-lost', (e) => {
+      presenting = presenting.filter((p) => p.id !== e.payload)
       toasts.push(t('broadcastSourceLost'), 'info')
     })
   })
@@ -475,14 +470,14 @@
     </div>
   </header>
 
-  {#if presenting.running}
+  {#each presenting as p (p.id)}
     <div class="presenting" role="status" transition:slide={{ duration: 160, easing: cubicOut }}>
       <span class="pulse"></span>
-      <span class="ptext">{t('broadcastBanner', presenting.label, presenting.targets)}</span>
+      <span class="ptext">{t('broadcastBanner', p.label, p.targets)}</span>
       <span class="pspace"></span>
-      <button class="pstop" onclick={stopPresenting}>{t('broadcastStop')}</button>
+      <button class="pstop" onclick={() => stopPresenting(p.id)}>{t('broadcastStop')}</button>
     </div>
-  {/if}
+  {/each}
 
   {#if error}
     <div class="banner" role="alert">
