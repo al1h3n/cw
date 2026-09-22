@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core'
+  import { invoke } from './lib/bridge'
   import { onDestroy, onMount, untrack } from 'svelte'
-  import { listen as tauriListen, type UnlistenFn } from '@tauri-apps/api/event'
+  import { listen as tauriListen, type UnlistenFn } from './lib/bridge'
   import { toasts } from './lib/toast-store.svelte'
   import { flip } from 'svelte/animate'
   import { slide, fade } from 'svelte/transition'
@@ -26,7 +26,8 @@
   import SettingsDialog from './lib/SettingsDialog.svelte'
   import Toasts from './lib/Toasts.svelte'
   import { i18n, t } from './lib/i18n.svelte'
-  import type { ConsoleInfo, Device } from './lib/types'
+  import { applyTheme, DEFAULT_SETTINGS } from './lib/theme'
+  import type { ConsoleInfo, Device, Settings, Classroom } from './lib/types'
 
   let info = $state<ConsoleInfo | null>(null)
   let devices = $state<Device[]>([])
@@ -43,6 +44,45 @@
   let bgMenu = $state<{ x: number; y: number } | null>(null)
   // Whether a tile keeps showing its last screen after watching stops / it goes offline. Persisted.
   let keepPreviews = $state<boolean>(loadKeepPreviews())
+  // Console-wide preferences (AI on/off, colour theme), loaded from the backend on mount.
+  let settings = $state<Settings>(DEFAULT_SETTINGS)
+  // Every classroom, for the header switcher. Switching opens a chosen one in a new window.
+  let classrooms = $state<Classroom[]>([])
+  let creatingClassroom = $state(false)
+  let newClassroomName = $state('')
+  const activeClassroomName = $derived(classrooms.find((c) => c.active)?.name ?? t('room'))
+
+  async function saveSettings(next: Settings) {
+    settings = next
+    applyTheme(next)
+    try {
+      await invoke('settings_set', { settings: next })
+    } catch (e) {
+      toasts.push(String(e), 'error')
+    }
+  }
+
+  async function switchClassroom(slug: string) {
+    try {
+      await invoke('switch_classroom', { slug })
+    } catch (e) {
+      toasts.push(String(e), 'error')
+    }
+  }
+
+  async function submitNewClassroom() {
+    const name = newClassroomName.trim()
+    if (!name) return
+    try {
+      const room = await invoke<Classroom>('create_classroom', { name })
+      classrooms = await invoke('classrooms')
+      creatingClassroom = false
+      // Open the new classroom in its own window (feature 1: switching is a new instance).
+      await switchClassroom(room.slug)
+    } catch (e) {
+      toasts.push(String(e), 'error')
+    }
+  }
 
   function loadKeepPreviews(): boolean {
     try {
@@ -355,6 +395,10 @@
       // Strings first, so nothing renders in the wrong language.
       await i18n.load()
       info = await invoke<ConsoleInfo>('console_info')
+      // Preferences (AI on/off, theme) and the classroom list, so the theme applies before content.
+      settings = await invoke<Settings>('settings_get')
+      applyTheme(settings)
+      classrooms = await invoke<Classroom[]>('classrooms')
     } catch (e) {
       error = String(e)
     }
@@ -396,6 +440,18 @@
 {:else}
 <div class="shell">
   <header>
+    <Menu label={activeClassroomName} align="left">
+      {#snippet icon()}<Icon name="layers" />{/snippet}
+      {#each classrooms as room (room.slug)}
+        <button class="mi" class:on={room.active} onclick={() => !room.active && switchClassroom(room.slug)}>
+          <Icon name="monitor" />{room.name}
+        </button>
+      {/each}
+      <span class="sep"></span>
+      <button class="mi" onclick={() => { newClassroomName = ''; creatingClassroom = true }}>
+        <Icon name="plus" />{t('classroomNew')}
+      </button>
+    </Menu>
     <div class="title">
       <h1>{t('room')}</h1>
       <p class="sub">
@@ -731,12 +787,36 @@
   <SettingsDialog
     {keepPreviews}
     onKeepPreviews={setKeepPreviews}
+    {settings}
+    onSettings={saveSettings}
     onclose={() => (showSettings = false)}
   />
 {/if}
 
 {#if editingBlocklist}
   <BlocklistDialog onclose={() => (editingBlocklist = false)} />
+{/if}
+
+{#if creatingClassroom}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && (creatingClassroom = false)}>
+    <div class="mini" role="dialog" aria-modal="true" aria-label={t('classroomNew')}>
+      <h2>{t('classroomNew')}</h2>
+      <p class="hint">{t('classroomNewHint')}</p>
+      <input
+        type="text"
+        bind:value={newClassroomName}
+        placeholder={t('classroomNamePlaceholder')}
+        onkeydown={(e) => e.key === 'Enter' && submitNewClassroom()}
+      />
+      <div class="row">
+        <button onclick={() => (creatingClassroom = false)}>{t('cancel')}</button>
+        <button class="primary" disabled={!newClassroomName.trim()} onclick={submitNewClassroom}>
+          {t('classroomCreateOpen')}
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 {#if broadcasting}
@@ -759,12 +839,13 @@
   />
 {/if}
 
-{#if sureyOpen}
-  <SureyPanel onclose={() => (sureyOpen = false)} />
-{/if}
-
-{#if !sureyOpen}
-  <SureyLauncher onopen={() => (sureyOpen = true)} />
+<!-- Surey (AI) appears only when AI features are enabled in Settings. -->
+{#if settings.ai_enabled}
+  {#if sureyOpen}
+    <SureyPanel onclose={() => (sureyOpen = false)} />
+  {:else}
+    <SureyLauncher onopen={() => (sureyOpen = true)} />
+  {/if}
 {/if}
 
 {#if focusedDevice}
@@ -783,6 +864,48 @@
 <Toasts />
 
 <style>
+  /* Small centred modal (new-classroom prompt). */
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  .mini {
+    width: min(420px, 92vw);
+    padding: 20px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  .mini h2 {
+    margin: 0 0 6px;
+    font-size: 17px;
+  }
+  .mini .hint {
+    margin: 0 0 14px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .mini input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    font: inherit;
+  }
+  .mini .row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
   /* A flex column, not a fixed grid: the footer stays pinned to the bottom whether or not the error
      banner is showing. (The old 4-row grid mis-placed the footer into a tall row when the banner was
      absent, floating it into the middle of the screen.) */

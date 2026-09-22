@@ -14,9 +14,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Value, json};
-use tauri::Emitter;
 
 use client::{Msg, Step};
+
+use crate::events::Emitter;
 use provider::{ProviderConfig, ProviderKind, Store};
 
 use crate::manager::DeviceManager;
@@ -197,13 +198,13 @@ impl AiState {
     }
 
     /// Runs one full assistant turn: it may call tools (looping) and ask the teacher to choose, then
-    /// returns the assistant's final text. Progress is emitted as `surey://…` events on `window`.
+    /// returns the assistant's final text. Progress is emitted as `surey://…` events on `emitter`.
     ///
     /// # Errors
     /// No key configured when one is needed, a provider error, or a tool round-trip failure.
     pub async fn run_turn(
         &self,
-        window: &tauri::Window,
+        emitter: &Emitter,
         manager: &DeviceManager,
         history: Vec<ChatMessage>,
     ) -> Result<String, String> {
@@ -242,7 +243,7 @@ impl AiState {
             if let Some(text) = &step.text
                 && !text.is_empty()
             {
-                let _ = window.emit("surey://note", json!({ "text": text }));
+                emitter.emit("surey://note", json!({ "text": text }));
             }
             messages.push(Msg::Assistant {
                 text: step.text.clone(),
@@ -250,12 +251,12 @@ impl AiState {
             });
 
             for call in step.tool_calls {
-                let _ = window.emit(
+                emitter.emit(
                     "surey://tool",
                     json!({ "name": call.name, "arguments": call.arguments }),
                 );
                 let result = if call.name == tools::ASK_USER {
-                    self.ask_user(window, &call.arguments).await
+                    self.ask_user(emitter, &call.arguments).await
                 } else {
                     tools::execute(manager, &call.name, &call.arguments).await
                 };
@@ -270,12 +271,12 @@ impl AiState {
             }
         }
 
-        let _ = window.emit("surey://done", json!({ "text": final_text }));
+        emitter.emit("surey://done", json!({ "text": final_text }));
         Ok(final_text)
     }
 
     /// Emits a selection request to the panel and waits for the teacher's answer.
-    async fn ask_user(&self, window: &tauri::Window, args: &Value) -> Result<Value, String> {
+    async fn ask_user(&self, emitter: &Emitter, args: &Value) -> Result<Value, String> {
         let prompt = args
             .get("prompt")
             .and_then(Value::as_str)
@@ -301,7 +302,7 @@ impl AiState {
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), tx);
 
-        let _ = window.emit(
+        emitter.emit(
             "surey://choice",
             json!({ "id": id, "prompt": prompt, "options": options, "allow_custom": allow_custom }),
         );

@@ -47,5 +47,13 @@
     <rect x="2" y="4" width="20" height="13" rx="2" /><path d="M8 21h8M12 17v4" />
   {:else if name === 'clock'}
     <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
+  {:else if name === 'layers'}
+    <path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 13 9 5 9-5" />
+  {:else if name === 'cloud'}
+    <path d="M6.5 18a4.5 4.5 0 0 1-.5-9 6 6 0 0 1 11.5 1.5A3.75 3.75 0 0 1 17 18Z" />
+  {:else if name === 'palette'}
+    <path d="M12 3a9 9 0 1 0 0 18 2 2 0 0 0 2-2 2 2 0 0 1 2-2h1.5a3.5 3.5 0 0 0 3.5-3.5C21 6.9 17 3 12 3Z" /><circle cx="7.5" cy="11" r="1" /><circle cx="12" cy="7.5" r="1" /><circle cx="16.5" cy="11" r="1" />
+  {:else if name === 'sparkles'}
+    <path d="M12 3v6M12 15v6M3 12h6M15 12h6" /><path d="m6 6 2 2M16 16l2 2M18 6l-2 2M8 16l-2 2" />
   {/if}
 </svg>

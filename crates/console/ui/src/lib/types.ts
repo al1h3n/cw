@@ -76,3 +76,34 @@ export interface RunningApp {
   pid: number
   name: string
 }
+
+export type Theme = 'dark' | 'light' | 'custom'
+
+export interface CustomTheme {
+  bg: string
+  panel: string
+  panel2: string
+  line: string
+  text: string
+  muted: string
+  accent: string
+}
+
+export interface Settings {
+  ai_enabled: boolean
+  keep_previews: boolean
+  theme: Theme
+  custom: CustomTheme
+}
+
+export interface Classroom {
+  slug: string
+  name: string
+  active: boolean
+}
+
+export interface CloudStatus {
+  configured: boolean
+  endpoint: string
+  detail: string
+}

@@ -61,6 +61,17 @@ impl Store {
         }
     }
 
+    /// The stored licence key in the clear, or `None` if none is set or it cannot be decrypted.
+    ///
+    /// Used by cloud sync to authenticate to the dashboard; it never leaves the Rust side and is never
+    /// serialized into a UI view (see [`SubscriptionView`], which only reports whether one exists).
+    #[must_use]
+    pub fn license(&self) -> Option<String> {
+        let sealed = std::fs::read(&self.key_path).ok()?;
+        let plain = platform::secret::unprotect(&sealed).ok()?;
+        String::from_utf8(plain).ok()
+    }
+
     /// Saves the dashboard URL and, when `license` is `Some`, the licence key (`Some("")` clears it).
     ///
     /// # Errors

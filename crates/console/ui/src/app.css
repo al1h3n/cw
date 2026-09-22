@@ -1,4 +1,7 @@
-/* One calm, dark surface so the student screens are the brightest thing in the room. */
+/* One calm, dark surface so the student screens are the brightest thing in the room. The palette is
+   all CSS variables so a light theme, or a teacher's custom colours, re-skin the whole app by
+   overriding them (see Settings → Theme). `data-theme` on <html> selects the built-in themes; a custom
+   theme sets the individual variables inline. */
 :root {
   --bg: #0f1216;
   --panel: #171b21;
@@ -10,8 +13,26 @@
   --live: #3ecf8e;
   --warn: #ffb020;
   --danger: #ff5d5d;
+  --hover: #263040;
+  --hover-border: #3a4453;
   --radius: 10px;
   color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  --bg: #f4f6fa;
+  --panel: #ffffff;
+  --panel-2: #eef1f6;
+  --line: #d5dbe4;
+  --text: #1a2029;
+  --muted: #5b6674;
+  --accent: #2f6fed;
+  --live: #1a9e63;
+  --warn: #b5730a;
+  --danger: #d23b3b;
+  --hover: #e4e9f2;
+  --hover-border: #c2cad6;
+  color-scheme: light;
 }
 
 * {
@@ -45,8 +66,8 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background: #263040;
-  border-color: #3a4453;
+  background: var(--hover);
+  border-color: var(--hover-border);
 }
 
 button:disabled {

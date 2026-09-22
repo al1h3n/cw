@@ -18,15 +18,22 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // no console window in release
 
 mod ai;
+mod broadcast;
+mod classroom;
+mod cloud;
+mod events;
 mod gui;
 mod i18n;
 mod manager;
 mod room;
+mod settings;
 mod subscription;
+mod web;
 
 use std::{
     path::PathBuf,
     process::ExitCode,
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -34,11 +41,20 @@ use net::{ControlSession, Identity, LocalHello, PairingCode, PairingSession, Tru
 use proto::{Capabilities, Role};
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    // A `--classroom <slug>` (or `--classroom=<slug>`) picks which classroom (profile directory) this
+    // instance operates on; it is stripped here so the rest of the command line is unchanged.
+    let (args, classroom_arg) = extract_classroom(raw);
+    let base = classroom::base_dir();
+    let slug = classroom::active_slug(&base, classroom_arg.as_deref());
+    let dir = classroom::dir_for(&base, &slug);
+    let _ = ACTIVE_DIR.set(dir.clone());
+    classroom::remember(&base, &slug);
+
     let rest = args.get(1..).unwrap_or_default().to_vec();
     // No arguments: this is a teacher double-clicking the app, so open the window.
     if args.is_empty() {
-        return match gui::run(data_dir()) {
+        return match gui::run(dir, base, slug) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("error: {err}");
@@ -50,6 +66,8 @@ fn main() -> ExitCode {
     // launched us is what makes the subcommands print anything.
     platform::console::attach_to_parent();
     let result = match args.first().map(String::as_str) {
+        Some("web") => block_on(web::run(dir, base, slug, rest)),
+        Some("classrooms") => cmd_classrooms(&base, &slug),
         Some("version") => {
             println!(
                 "{} console {}",
@@ -72,7 +90,7 @@ fn main() -> ExitCode {
         Some("wake") => cmd_wake(&rest),
         Some("stream") => block_on(cmd_stream(rest)),
         _ => Err(
-            "usage: cowatcher-console [id|pair|devices|watch|listen|act|block|control|apps|record|broadcast|wake|stream|version]  (no arguments opens the window)"
+            "usage: cowatcher-console [--classroom <slug>] [web|classrooms|id|pair|devices|watch|listen|act|block|control|apps|record|broadcast|wake|stream|version]  (no arguments opens the window)"
                 .into(),
         ),
     };
@@ -93,14 +111,46 @@ fn block_on<F: std::future::Future<Output = Result<(), String>>>(fut: F) -> Resu
         .block_on(fut)
 }
 
+/// The active classroom's data directory, resolved once in `main`.
+static ACTIVE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
 fn data_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("COWATCHER_DIR") {
-        return PathBuf::from(dir);
+    if let Some(dir) = ACTIVE_DIR.get() {
+        return dir.clone();
     }
-    let base = std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("HOME"))
-        .map_or_else(std::env::temp_dir, PathBuf::from);
-    base.join("co-watcher").join("console")
+    // A CLI path that ran before `main` resolved it (or a test): fall back to the default classroom.
+    let base = classroom::base_dir();
+    classroom::dir_for(&base, &classroom::active_slug(&base, None))
+}
+
+/// Pulls a `--classroom <slug>` / `--classroom=<slug>` option out of the argument list, returning the
+/// remaining arguments and the slug if present. Everything else is left in order for the subcommands.
+fn extract_classroom(raw: Vec<String>) -> (Vec<String>, Option<String>) {
+    let mut args = Vec::with_capacity(raw.len());
+    let mut classroom = None;
+    let mut iter = raw.into_iter();
+    while let Some(arg) = iter.next() {
+        if let Some(value) = arg.strip_prefix("--classroom=") {
+            classroom = Some(value.to_string());
+        } else if arg == "--classroom" {
+            classroom = iter.next();
+        } else {
+            args.push(arg);
+        }
+    }
+    (args, classroom)
+}
+
+/// Prints every classroom and shows how to open one.
+fn cmd_classrooms(base: &std::path::Path, active: &str) -> Result<(), String> {
+    let rooms = classroom::list(base, active);
+    println!("{} classroom(s):", rooms.len());
+    for room in &rooms {
+        let marker = if room.active { "*" } else { " " };
+        println!("  {marker} {:16} {}", room.slug, room.name);
+    }
+    println!("\nopen one in its own window:  cowatcher-console --classroom <slug>");
+    Ok(())
 }
 
 fn trust_path() -> PathBuf {

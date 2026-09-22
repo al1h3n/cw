@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core'
+  import { invoke } from './bridge'
   import { onDestroy } from 'svelte'
   import { t } from './i18n.svelte'
   import { toasts } from './toast-store.svelte'

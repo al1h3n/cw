@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core'
+  import { invoke } from './bridge'
   import { t } from './i18n.svelte'
 
   let { onclose }: { onclose: () => void } = $props()

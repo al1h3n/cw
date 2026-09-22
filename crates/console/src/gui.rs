@@ -3,39 +3,14 @@
 //! The UI is deliberately thin. Every command here returns plain data from [`DeviceManager`], so the
 //! front end never deals with keys, sockets or retries — it renders devices and calls actions.
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 
 use net::PairingCode;
 use tauri::{Manager, State};
 
+use crate::broadcast::Broadcasts;
+use crate::events::Emitter;
 use crate::manager::{DeviceManager, DeviceView};
-
-/// A running broadcast: the stop flag its capture thread watches, and who is receiving it (so it can
-/// be taken off exactly those screens when it ends). The broadcast keeps running independently of the
-/// picker dialog, so `label` lets the UI show a small "presenting…" banner while it does.
-///
-/// Several can run **at once** to different, non-overlapping sets of PCs — one teacher presenting
-/// slides to the front rows while another source goes to the back — each with its own capture thread
-/// and fan-out. `id` identifies one so the UI can stop just that presentation.
-struct BroadcastHandle {
-    id: u64,
-    stop: Arc<AtomicBool>,
-    targets: Vec<String>,
-    /// A short human label for the source ("Display 1", a window title) for the status banner.
-    label: String,
-}
-
-/// One running broadcast, for the "you are presenting" banners (one per active presentation).
-#[derive(serde::Serialize)]
-struct BroadcastStatus {
-    id: u64,
-    targets: usize,
-    label: String,
-}
 
 /// Everything the window needs, shared across commands.
 struct AppState {
@@ -45,15 +20,19 @@ struct AppState {
     /// Stops the current continuous-pairing loop when the teacher closes the panel.
     pairing_stop: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// Every broadcast currently running. More than one can run at once, to disjoint sets of PCs.
-    broadcasts: Mutex<Vec<BroadcastHandle>>,
-    /// Hands out a unique id to each new broadcast.
-    next_broadcast_id: std::sync::atomic::AtomicU64,
+    broadcasts: Broadcasts,
     /// Surey, the AI assistant: provider config, key store and in-flight selection requests.
     ai: crate::ai::AiState,
     /// The (placeholder) Co-watcher subscription: dashboard URL and licence key.
     subscription: crate::subscription::Store,
-    /// Where per-user files live: the trust store, the device key and `languages/`.
+    /// Console-wide preferences (AI toggle, theme), shared across classrooms.
+    settings: crate::settings::Store,
+    /// This classroom's data directory: the trust store, the device key and `languages/`.
     data_dir: std::path::PathBuf,
+    /// The base directory that holds every classroom and the shared settings.
+    base_dir: std::path::PathBuf,
+    /// The slug of the classroom this instance is showing.
+    classroom: String,
 }
 
 impl AppState {
@@ -313,7 +292,7 @@ fn controlling(state: State<'_, AppState>) -> Option<String> {
 /// fraction of the student's screen — so a different resolution on either side changes nothing.
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-enum UiInput {
+pub(crate) enum UiInput {
     /// Pointer moved to this fraction of the screen (0.0 – 1.0).
     Move { x: f64, y: f64 },
     /// A mouse button changed state.
@@ -329,7 +308,7 @@ enum UiInput {
 }
 
 /// Converts the UI's description into wire events, dropping anything malformed rather than guessing.
-fn to_wire(events: Vec<UiInput>) -> Vec<proto::InputEvent> {
+pub(crate) fn to_wire(events: Vec<UiInput>) -> Vec<proto::InputEvent> {
     /// Fractions arrive as 0.0–1.0 and go out as 0–65535, the range Windows itself uses.
     fn fraction(value: f64) -> u16 {
         let clamped = if value.is_nan() {
@@ -407,7 +386,7 @@ async fn start_recording(
     state.manager.start_recording(&device_id, options).await
 }
 
-fn parse_codec(s: &str) -> proto::Codec {
+pub(crate) fn parse_codec(s: &str) -> proto::Codec {
     match s {
         "h265" => proto::Codec::H265,
         "av1" => proto::Codec::Av1,
@@ -415,7 +394,7 @@ fn parse_codec(s: &str) -> proto::Codec {
     }
 }
 
-fn parse_preset(s: &str) -> proto::Preset {
+pub(crate) fn parse_preset(s: &str) -> proto::Preset {
     match s {
         "ultrafast" => proto::Preset::Ultrafast,
         "superfast" => proto::Preset::Superfast,
@@ -429,7 +408,7 @@ fn parse_preset(s: &str) -> proto::Preset {
     }
 }
 
-fn parse_scaler(s: &str) -> proto::Scaler {
+pub(crate) fn parse_scaler(s: &str) -> proto::Scaler {
     match s {
         "bilinear" => proto::Scaler::Bilinear,
         "bicubic" => proto::Scaler::Bicubic,
@@ -1014,13 +993,8 @@ async fn list_broadcast_sources() -> Result<Vec<BroadcastSource>, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Starts broadcasting a source to the chosen PCs, optionally locking them onto it.
-///
-/// A capture thread grabs ~5 frames a second (it owns the non-`Send` capturer); a fan-out task sends
-/// each frame to every target. The broadcast runs **independently of the picker dialog** — closing the
-/// dialog no longer stops it; only [`stop_broadcast`] does. `on_close` decides what happens if the
-/// shared *window* disappears (the teacher closed it) or stays uncapturable too long (minimized): keep
-/// presenting the host desktop instead (`"desktop"`), or stop the broadcast (`"stop"`).
+/// Starts broadcasting a source to the chosen PCs, optionally locking them onto it. The broadcast runs
+/// independently of the picker dialog; only [`stop_broadcast`] ends it. See [`crate::broadcast`].
 // A Tauri command takes its inputs as named arguments, so they cannot be grouped into a struct without
 // changing the front-end call shape; the count is inherent to what a broadcast needs to know.
 #[allow(clippy::too_many_arguments)]
@@ -1036,277 +1010,35 @@ async fn start_broadcast(
     on_close: String,
     targets: Vec<String>,
 ) -> Result<(), String> {
-    if targets.is_empty() {
-        return Err("choose at least one PC to broadcast to".into());
-    }
-    // A PC can only show one broadcast at a time, so end any *overlapping* broadcast — but leave the
-    // others running, which is what lets a teacher present different sources to disjoint groups at once.
-    stop_overlapping(&state, &targets).await;
-
-    let id = state
-        .next_broadcast_id
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let stop = Arc::new(AtomicBool::new(false));
-    // Set when a window source is gone and `on_close == "stop"`, so the fan-out can tell the UI why the
-    // broadcast ended (rather than the teacher wondering why it just stopped).
-    let source_lost = Arc::new(AtomicBool::new(false));
-    let width = width.clamp(320, 3840);
-    let label = if source_title.trim().is_empty() {
-        if source_kind == "monitor" {
-            format!("Display {}", source_id + 1)
-        } else {
-            "window".to_string()
-        }
-    } else {
-        source_title
-    };
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
-
-    // Capture thread: owns the monitor capturer so it never crosses a thread boundary. It skips
-    // frames identical to the last one it sent (a still teacher screen costs no network or client
-    // CPU), re-sending an unchanged frame only every KEEPALIVE so a client that reconnects mid-
-    // broadcast still catches up within a second or two.
-    {
-        let stop = Arc::clone(&stop);
-        let source_lost = Arc::clone(&source_lost);
-        let start_kind = source_kind.clone();
-        std::thread::spawn(move || {
-            /// How often an unchanged (or held) frame is re-sent, so a client that joins mid-broadcast
-            /// catches up within a second or two.
-            const KEEPALIVE: Duration = Duration::from_millis(1500);
-            // Both are `mut` because a window source can be swapped for the host desktop mid-broadcast.
-            let mut kind = start_kind;
-            let mut src = source_id;
-            let mut monitor = if kind == "monitor" {
-                media::ThumbnailCapturer::new().ok()
-            } else {
-                None
-            };
-            let mut last: Option<Vec<u8>> = None;
-            let mut last_sent = std::time::Instant::now()
-                .checked_sub(Duration::from_secs(10))
-                .unwrap_or_else(std::time::Instant::now);
-            while !stop.load(Ordering::SeqCst) {
-                let frame = if kind == "window" {
-                    media::window_capture::capture_window_jpeg(src, width).ok()
-                } else {
-                    let index = u8::try_from(src).unwrap_or(0);
-                    // A presentation is worth a sharper JPEG than an idle grid thumbnail.
-                    monitor
-                        .as_mut()
-                        .and_then(|c| c.capture_jpeg(index, width, 78).ok())
-                };
-                match frame {
-                    Some(jpeg) => {
-                        let changed = last.as_deref() != Some(jpeg.as_slice());
-                        if changed || last_sent.elapsed() >= KEEPALIVE {
-                            // Blocking send paces us to the fan-out; a full channel = a frame in flight.
-                            if tx.blocking_send(jpeg.clone()).is_err() {
-                                break; // receiver gone
-                            }
-                            last = Some(jpeg);
-                            last_sent = std::time::Instant::now();
-                        }
-                    }
-                    // A monitor is always capturable, so `None` only happens for a window. Two very
-                    // different cases, kept apart:
-                    //   * the window is **closed** — apply the `on_close` policy (bug 12);
-                    //   * the window is **minimized or momentarily occluded** but still alive — keep
-                    //     showing the last good frame and never a black one, and resume live updates
-                    //     automatically the instant it is restored (bug 10). Windows does not render a
-                    //     minimized window, so its live pixels cannot be captured; holding the last
-                    //     real frame is the correct, non-black behaviour.
-                    None if kind == "window" => {
-                        if media::window_capture::window_alive(src) {
-                            // Minimized/occluded: re-send the held frame on the keepalive cadence so a
-                            // client that (re)connects while it is minimized still sees the last screen
-                            // instead of nothing.
-                            if let Some(held) = last.clone()
-                                && last_sent.elapsed() >= KEEPALIVE
-                            {
-                                if tx.blocking_send(held).is_err() {
-                                    break;
-                                }
-                                last_sent = std::time::Instant::now();
-                            }
-                        } else if on_close == "desktop" {
-                            // Closed: fall back to presenting the host's primary desktop.
-                            let mut cap = media::ThumbnailCapturer::new().ok();
-                            let index = cap
-                                .as_ref()
-                                .and_then(|c| {
-                                    c.monitors().iter().find(|m| m.primary).map(|m| m.index)
-                                })
-                                .unwrap_or(0);
-                            monitor = cap.take();
-                            kind = "monitor".to_string();
-                            src = u64::from(index);
-                        } else {
-                            // Closed, policy "stop": signal why, then end. Dropping `tx` closes the
-                            // channel, which lets the fan-out notice and clear the clients.
-                            source_lost.store(true, Ordering::SeqCst);
-                            break;
-                        }
-                    }
-                    None => {}
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            }
-        });
-    }
-
-    // Fan-out task: push each captured frame to every target PC **in parallel** (a JoinSet), so one
-    // frame reaches ten clients in about one device-refresh instead of piling up target-by-target —
-    // the difference between ~25 s and ~2 s to update a class. It also tells the UI when a PC that had
-    // been showing the broadcast drops it (closed, crashed or disconnected), and when the whole
-    // broadcast ended because its source window went away.
-    {
-        use tauri::Emitter;
-        let manager = Arc::clone(&state.manager);
-        let targets = targets.clone();
-        let stop = Arc::clone(&stop);
-        let source_lost = Arc::clone(&source_lost);
-        let window = window.clone();
-        let lost_id = id;
-        tokio::spawn(async move {
-            let mut showing: std::collections::HashMap<String, bool> =
-                targets.iter().map(|t| (t.clone(), false)).collect();
-            while let Some(jpeg) = rx.recv().await {
-                if stop.load(Ordering::SeqCst) {
-                    break;
-                }
-                let mut set = tokio::task::JoinSet::new();
-                for target in &targets {
-                    let manager = Arc::clone(&manager);
-                    let target = target.clone();
-                    let jpeg = jpeg.clone();
-                    set.spawn(async move {
-                        let now = matches!(
-                            manager.show_broadcast(&target, jpeg.clone(), locked).await,
-                            Ok((true, _))
-                        );
-                        // Mirror the presented frame on this PC's grid tile while it is showing.
-                        manager.set_broadcast_frame(&target, if now { Some(&jpeg) } else { None });
-                        (target, now)
-                    });
-                }
-                while let Some(joined) = set.join_next().await {
-                    let Ok((target, now)) = joined else { continue };
-                    let was = showing.get(&target).copied().unwrap_or(false);
-                    if was && !now {
-                        let _ = window.emit("cowatcher://broadcast-ended", target.clone());
-                    }
-                    showing.insert(target, now);
-                }
-            }
-            // The capture thread ended. If it was because the shared window closed (policy "stop"),
-            // clear the broadcast off every screen and tell the UI (with this broadcast's id) so its
-            // banner disappears and the handle is dropped.
-            if source_lost.load(Ordering::SeqCst) {
-                for target in &targets {
-                    let _ = manager.stop_broadcast(target).await;
-                    manager.set_broadcast_frame(target, None);
-                }
-                let _ = window.emit("cowatcher://broadcast-source-lost", lost_id);
-            }
-        });
-    }
-
     state
         .broadcasts
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push(BroadcastHandle {
-            id,
-            stop,
-            targets,
-            label,
-        });
-    Ok(())
+        .start(
+            Arc::clone(&state.manager),
+            Emitter::Tauri(window),
+            crate::broadcast::StartParams {
+                source_kind,
+                source_id,
+                source_title,
+                width,
+                locked,
+                on_close,
+                targets,
+            },
+        )
+        .await
 }
 
 /// Every presentation currently running, for the "you are presenting" banners (one per broadcast).
 #[tauri::command]
-fn broadcast_status(state: State<'_, AppState>) -> Vec<BroadcastStatus> {
-    state
-        .broadcasts
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .map(|h| BroadcastStatus {
-            id: h.id,
-            targets: h.targets.len(),
-            label: h.label.clone(),
-        })
-        .collect()
+fn broadcast_status(state: State<'_, AppState>) -> Vec<crate::broadcast::BroadcastStatus> {
+    state.broadcasts.status()
 }
 
 /// Stops one broadcast by `id`, or **all** of them when `id` is absent, taking each off its screens.
 #[tauri::command]
 async fn stop_broadcast(state: State<'_, AppState>, id: Option<u64>) -> Result<(), String> {
-    // Remove the matching handles under the lock, then clear them off their PCs without holding it.
-    let ending: Vec<BroadcastHandle> = {
-        let mut list = state.broadcasts.lock().unwrap_or_else(|e| e.into_inner());
-        match id {
-            Some(id) => {
-                let mut taken = Vec::new();
-                list.retain(|h| {
-                    if h.id == id {
-                        taken.push(BroadcastHandle {
-                            id: h.id,
-                            stop: Arc::clone(&h.stop),
-                            targets: h.targets.clone(),
-                            label: h.label.clone(),
-                        });
-                        false
-                    } else {
-                        true
-                    }
-                });
-                taken
-            }
-            None => std::mem::take(&mut *list),
-        }
-    };
-    for handle in ending {
-        handle.stop.store(true, Ordering::SeqCst);
-        for target in &handle.targets {
-            let _ = state.manager.stop_broadcast(target).await;
-            state.manager.set_broadcast_frame(target, None);
-        }
-    }
+    state.broadcasts.stop(&state.manager, id).await;
     Ok(())
-}
-
-/// Ends any broadcast that shares a PC with `targets` (a PC can show only one at a time), leaving the
-/// rest running so disjoint presentations continue in parallel.
-async fn stop_overlapping(state: &AppState, targets: &[String]) {
-    let wanted: std::collections::HashSet<&str> = targets.iter().map(String::as_str).collect();
-    let ending: Vec<BroadcastHandle> = {
-        let mut list = state.broadcasts.lock().unwrap_or_else(|e| e.into_inner());
-        let mut taken = Vec::new();
-        list.retain(|h| {
-            if h.targets.iter().any(|t| wanted.contains(t.as_str())) {
-                taken.push(BroadcastHandle {
-                    id: h.id,
-                    stop: Arc::clone(&h.stop),
-                    targets: h.targets.clone(),
-                    label: h.label.clone(),
-                });
-                false
-            } else {
-                true
-            }
-        });
-        taken
-    };
-    for handle in ending {
-        handle.stop.store(true, Ordering::SeqCst);
-        for target in &handle.targets {
-            let _ = state.manager.stop_broadcast(target).await;
-            state.manager.set_broadcast_frame(target, None);
-        }
-    }
 }
 
 // ---- Surey (AI assistant) commands -------------------------------------------------------------
@@ -1356,7 +1088,10 @@ async fn ai_send(
     window: tauri::Window,
     messages: Vec<crate::ai::ChatMessage>,
 ) -> Result<String, String> {
-    state.ai.run_turn(&window, &state.manager, messages).await
+    state
+        .ai
+        .run_turn(&Emitter::Tauri(window), &state.manager, messages)
+        .await
 }
 
 /// Answers an outstanding `ask_user` selection. Returns whether a request was waiting for it.
@@ -1400,7 +1135,99 @@ fn open_dashboard(state: State<'_, AppState>) -> Result<(), String> {
     state.subscription.open_dashboard()
 }
 
-pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
+// ---- Classrooms --------------------------------------------------------------------------------
+
+/// Every classroom, marking the one this instance is showing.
+#[tauri::command]
+fn classrooms(state: State<'_, AppState>) -> Vec<crate::classroom::ClassroomInfo> {
+    crate::classroom::list(&state.base_dir, &state.classroom)
+}
+
+/// Creates a new classroom and returns it (does not switch to it).
+#[tauri::command]
+fn create_classroom(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<crate::classroom::ClassroomInfo, String> {
+    crate::classroom::create(&state.base_dir, &name)
+}
+
+/// Opens a classroom in a **new** console window (a second process), leaving this one open, so a
+/// teacher can watch several labs at once. Switching is deliberately a new instance (AGENTS feature 1).
+#[tauri::command]
+fn switch_classroom(state: State<'_, AppState>, slug: String) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    crate::classroom::remember(&state.base_dir, &slug);
+    let mut command = std::process::Command::new(exe);
+    command.arg("--classroom").arg(&slug);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not open the classroom: {e}"))
+}
+
+// ---- Settings (AI toggle + theme) --------------------------------------------------------------
+
+#[tauri::command]
+fn settings_get(state: State<'_, AppState>) -> crate::settings::Settings {
+    state.settings.get()
+}
+
+#[tauri::command]
+fn settings_set(
+    state: State<'_, AppState>,
+    settings: crate::settings::Settings,
+) -> Result<(), String> {
+    state.settings.set(&settings)
+}
+
+// ---- Cloud sync (prepared; no server yet) ------------------------------------------------------
+
+/// Builds a [`SyncClient`] from the subscription card's dashboard URL and licence key.
+fn sync_client(state: &AppState) -> crate::cloud::SyncClient {
+    crate::cloud::SyncClient::new(
+        state.subscription.view().dashboard_url,
+        state.subscription.license(),
+    )
+}
+
+#[tauri::command]
+fn cloud_status(state: State<'_, AppState>) -> crate::cloud::CloudStatus {
+    sync_client(&state).status()
+}
+
+/// Pushes this classroom's snapshot to the hosted dashboard. Errors clearly until the cloud is set up.
+#[tauri::command]
+async fn cloud_push(state: State<'_, AppState>) -> Result<(), String> {
+    let (room_name, _) = state.manager.room();
+    let classroom_name = crate::classroom::label_of(&state.data_dir, &state.classroom);
+    let snapshot = crate::cloud::ClassroomSnapshot::build(
+        &state.classroom,
+        &classroom_name,
+        &room_name,
+        &state.manager.devices(),
+        state.manager.blocklist(),
+    );
+    sync_client(&state).push(&snapshot).await
+}
+
+/// Pulls this classroom's last snapshot from the hosted dashboard (for a future two-way sync/debug).
+#[tauri::command]
+async fn cloud_pull(state: State<'_, AppState>) -> Result<crate::cloud::ClassroomSnapshot, String> {
+    sync_client(&state).pull(&state.classroom).await
+}
+
+pub fn run(
+    data_dir: std::path::PathBuf,
+    base_dir: std::path::PathBuf,
+    classroom: String,
+) -> Result<(), String> {
     let manager = Arc::new(DeviceManager::load(&data_dir)?);
     tauri::Builder::default()
         .setup(move |app| {
@@ -1408,11 +1235,13 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
                 manager: Arc::clone(&manager),
                 pairing_code: Mutex::new(None),
                 pairing_stop: Mutex::new(None),
-                broadcasts: Mutex::new(Vec::new()),
-                next_broadcast_id: std::sync::atomic::AtomicU64::new(1),
+                broadcasts: Broadcasts::new(),
                 ai: crate::ai::AiState::load(&data_dir),
                 subscription: crate::subscription::Store::new(&data_dir),
+                settings: crate::settings::Store::new(&base_dir),
                 data_dir: data_dir.clone(),
+                base_dir: base_dir.clone(),
+                classroom: classroom.clone(),
             });
             Ok(())
         })
@@ -1475,6 +1304,14 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             subscription_config,
             subscription_set,
             open_dashboard,
+            classrooms,
+            create_classroom,
+            switch_classroom,
+            settings_get,
+            settings_set,
+            cloud_status,
+            cloud_push,
+            cloud_pull,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| e.to_string())

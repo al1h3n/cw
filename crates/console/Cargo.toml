@@ -12,8 +12,11 @@ name = "cowatcher-console"
 path = "src/main.rs"
 
 [dependencies]
+axum = { version = "0.8", features = ["json", "tokio"] } # `cowatcher-console web`: serve the dashboard UI + command/event bridge
 base64 = "0.23" # image attachments (data URLs) and audio for voice transcription
+getrandom = "0.3" # a random per-run access token for the web dashboard
 iroh = "1.2"
+rust-embed = "8" # bake the built Svelte UI (ui/dist) into the binary so `web` is self-contained
 media = { version = "0.1.0", path = "../media" }
 net = { path = "../net" }
 platform = { version = "0.1.0", path = "../platform" }
@@ -23,7 +26,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1" # AI chat-completions / Anthropic messages payloads
 tauri = { version = "2", features = [] } # the teacher-facing GUI (AGENTS D13)
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] } # bridge the broadcast event channel into an SSE stream for the web dashboard
 zip = { version = "8", default-features = false } # bundle downloaded recordings into one .zip (Stored; handles ZIP64/CRC)
 
 [build-dependencies]

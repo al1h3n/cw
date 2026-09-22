@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core'
-  import { listen as tauriListen, type UnlistenFn } from '@tauri-apps/api/event'
+  import { invoke } from './bridge'
+  import { listen as tauriListen, type UnlistenFn } from './bridge'
   import { onMount, onDestroy, tick } from 'svelte'
   import { t } from './i18n.svelte'
 

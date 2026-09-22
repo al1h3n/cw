@@ -6,6 +6,46 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-22, classrooms + settings + web dashboard):** three larger features.
+- **Multiple classrooms (feature 1):** a *classroom* is a separate profile directory — its own
+  identity, paired devices, room password and blocklist (`crate::classroom`). The base directory is
+  the always-present "default" classroom (no risky migration of existing pairings); new ones live under
+  `<base>/classrooms/<slug>`. A header switcher (`layers` menu) lists them, "New classroom" creates one
+  and **opens it in a new console window** (`switch_classroom` spawns `cowatcher-console --classroom
+  <slug>`), so several labs run side by side — switching is deliberately a second instance. CLI:
+  `cowatcher-console classrooms`, `--classroom <slug>`. The last-opened one is remembered.
+- **Cloud sync prepared, no server (feature 1):** `crate::cloud` builds a typed, secret-free
+  `ClassroomSnapshot` (classroom/room names, device ids/labels/status, blocklist — never a key,
+  password or screenshot) and a `SyncClient::push`/`pull` against the subscription card's dashboard URL
+  + licence key. With nothing configured it returns a clear "not configured" error rather than
+  pretending. The Settings → Cloud card sets the URL/key and has "Sync this classroom now". The hosted
+  endpoint itself is intentionally not built yet.
+- **Settings: AI toggle + theme (feature 2):** `crate::settings` (a `settings.json` in the base dir,
+  shared across classrooms) stores `ai_enabled` and the theme. Turning AI off hides Surey entirely and
+  guarantees no AI request is made. Theme is **dark / light / custom**; the palette is all CSS
+  variables (`app.css`), so `data-theme` picks a built-in and a custom theme sets the variables inline
+  (`lib/theme.ts`). Colour pickers in Settings edit a custom palette live.
+- **`cowatcher-console web` (feature 3):** the same Svelte UI, served in a browser at full parity.
+  `lib/bridge.ts` makes every component transport-agnostic — in the Tauri window it uses the real
+  `@tauri-apps/api`; in a browser `invoke(cmd,args)` becomes `POST /invoke/{cmd}` and `listen(event)`
+  becomes the `/events` SSE stream. The server (`crate::web`, axum + `rust-embed` baking `ui/dist`)
+  mirrors the Tauri command surface, reusing the shared logic (`manager`, the new `broadcast::Broadcasts`
+  engine, `ai`) via a transport-agnostic `events::Emitter` (Tauri window **or** SSE broadcast). Out-of-
+  band events (pairing, broadcast-ended/source-lost, `surey://…`) flow over SSE unchanged. **Security:**
+  binds to loopback by default; every `/invoke` and `/events` call needs a random per-run token (printed
+  in the startup URL, then held in an HttpOnly cookie); binding to a non-loopback `--host` prints a
+  warning first. **Degrades in a browser:** the native H.264 viewer (`open_viewer`) and in-window
+  classroom switching are desktop-only and return a clear message; downloads land on the server machine.
+- **Refactor note:** the broadcast engine moved out of `gui.rs` into `crate::broadcast` and `ai::run_turn`
+  now takes an `events::Emitter` instead of a `tauri::Window`, so both transports share one code path.
+  `web.rs` still mirrors the *thin* argument mapping of each command (the heavy logic is shared) — keep
+  the two command lists in step when adding a command.
+- **Deps added (console):** `axum` (web tier, matches D15), `rust-embed` (bake the UI), `tokio-stream`
+  (broadcast→SSE), `getrandom` (token). `cargo deny` still ok. Gates: fmt, clippy `-D warnings`, `vite
+  build`, **219 tests**, `cargo deny`.
+- **Still to verify live:** the browser dashboard against a real classroom (two machines), and opening a
+  second classroom window.
+
 **Status (2026-09-22, polish round 3):** more fixes from testing.
 - **Grid drag "always to the end" (1):** `onCellDragOver` set the per-tile drop index, then the event
   bubbled to the section's `onGroupDragOver` which overwrote it with "end". Fixed with
