@@ -192,6 +192,9 @@
   function onCellDragOver(event: DragEvent, groupId: string, index: number) {
     if (!draggingId) return
     event.preventDefault()
+    // Stop the event bubbling to the section's own dragover, which would immediately overwrite this
+    // per-tile target with "drop at the end" — the bug where every drag landed at the end.
+    event.stopPropagation()
     if (dropTarget?.groupId !== groupId || dropTarget?.index !== index) {
       dropTarget = { groupId, index }
     }
@@ -362,8 +365,9 @@
       showTutorial = false
     }
     await refresh()
-    // One poll drives the whole grid; the agents only capture while watching is on.
-    timer = window.setInterval(refresh, 1000)
+    // One poll drives the whole grid; the agents only capture while watching is on. Twice a second
+    // keeps the displayed frames close to live without re-rendering the grid too aggressively.
+    timer = window.setInterval(refresh, 500)
     // A PC dropping the broadcast (closed, crashed or disconnected) toasts the teacher (bug #6).
     unlistenBroadcast = await tauriListen<string>('cowatcher://broadcast-ended', (e) => {
       const dev = devices.find((d) => d.device_id === e.payload)

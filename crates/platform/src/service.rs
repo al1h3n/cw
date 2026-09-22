@@ -59,10 +59,14 @@ pub enum ServiceError {
 /// Idempotent-ish: installing when already installed returns an [`ServiceError::Scm`] the caller can
 /// treat as "already there". Requires administrator rights.
 ///
+/// `exe` is the executable path to register as the service binary — this should be a **stable,
+/// permanent** location (not a temp download folder), because the SCM stores the path and runs it at
+/// every boot; the caller copies the binary there first.
+///
 /// # Errors
 /// [`ServiceError`] if not elevated or the SCM refuses.
-pub fn install() -> Result<(), ServiceError> {
-    imp::install()
+pub fn install(exe: &std::path::Path) -> Result<(), ServiceError> {
+    imp::install(exe)
 }
 
 /// Removes the service. Requires administrator rights.
@@ -127,11 +131,7 @@ mod imp {
         ServiceError::Scm(e.to_string())
     }
 
-    fn current_exe() -> Result<std::path::PathBuf, ServiceError> {
-        std::env::current_exe().map_err(|e| ServiceError::Scm(e.to_string()))
-    }
-
-    pub fn install() -> Result<(), ServiceError> {
+    pub fn install(exe: &std::path::Path) -> Result<(), ServiceError> {
         let manager = ServiceManager::local_computer(
             None::<&str>,
             ServiceManagerAccess::CREATE_SERVICE | ServiceManagerAccess::CONNECT,
@@ -143,7 +143,7 @@ mod imp {
             service_type: ServiceType::OWN_PROCESS,
             start_type: ServiceStartType::AutoStart, // starts at boot
             error_control: ServiceErrorControl::Normal,
-            executable_path: current_exe()?,
+            executable_path: exe.to_path_buf(),
             launch_arguments: vec![OsString::from("run")],
             dependencies: vec![],
             account_name: None, // None = LocalSystem, which the wallpaper policy needs
@@ -251,7 +251,7 @@ mod imp {
 
     use super::ServiceError;
 
-    pub fn install() -> Result<(), ServiceError> {
+    pub fn install(_exe: &std::path::Path) -> Result<(), ServiceError> {
         Err(ServiceError::NotSupported)
     }
     pub fn uninstall() -> Result<(), ServiceError> {

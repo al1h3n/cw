@@ -17,19 +17,22 @@ use net::{ControlSession, Identity, LocalHello, TrustStore};
 use proto::{Capabilities, DeviceId, Role};
 use tokio::task::JoinHandle;
 
-/// How often a watched device is asked for a fresh screen in the grid.
-const REFRESH: Duration = Duration::from_secs(1);
+/// How often a watched device is asked for a fresh screen in the grid. Capture is change-only, so an
+/// idle screen costs nothing; a faster cadence just lowers the delay before a change shows.
+const REFRESH: Duration = Duration::from_millis(700);
 /// How often the screen a teacher has opened is refreshed: smooth enough to follow what is happening.
-const FOCUSED_REFRESH: Duration = Duration::from_millis(250);
+const FOCUSED_REFRESH: Duration = Duration::from_millis(150);
 /// How long to wait before retrying a device that failed to connect.
 const RETRY: Duration = Duration::from_secs(5);
 /// Preview width used until the teacher picks one, in pixels.
-pub const DEFAULT_GRID_WIDTH: u16 = 480;
-/// Preview width for the screen a teacher has opened.
-pub const DEFAULT_FOCUSED_WIDTH: u16 = 1280;
+pub const DEFAULT_GRID_WIDTH: u16 = 600;
+/// Preview width for the screen a teacher has opened. Near-1080p so an opened screen is sharp without
+/// the softness of downscaling a full desktop to 1280.
+pub const DEFAULT_FOCUSED_WIDTH: u16 = 1600;
 /// JPEG compression quality used until the teacher picks one (`1..=100`). Separate from width: a
-/// teacher can keep the same size but ask for a sharper, heavier image.
-pub const DEFAULT_QUALITY: u8 = proto::DEFAULT_THUMBNAIL_QUALITY;
+/// teacher can keep the same size but ask for a sharper, heavier image. Defaulted higher than the raw
+/// thumbnail default because a preview at 60 looked blocky on today's larger tiles.
+pub const DEFAULT_QUALITY: u8 = 80;
 
 /// What the UI shows for one student PC.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -225,6 +228,9 @@ struct DeviceState {
     macs: Vec<String>,
     /// The PC's direct IP (host:port) while a direct path is open; cleared when it goes offline.
     ip: Option<String>,
+    /// While this PC is a broadcast target, the last frame the teacher is presenting to it (a data
+    /// URL). Shown on its tile instead of its own screen so the grid reflects what the class sees.
+    broadcast: Option<String>,
     /// Actions the teacher asked for that the device's task has not sent yet.
     pending: Vec<proto::Action>,
     /// Input events waiting to be sent while this PC is being controlled.
@@ -247,6 +253,7 @@ impl DeviceState {
             monitor: 0,
             macs: Vec::new(),
             ip: None,
+            broadcast: None,
             pending: Vec::new(),
             pending_input: Vec::new(),
             requests: Vec::new(),
@@ -439,7 +446,9 @@ impl DeviceManager {
                 name: state.name.clone(),
                 key: hex(&state.key),
                 status: state.status,
-                screen: state.screen.clone(),
+                // While presenting to this PC, show the broadcast frame on its tile so the grid mirrors
+                // what the class sees; otherwise its own screen.
+                screen: state.broadcast.clone().or_else(|| state.screen.clone()),
                 detail: state.detail.clone(),
                 monitors: state.monitors.clone(),
                 monitor: state.monitor,
@@ -1399,6 +1408,16 @@ impl DeviceManager {
         let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(state) = devices.get_mut(id) {
             state.ip = ip;
+        }
+    }
+
+    /// Shows (or clears) the frame currently being broadcast to this PC on its grid tile, so the
+    /// teacher can see the presentation is really on each screen. `None` clears it back to the PC's
+    /// own screen.
+    pub fn set_broadcast_frame(&self, id: &str, jpeg: Option<&[u8]>) {
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(state) = devices.get_mut(id) {
+            state.broadcast = jpeg.map(|bytes| format!("data:image/jpeg;base64,{}", base64(bytes)));
         }
     }
 

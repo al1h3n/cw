@@ -6,6 +6,31 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-22, polish round 3):** more fixes from testing.
+- **Grid drag "always to the end" (1):** `onCellDragOver` set the per-tile drop index, then the event
+  bubbled to the section's `onGroupDragOver` which overwrote it with "end". Fixed with
+  `stopPropagation` on the cell so the tile target sticks.
+- **Broadcast shown on the grid (2):** while presenting to a PC, its grid tile now shows the broadcast
+  frame (`DeviceView.broadcast`, set per-frame in the fan-out, cleared on stop) so the teacher sees the
+  presentation really is on each screen — even for a locked broadcast the thumbnail can't capture.
+- **Install copies the binary (3):** `install` now copies the agent to
+  `%ProgramData%\co-watcher\agent\cowatcher-agent.exe` and registers the service from there, so running
+  it from a temp folder and deleting that folder no longer breaks the service (`service::install` takes
+  the path).
+- **Pushed wallpaper survives reboot (5):** `set_image` writes a sticky marker; the agent
+  `reapply_pushed` on every start re-applies the teacher's wallpaper, so a PC rebooted to finish
+  installing gets it back. *Exam mode does **not** survive a reboot* — it is an in-memory lock; making
+  it persist safely needs the policy engine (auto-re-locking a student on boot is risky), so that half
+  is deferred, not silently done.
+- **No wallpaper change while watched (8) + restore on close (6):** during the live stream the agent
+  now also locks wallpaper changes (`wallpaper::lock`, tracked so it never clobbers an explicit lock)
+  and restores the student's own/custom wallpaper when the stream ends (existing save-file path).
+- **Quality + latency (7, 9, 4):** defaults raised — JPEG quality 60→**80**, opened width 1280→**1600**,
+  grid width 480→**600**; grid refresh 1s→**0.7s**, focused 250ms→**150ms**, UI poll 1s→**0.5s**. A
+  busy browser still re-encodes each changed frame (JPEG is change-only; higher quality is heavier), so
+  for smooth interaction the native **Live view** (H.264) remains the right tool — documented, not a
+  discrete bug.
+
 **Status (2026-09-22, toolbar reorg + restrictions):** `PROTOCOL_VERSION` is **19**. A large UI
 reorganization plus new restrictions:
 - **Grouped toolbars (features 1, 2):** the header row is now icon buttons + grouped dropdowns

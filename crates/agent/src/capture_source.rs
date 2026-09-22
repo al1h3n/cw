@@ -38,6 +38,9 @@ pub struct ScreenCapture {
     recordings_dir: std::path::PathBuf,
     /// True while a teacher is watching and the wallpaper is blacked out (D11).
     watched: Mutex<bool>,
+    /// True while *watching* has locked wallpaper changes, so we only unlock what watching locked
+    /// (and never clobber a teacher's explicit wallpaper lock).
+    watch_locked_wp: Mutex<bool>,
     /// The live H.264 stream, if a teacher has opened the full-resolution view.
     stream: Mutex<Option<crate::streaming::Stream>>,
     /// File holding the student's real wallpaper path while black is shown, so it can be restored
@@ -77,8 +80,11 @@ impl ScreenCapture {
         wallpaper_save: &Path,
     ) -> Result<Self, CaptureError> {
         let capturer = media::ThumbnailCapturer::new().map_err(|e| CaptureError(e.to_string()))?;
-        // In case a previous run was killed mid-watch, put any saved wallpaper back on start-up.
+        // In case a previous run was killed mid-watch, put any saved wallpaper back on start-up, then
+        // re-apply any wallpaper the teacher pushed so it survives a reboot (bug: a PC rebooted to
+        // finish installing lost its pushed wallpaper).
         let _ = platform::wallpaper::restore(wallpaper_save);
+        platform::wallpaper::reapply_pushed(wallpaper_save);
         Ok(Self {
             capturer: Mutex::new(capturer),
             audio: Mutex::new(None),
@@ -91,6 +97,7 @@ impl ScreenCapture {
             exam: Mutex::new(None),
             recordings_dir: recordings_dir.to_path_buf(),
             watched: Mutex::new(false),
+            watch_locked_wp: Mutex::new(false),
             stream: Mutex::new(None),
             wallpaper_save: wallpaper_save.to_path_buf(),
         })
@@ -343,6 +350,22 @@ impl AgentDevice for ScreenCapture {
         } else {
             platform::wallpaper::restore(&self.wallpaper_save)
         };
+        // Also stop the student changing their wallpaper while being watched (bug: they could open
+        // Personalisation and replace the black-out). Only unlock what watching itself locked, so an
+        // explicit teacher wallpaper lock is never undone here. Best-effort: a failure is not fatal.
+        let mut watch_locked = self
+            .watch_locked_wp
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if watched {
+            if platform::wallpaper::lock().is_ok() {
+                *watch_locked = true;
+            }
+        } else if *watch_locked {
+            let _ = platform::wallpaper::unlock();
+            *watch_locked = false;
+        }
+        drop(watch_locked);
         match result {
             Ok(()) => {
                 *current = watched;

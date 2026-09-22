@@ -37,6 +37,29 @@ impl Fit {
             Fit::Tile => ("0", "1"),
         }
     }
+
+    /// A one-char code stored in the sticky-wallpaper marker, so the fit survives a reboot.
+    #[must_use]
+    fn code(self) -> char {
+        match self {
+            Fit::Fill => '0',
+            Fit::Fit => '1',
+            Fit::Stretch => '2',
+            Fit::Center => '3',
+            Fit::Tile => '4',
+        }
+    }
+
+    #[must_use]
+    fn from_code(c: char) -> Self {
+        match c {
+            '1' => Fit::Fit,
+            '2' => Fit::Stretch,
+            '3' => Fit::Center,
+            '4' => Fit::Tile,
+            _ => Fit::Fill,
+        }
+    }
 }
 
 /// Why a wallpaper operation failed.
@@ -123,6 +146,16 @@ pub fn set_image(
     fit: Fit,
 ) -> Result<(), WallpaperError> {
     imp::set_image(image, save_path, fit)
+}
+
+/// Re-applies the last pushed wallpaper, if any, from the sticky marker written by [`set_image`].
+///
+/// A teacher's pushed wallpaper is meant to *stay*, including across a reboot (e.g. one triggered to
+/// finish installing the Agent). `SPI_SETDESKWALLPAPER` already persists in the registry, but a
+/// roaming profile, a mid-push reboot, or the black-on-watch swap can lose it; calling this on every
+/// Agent start guarantees the chosen wallpaper comes back. A no-op when nothing was pushed.
+pub fn reapply_pushed(save_path: &std::path::Path) {
+    imp::reapply_pushed(save_path);
 }
 
 /// The file extension for a wallpaper image, chosen from its magic bytes. Defaults to `bmp` so an
@@ -293,10 +326,17 @@ mod imp {
         result
     }
 
+    /// The sticky marker file: `<fit-code>\n<chosen-path>`, so a pushed wallpaper can be re-applied
+    /// on the next Agent start (surviving a reboot).
+    fn marker_path(save_path: &Path) -> std::path::PathBuf {
+        save_path.with_file_name("wallpaper-active.txt")
+    }
+
     pub fn set_image(image: &[u8], save_path: &Path, fit: Fit) -> Result<(), WallpaperError> {
         // An empty image means "no wallpaper": clear it and stop remembering any earlier choice.
         if image.is_empty() {
             let _ = std::fs::remove_file(save_path);
+            let _ = std::fs::remove_file(marker_path(save_path));
             return apply_wallpaper("");
         }
         // Lay it out as the teacher asked (fill/fit/stretch/centre/tile) before pointing at the image.
@@ -315,6 +355,9 @@ mod imp {
         std::fs::write(&chosen, image)
             .map_err(|e| WallpaperError::Os(format!("write wallpaper image: {e}")))?;
         let chosen = chosen.to_string_lossy().to_string();
+        // Remember the choice so it can be re-applied after a reboot (bug: a PC rebooted to finish
+        // installing lost its pushed wallpaper).
+        let _ = std::fs::write(marker_path(save_path), format!("{}\n{chosen}", fit.code()));
 
         // If black is currently shown (a teacher is watching), don't fight the black-out: record the
         // new image as the wallpaper to restore, so it shows the instant watching ends.
@@ -324,6 +367,24 @@ mod imp {
             return Ok(());
         }
         apply_wallpaper(&chosen)
+    }
+
+    pub fn reapply_pushed(save_path: &Path) {
+        let Ok(marker) = std::fs::read_to_string(marker_path(save_path)) else {
+            return; // nothing was ever pushed
+        };
+        let mut lines = marker.lines();
+        let fit = lines
+            .next()
+            .and_then(|s| s.chars().next())
+            .map_or(Fit::Fill, Fit::from_code);
+        let Some(path) = lines.next() else { return };
+        // Only re-apply if the image file is still there; a teacher must not get a broken (blank)
+        // desktop because the file was cleaned up.
+        if std::path::Path::new(path).exists() {
+            let _ = set_desktop_fit(fit);
+            let _ = apply_wallpaper(path);
+        }
     }
 
     pub fn selftest(save_path: &Path) -> Result<bool, WallpaperError> {
@@ -475,6 +536,8 @@ mod imp {
     pub fn restore(_save_path: &std::path::Path) -> Result<(), WallpaperError> {
         Ok(())
     }
+
+    pub fn reapply_pushed(_save_path: &std::path::Path) {}
 
     pub fn selftest(_save_path: &std::path::Path) -> Result<bool, WallpaperError> {
         Err(WallpaperError::NotSupported)

@@ -1182,9 +1182,11 @@ async fn start_broadcast(
                     let jpeg = jpeg.clone();
                     set.spawn(async move {
                         let now = matches!(
-                            manager.show_broadcast(&target, jpeg, locked).await,
+                            manager.show_broadcast(&target, jpeg.clone(), locked).await,
                             Ok((true, _))
                         );
+                        // Mirror the presented frame on this PC's grid tile while it is showing.
+                        manager.set_broadcast_frame(&target, if now { Some(&jpeg) } else { None });
                         (target, now)
                     });
                 }
@@ -1203,6 +1205,7 @@ async fn start_broadcast(
             if source_lost.load(Ordering::SeqCst) {
                 for target in &targets {
                     let _ = manager.stop_broadcast(target).await;
+                    manager.set_broadcast_frame(target, None);
                 }
                 let _ = window.emit("cowatcher://broadcast-source-lost", lost_id);
             }
@@ -1269,6 +1272,7 @@ async fn stop_broadcast(state: State<'_, AppState>, id: Option<u64>) -> Result<(
         handle.stop.store(true, Ordering::SeqCst);
         for target in &handle.targets {
             let _ = state.manager.stop_broadcast(target).await;
+            state.manager.set_broadcast_frame(target, None);
         }
     }
     Ok(())
@@ -1300,6 +1304,7 @@ async fn stop_overlapping(state: &AppState, targets: &[String]) {
         handle.stop.store(true, Ordering::SeqCst);
         for target in &handle.targets {
             let _ = state.manager.stop_broadcast(target).await;
+            state.manager.set_broadcast_frame(target, None);
         }
     }
 }

@@ -414,16 +414,45 @@ async fn accept_and_serve(
 }
 
 /// Installs the Agent as an auto-start Windows service (needs an elevated/admin prompt).
+///
+/// The binary is **copied into a permanent location** (`%ProgramData%\co-watcher\agent\`) and the
+/// service registered from there, so the teacher can run `install` from a temporary download folder
+/// and then delete it — the service keeps working across reboots because it no longer points at the
+/// original file.
 fn cmd_install() -> Result<(), String> {
-    platform::service::install().map_err(|e| e.to_string())?;
+    let installed_exe = install_agent_binary()?;
+    platform::service::install(&installed_exe).map_err(|e| e.to_string())?;
     println!(
-        "installed the \"{}\" service (auto-start).",
-        platform::service::DISPLAY_NAME
+        "installed the \"{}\" service (auto-start) from {}.",
+        platform::service::DISPLAY_NAME,
+        installed_exe.display()
     );
+    println!("The binary was copied there, so you can delete the one you ran this from.");
     println!("It starts at boot and does not appear in Task Manager's Startup tab, so a student");
     println!("cannot switch it off there. An administrator can, via services.msc or:");
     println!("    cowatcher-agent uninstall   (from an elevated prompt)");
     Ok(())
+}
+
+/// Copies this running executable into the permanent agent directory and returns the copy's path. If
+/// we are already running from that location, no copy is made.
+fn install_agent_binary() -> Result<PathBuf, String> {
+    let src = std::env::current_exe().map_err(|e| format!("locate this executable: {e}"))?;
+    let dir = program_data_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let dest = dir.join("cowatcher-agent.exe");
+    if src == dest {
+        return Ok(dest);
+    }
+    // Replace any previous copy. If the old one is running (a reinstall), it is locked; renaming it
+    // aside first lets the copy succeed and the stale file is cleaned up on the next boot.
+    if dest.exists() {
+        let old = dir.join("cowatcher-agent.old.exe");
+        let _ = std::fs::remove_file(&old);
+        let _ = std::fs::rename(&dest, &old);
+    }
+    std::fs::copy(&src, &dest).map_err(|e| format!("copy the agent to {}: {e}", dest.display()))?;
+    Ok(dest)
 }
 
 /// Removes the Agent service (needs an elevated/admin prompt).
