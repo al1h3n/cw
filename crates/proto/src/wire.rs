@@ -307,6 +307,23 @@ pub struct RunningApp {
     pub name: String,
 }
 
+/// How a pushed wallpaper image should be laid out on the student's desktop. Maps to the Windows
+/// desktop `WallpaperStyle`/`TileWallpaper` settings the Agent writes before applying the image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum WallpaperFit {
+    /// Scale to cover the whole screen, cropping the overflow (the usual "Fill").
+    #[default]
+    Fill,
+    /// Scale to fit entirely on screen, letterboxing the rest (no cropping).
+    Fit,
+    /// Stretch to the exact screen size, ignoring aspect ratio.
+    Stretch,
+    /// Centre at native size, no scaling.
+    Center,
+    /// Tile the image across the screen.
+    Tile,
+}
+
 /// Something a Console can make a student PC do.
 ///
 /// This is a **closed list on purpose**: there is no "run this command" variant in any tier, so a
@@ -596,12 +613,28 @@ pub enum Control {
     SetWallpaper {
         /// The wallpaper image, as the raw bytes of a PNG, JPEG or BMP file.
         image: Vec<u8>,
+        /// How to lay the image out on the desktop (fill, fit, stretch, centre, tile).
+        fit: WallpaperFit,
     },
     /// Agent → Console: whether the wallpaper was applied, and why not if it failed.
     WallpaperSet {
         /// True when the desktop wallpaper is now the sent image.
         ok: bool,
         /// Empty unless the wallpaper could not be set.
+        problem: String,
+    },
+    /// Console → Agent: freeze (or release) the student's own mouse and keyboard *without* the teacher
+    /// taking control — so the class can be stopped mid-task and the teacher can see what each student
+    /// had done. Separate from remote control and from exam lock (the screen stays as-is, no overlay).
+    SetScreenLock {
+        /// True to block the student's local input, false to give it back.
+        on: bool,
+    },
+    /// Agent → Console: whether the student's input is now frozen, and why not if the request failed.
+    ScreenLockState {
+        /// True while the student's local input is blocked.
+        locked: bool,
+        /// Empty unless the lock could not be applied.
         problem: String,
     },
     /// Console → Agent: start recording this PC's screen to a file on that PC.

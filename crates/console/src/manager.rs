@@ -52,6 +52,9 @@ pub struct DeviceView {
     pub monitor: u8,
     /// This PC's MAC addresses, learned while it was connected, for Wake-on-LAN when it is off.
     pub macs: Vec<String>,
+    /// The PC's direct IP address (host:port) once a direct path is open, shown beside its id. `None`
+    /// while relay-only or offline.
+    pub ip: Option<String>,
     /// What happened to the last action sent to this PC, for the UI to show.
     pub last_action: Option<ActionReport>,
 }
@@ -179,9 +182,15 @@ enum DeviceRequest {
     StopBroadcast {
         reply: tokio::sync::oneshot::Sender<(bool, String)>,
     },
-    /// Set this PC's desktop wallpaper to the given image; the reply is `(ok, problem)`.
+    /// Set this PC's desktop wallpaper to the given image, laid out as `fit`; reply `(ok, problem)`.
     SetWallpaper {
         image: Vec<u8>,
+        fit: proto::WallpaperFit,
+        reply: tokio::sync::oneshot::Sender<(bool, String)>,
+    },
+    /// Freeze or release the student's own input without taking control; reply `(locked, problem)`.
+    SetScreenLock {
+        on: bool,
         reply: tokio::sync::oneshot::Sender<(bool, String)>,
     },
 }
@@ -214,6 +223,8 @@ struct DeviceState {
     monitor: u8,
     /// MAC addresses reported while connected; kept across a drop so an offline PC can be woken.
     macs: Vec<String>,
+    /// The PC's direct IP (host:port) while a direct path is open; cleared when it goes offline.
+    ip: Option<String>,
     /// Actions the teacher asked for that the device's task has not sent yet.
     pending: Vec<proto::Action>,
     /// Input events waiting to be sent while this PC is being controlled.
@@ -235,6 +246,7 @@ impl DeviceState {
             monitors: Vec::new(),
             monitor: 0,
             macs: Vec::new(),
+            ip: None,
             pending: Vec::new(),
             pending_input: Vec::new(),
             requests: Vec::new(),
@@ -432,6 +444,7 @@ impl DeviceManager {
                 monitors: state.monitors.clone(),
                 monitor: state.monitor,
                 macs: state.macs.clone(),
+                ip: state.ip.clone(),
                 last_action: state.last_action,
             })
             .collect()
@@ -717,9 +730,27 @@ impl DeviceManager {
         &self,
         device_id: &str,
         image: Vec<u8>,
+        fit: proto::WallpaperFit,
     ) -> Result<(bool, String), String> {
         self.ask(device_id, move |reply| DeviceRequest::SetWallpaper {
             image,
+            fit,
+            reply,
+        })
+        .await
+    }
+
+    /// Freezes or releases one PC's local input without taking control. Returns `(locked, problem)`.
+    ///
+    /// # Errors
+    /// The PC is unknown or not connected.
+    pub async fn set_screen_lock(
+        &self,
+        device_id: &str,
+        on: bool,
+    ) -> Result<(bool, String), String> {
+        self.ask(device_id, move |reply| DeviceRequest::SetScreenLock {
+            on,
             reply,
         })
         .await
@@ -1075,8 +1106,16 @@ impl DeviceManager {
         let mut sent_blocklist: u64 = 0;
         // Whether this connection has been granted control of the PC.
         let mut controlling = false;
+        // The direct IP appears only once hole-punching promotes the connection off the relay, so
+        // re-check it each pass and update the display when it first becomes known.
+        let mut shown_ip: Option<String> = None;
 
         loop {
+            let ip = session.remote_ip();
+            if ip != shown_ip {
+                self.set_ip(id, ip.clone());
+                shown_ip = ip;
+            }
             // The wallpaper is blacked out by the Agent only during a *full* live preview (the native
             // viewer's H.264 stream), not for the grid or its focused thumbnail view — a teacher
             // glancing at low-fps thumbnails should still see the real desktop, and it costs almost
@@ -1207,9 +1246,16 @@ impl DeviceManager {
                         let state = session.stop_broadcast().await.map_err(|e| e.to_string())?;
                         let _ = reply.send(state);
                     }
-                    DeviceRequest::SetWallpaper { image, reply } => {
+                    DeviceRequest::SetWallpaper { image, fit, reply } => {
                         let state = session
-                            .set_wallpaper(image)
+                            .set_wallpaper(image, fit)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let _ = reply.send(state);
+                    }
+                    DeviceRequest::SetScreenLock { on, reply } => {
+                        let state = session
+                            .set_screen_lock(on)
                             .await
                             .map_err(|e| e.to_string())?;
                         let _ = reply.send(state);
@@ -1340,9 +1386,19 @@ impl DeviceManager {
                 // Drop the reply channels: every waiting caller learns at once that the PC went
                 // away, instead of hanging until it times out.
                 state.requests.clear();
+                // A stale IP is worse than none once the PC is no longer reachable.
+                state.ip = None;
             }
             state.status = status;
             state.detail = detail;
+        }
+    }
+
+    /// Records the PC's direct IP (host:port) for display beside its id; `None` clears it.
+    fn set_ip(&self, id: &str, ip: Option<String>) {
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(state) = devices.get_mut(id) {
+            state.ip = ip;
         }
     }
 

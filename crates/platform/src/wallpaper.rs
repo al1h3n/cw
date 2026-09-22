@@ -8,6 +8,37 @@
 //! We deliberately do **not** push an image over the wire here: shipping a school's wallpaper file
 //! needs the file-transfer channel (not built), so for now this locks whatever wallpaper is set.
 
+/// How a wallpaper image is laid out on the desktop. Kept here (not shared with the wire type) so
+/// this crate stays free of `proto`; the Agent maps `proto::WallpaperFit` onto it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Fit {
+    /// Scale to cover the screen, cropping overflow.
+    #[default]
+    Fill,
+    /// Scale to fit entirely, letterboxed.
+    Fit,
+    /// Stretch to the exact screen size.
+    Stretch,
+    /// Centre at native size.
+    Center,
+    /// Tile across the screen.
+    Tile,
+}
+
+impl Fit {
+    /// The Windows `(WallpaperStyle, TileWallpaper)` registry string pair for this layout.
+    #[must_use]
+    fn reg_values(self) -> (&'static str, &'static str) {
+        match self {
+            Fit::Fill => ("10", "0"),
+            Fit::Fit => ("6", "0"),
+            Fit::Stretch => ("2", "0"),
+            Fit::Center => ("0", "0"),
+            Fit::Tile => ("0", "1"),
+        }
+    }
+}
+
 /// Why a wallpaper operation failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WallpaperError {
@@ -86,8 +117,12 @@ pub fn restore(save_path: &std::path::Path) -> Result<(), WallpaperError> {
 ///
 /// # Errors
 /// [`WallpaperError`] if the format is not one the OS accepts, or a file/registry step fails.
-pub fn set_image(image: &[u8], save_path: &std::path::Path) -> Result<(), WallpaperError> {
-    imp::set_image(image, save_path)
+pub fn set_image(
+    image: &[u8],
+    save_path: &std::path::Path,
+    fit: Fit,
+) -> Result<(), WallpaperError> {
+    imp::set_image(image, save_path, fit)
 }
 
 /// The file extension for a wallpaper image, chosen from its magic bytes. Defaults to `bmp` so an
@@ -140,7 +175,7 @@ mod imp {
     use windows::{
         Win32::{
             System::Registry::{
-                HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_DWORD, REG_OPTION_NON_VOLATILE,
+                HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
                 RegCloseKey, RegCreateKeyExW, RegSetValueExW,
             },
             UI::WindowsAndMessaging::{
@@ -151,7 +186,51 @@ mod imp {
         core::w,
     };
 
-    use super::{WallpaperError, black_bmp};
+    use super::{Fit, WallpaperError, black_bmp};
+
+    /// Writes the `WallpaperStyle`/`TileWallpaper` strings under `HKCU\Control Panel\Desktop` so the
+    /// next `SPI_SETDESKWALLPAPER` lays the image out as `fit` (fill/fit/stretch/centre/tile).
+    fn set_desktop_fit(fit: Fit) -> Result<(), WallpaperError> {
+        let (style, tile) = fit.reg_values();
+        let mut key = HKEY::default();
+        // SAFETY: opening (creating if absent) the per-user Desktop key; closed on every path below.
+        let status = unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                w!("Control Panel\\Desktop"),
+                None,
+                None,
+                REG_OPTION_NON_VOLATILE,
+                KEY_WRITE,
+                None,
+                &mut key,
+                None,
+            )
+        };
+        if status.is_err() {
+            return Err(WallpaperError::Os(status.to_hresult().message()));
+        }
+        let write = |name: windows::core::PCWSTR, value: &str| {
+            let wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+            let bytes =
+                unsafe { std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2) };
+            // SAFETY: REG_SZ value whose byte length includes the trailing NUL; `wide` outlives the call.
+            unsafe { RegSetValueExW(key, name, None, REG_SZ, Some(bytes)) }
+        };
+        let a = write(w!("WallpaperStyle"), style);
+        let b = write(w!("TileWallpaper"), tile);
+        // SAFETY: closing the key we opened; not used afterwards.
+        unsafe {
+            let _ = RegCloseKey(key);
+        }
+        if a.is_err() {
+            return Err(WallpaperError::Os(a.to_hresult().message()));
+        }
+        if b.is_err() {
+            return Err(WallpaperError::Os(b.to_hresult().message()));
+        }
+        Ok(())
+    }
 
     /// The current wallpaper's path, or empty if none is set.
     fn current_wallpaper() -> String {
@@ -214,12 +293,14 @@ mod imp {
         result
     }
 
-    pub fn set_image(image: &[u8], save_path: &Path) -> Result<(), WallpaperError> {
+    pub fn set_image(image: &[u8], save_path: &Path, fit: Fit) -> Result<(), WallpaperError> {
         // An empty image means "no wallpaper": clear it and stop remembering any earlier choice.
         if image.is_empty() {
             let _ = std::fs::remove_file(save_path);
             return apply_wallpaper("");
         }
+        // Lay it out as the teacher asked (fill/fit/stretch/centre/tile) before pointing at the image.
+        let _ = set_desktop_fit(fit);
         // Write the chosen image beside the save file with a concrete extension the OS understands.
         // A fixed name (per extension) keeps the agent dir from filling with old wallpapers.
         let ext = super::image_extension(image);
@@ -383,7 +464,11 @@ mod imp {
 
     // ponytail: GNOME/KDE set the wallpaper via gsettings/plasma-apply-wallpaperimage; added with
     // the Linux Agent.
-    pub fn set_image(_image: &[u8], _save_path: &std::path::Path) -> Result<(), WallpaperError> {
+    pub fn set_image(
+        _image: &[u8],
+        _save_path: &std::path::Path,
+        _fit: super::Fit,
+    ) -> Result<(), WallpaperError> {
         Err(WallpaperError::NotSupported)
     }
 

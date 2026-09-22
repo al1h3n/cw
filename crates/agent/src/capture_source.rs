@@ -25,6 +25,9 @@ pub struct ScreenCapture {
     /// True only while a Console has explicitly taken control of the mouse and keyboard.
     /// Input is dropped unless this is set, so a stray message can never move a student's pointer.
     controlled: Mutex<bool>,
+    /// True while the teacher has *frozen* this PC's local input without taking control (screen lock).
+    /// The student's physical input is blocked whenever this OR `controlled` is set.
+    screen_locked: Mutex<bool>,
     /// The screen recording in progress, if any. Dropping it closes the file.
     recording: Mutex<Option<crate::recording::Recording>>,
     /// The full-screen broadcast window, while a teacher is presenting. Dropping it closes it.
@@ -82,6 +85,7 @@ impl ScreenCapture {
             audit: AuditLog::new(audit_path),
             blocker: crate::blocker::Blocker::start(blocklist_path),
             controlled: Mutex::new(false),
+            screen_locked: Mutex::new(false),
             recording: Mutex::new(None),
             broadcast: Mutex::new(None),
             exam: Mutex::new(None),
@@ -96,6 +100,21 @@ impl ScreenCapture {
     /// connection never leaves the desktop black.
     pub fn end_session(&self) {
         net::AgentDevice::set_watched(self, false);
+    }
+
+    /// Blocks the student's physical input whenever a Console holds control OR a screen lock is up, and
+    /// restores it only when neither is set. Called on every change to either state so control and the
+    /// screen lock compose instead of one clobbering the other.
+    fn apply_input_block(&self) {
+        let controlled = *self.controlled.lock().unwrap_or_else(|e| e.into_inner());
+        let locked = *self.screen_locked.lock().unwrap_or_else(|e| e.into_inner());
+        let block = controlled || locked;
+        if let Err(err) = platform::input::set_local_input_blocked(block) {
+            eprintln!(
+                "could not {} local input: {err}",
+                if block { "block" } else { "restore" }
+            );
+        }
     }
 
     /// How many blocklist rules are in force (for the `serve` banner).
@@ -443,8 +462,20 @@ impl AgentDevice for ScreenCapture {
         }
     }
 
-    fn set_wallpaper(&self, from: &PeerInfo, image: &[u8]) -> (bool, String) {
-        match platform::wallpaper::set_image(image, &self.wallpaper_save) {
+    fn set_wallpaper(
+        &self,
+        from: &PeerInfo,
+        image: &[u8],
+        fit: proto::WallpaperFit,
+    ) -> (bool, String) {
+        let fit = match fit {
+            proto::WallpaperFit::Fill => platform::wallpaper::Fit::Fill,
+            proto::WallpaperFit::Fit => platform::wallpaper::Fit::Fit,
+            proto::WallpaperFit::Stretch => platform::wallpaper::Fit::Stretch,
+            proto::WallpaperFit::Center => platform::wallpaper::Fit::Center,
+            proto::WallpaperFit::Tile => platform::wallpaper::Fit::Tile,
+        };
+        match platform::wallpaper::set_image(image, &self.wallpaper_save, fit) {
             Ok(()) => {
                 println!(
                     "console {} set wallpaper ({} bytes)",
@@ -458,6 +489,20 @@ impl AgentDevice for ScreenCapture {
             }
             Err(err) => (false, err.to_string()),
         }
+    }
+
+    fn set_screen_lock(&self, from: &PeerInfo, on: bool) -> (bool, String) {
+        {
+            let mut locked = self.screen_locked.lock().unwrap_or_else(|e| e.into_inner());
+            *locked = on;
+        }
+        self.apply_input_block();
+        let action = if on { "screen-lock" } else { "screen-unlock" };
+        println!("console {} → {action}", from.device_id);
+        let _ = self
+            .audit
+            .note(net::endpoint::now_ms(), from.device_id, action);
+        (on, String::new())
     }
 
     fn start_recording(
@@ -609,21 +654,18 @@ impl AgentDevice for ScreenCapture {
     }
 
     fn set_control(&self, from: &PeerInfo, enabled: bool) -> bool {
-        let mut controlled = self.controlled.lock().unwrap_or_else(|e| e.into_inner());
-        if *controlled == enabled {
-            return enabled;
+        {
+            let mut controlled = self.controlled.lock().unwrap_or_else(|e| e.into_inner());
+            if *controlled == enabled {
+                return enabled;
+            }
+            *controlled = enabled;
         }
-        *controlled = enabled;
         // Take the student's own mouse and keyboard out of the way while the teacher drives, and give
-        // them back the moment control is released. Injected remote input still passes through, so this
-        // only stops the *student* from fighting the pointer. Best-effort: if Windows refuses (a more
-        // privileged desktop owns input), log it and carry on — control still works, just not exclusively.
-        if let Err(err) = platform::input::set_local_input_blocked(enabled) {
-            eprintln!(
-                "could not {} local input: {err}",
-                if enabled { "block" } else { "restore" }
-            );
-        }
+        // them back the moment control is released — unless a screen lock is also up, in which case
+        // `apply_input_block` keeps them blocked. Injected remote input still passes through, so this
+        // only stops the *student* from fighting the pointer.
+        self.apply_input_block();
         if !enabled {
             // Never leave a student with a modifier stuck down because the key-up never arrived.
             platform::input::release_all_modifiers();

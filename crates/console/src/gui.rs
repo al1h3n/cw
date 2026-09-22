@@ -453,10 +453,18 @@ async fn set_wallpaper(
     state: State<'_, AppState>,
     targets: Vec<String>,
     image: Vec<u8>,
+    fit: String,
 ) -> Result<BulkResult, String> {
     if image.is_empty() {
         return Err("no image was chosen".into());
     }
+    let fit = match fit.as_str() {
+        "fit" => proto::WallpaperFit::Fit,
+        "stretch" => proto::WallpaperFit::Stretch,
+        "center" => proto::WallpaperFit::Center,
+        "tile" => proto::WallpaperFit::Tile,
+        _ => proto::WallpaperFit::Fill,
+    };
     let connected: Vec<String> = state
         .manager
         .devices()
@@ -477,12 +485,23 @@ async fn set_wallpaper(
     }
     let mut result = BulkResult { ok: 0, failed: 0 };
     for id in chosen {
-        match state.manager.set_wallpaper(&id, image.clone()).await {
+        match state.manager.set_wallpaper(&id, image.clone(), fit).await {
             Ok((true, _)) => result.ok += 1,
             _ => result.failed += 1,
         }
     }
     Ok(result)
+}
+
+/// Freezes or releases the student's own input on one PC without taking control (screen lock).
+/// Returns `[locked, problem]`.
+#[tauri::command]
+async fn set_screen_lock(
+    state: State<'_, AppState>,
+    device_id: String,
+    on: bool,
+) -> Result<(bool, String), String> {
+    state.manager.set_screen_lock(&device_id, on).await
 }
 
 /// Lists the recordings stored on one PC.
@@ -1366,6 +1385,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), String> {
             list_apps,
             app_icon,
             running_icon,
+            set_screen_lock,
             launch_app,
             list_running,
             close_app,

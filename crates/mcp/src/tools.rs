@@ -316,7 +316,7 @@ pub async fn call(fleet: &Fleet, name: &str, args: &Value) -> Result<Vec<Value>,
             }
             let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
             let (ok, problem) = session
-                .set_wallpaper(image)
+                .set_wallpaper(image, proto::WallpaperFit::default())
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(vec![json_text(&json!({ "ok": ok, "problem": problem }))])

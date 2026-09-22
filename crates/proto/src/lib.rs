@@ -9,7 +9,9 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 ///
 /// Bump it on every breaking change to message layout or meaning. Peers with different
 /// versions must refuse the session with a clear error instead of guessing.
-/// Version 18 added `FetchRunningIcon` (a running process's icon, replied via `AppIcon`);
+/// Version 19 added a `fit` to `SetWallpaper` and `SetScreenLock`/`ScreenLockState` (freeze a
+/// student's input without taking control);
+/// version 18 added `FetchRunningIcon` (a running process's icon, replied via `AppIcon`);
 /// version 17 added a per-request JPEG `quality` to `RequestThumbnail` (compression separate from
 /// size), so a teacher can pick preview sharpness;
 /// version 16 added setting a chosen desktop wallpaper on students (`SetWallpaper`);
@@ -22,7 +24,7 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 /// added remote mouse/keyboard input; version 2 added remote actions. Each shifted the later
 /// `Control` discriminants, so a peer on an older version would decode them as the wrong message and
 /// the handshake refuses it outright.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// Default JPEG quality (`1..=100`) for screen thumbnails when the Console does not specify one, and
 /// what non-preview callers (diagnostics, the MCP screenshot tool) pass. 60 measured ~5–7 KB at
@@ -41,5 +43,5 @@ pub use wire::{
     Action, ActionFailure, ActionOutcome, AppEntry, AudioFormat, Capabilities, Codec, Control,
     DecodeError, Hello, InputEvent, MAX_BLOCKLIST, MAX_INPUT_BATCH, Monitor, PointerButton, Preset,
     ProtocolError, RecordOptions, RecordingInfo, Role, RunningApp, Scaler, StoredRecording,
-    VideoSettings, decode, encode, version_compatible,
+    VideoSettings, WallpaperFit, decode, encode, version_compatible,
 };

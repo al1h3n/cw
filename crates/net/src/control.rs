@@ -163,11 +163,23 @@ pub trait AgentDevice {
         (false, "this device cannot lock for an exam".to_string())
     }
 
-    /// Sets this PC's desktop wallpaper to `image` (raw PNG/JPEG/BMP bytes). Returns whether it was
-    /// applied, and a reason if not. The default cannot change the wallpaper.
-    fn set_wallpaper(&self, from: &PeerInfo, image: &[u8]) -> (bool, String) {
-        let _ = (from, image);
+    /// Sets this PC's desktop wallpaper to `image` (raw PNG/JPEG/BMP bytes), laid out as `fit`.
+    /// Returns whether it was applied, and a reason if not. The default cannot change the wallpaper.
+    fn set_wallpaper(
+        &self,
+        from: &PeerInfo,
+        image: &[u8],
+        fit: proto::WallpaperFit,
+    ) -> (bool, String) {
+        let _ = (from, image, fit);
         (false, "this device cannot set its wallpaper".to_string())
+    }
+
+    /// Freezes (or releases) the student's own mouse and keyboard without the teacher taking control.
+    /// Returns whether input is now blocked, and a reason if not. The default cannot lock input.
+    fn set_screen_lock(&self, from: &PeerInfo, on: bool) -> (bool, String) {
+        let _ = (from, on);
+        (false, "this device cannot lock the screen".to_string())
     }
 
     /// Starts recording this PC's screen, returning what it is actually recording.
@@ -585,17 +597,48 @@ impl ControlSession {
         }
     }
 
-    /// Console side: set this PC's desktop wallpaper to `image`. Returns `(ok, problem)`.
+    /// Console side: set this PC's desktop wallpaper to `image`, laid out as `fit`. `(ok, problem)`.
     ///
     /// # Errors
     /// Stream failure, or an unexpected reply.
-    pub async fn set_wallpaper(&mut self, image: Vec<u8>) -> Result<(bool, String), EndpointError> {
-        write_message(&mut self.send, &Control::SetWallpaper { image }).await?;
+    pub async fn set_wallpaper(
+        &mut self,
+        image: Vec<u8>,
+        fit: proto::WallpaperFit,
+    ) -> Result<(bool, String), EndpointError> {
+        write_message(&mut self.send, &Control::SetWallpaper { image, fit }).await?;
         match read_message::<Control>(&mut self.recv).await? {
             Control::WallpaperSet { ok, problem } => Ok((ok, problem)),
             Control::Error(err) => Err(EndpointError::ControlRefused(err)),
             _ => Err(EndpointError::Protocol),
         }
+    }
+
+    /// Console side: freeze (or release) the student's own input without taking control.
+    /// Returns `(locked, problem)`.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn set_screen_lock(&mut self, on: bool) -> Result<(bool, String), EndpointError> {
+        write_message(&mut self.send, &Control::SetScreenLock { on }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::ScreenLockState { locked, problem } => Ok((locked, problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// The peer's direct IP address (host:port), if a direct path is open. Returns `None` while the
+    /// connection is still relay-only (no hole-punched path yet). Best-effort, for display.
+    #[must_use]
+    pub fn remote_ip(&self) -> Option<String> {
+        self.conn
+            .paths()
+            .iter()
+            .find_map(|path| match path.remote_addr() {
+                iroh::TransportAddr::Ip(addr) => Some(addr.to_string()),
+                _ => None,
+            })
     }
 
     /// Reads the reply both broadcast requests produce.
@@ -896,10 +939,11 @@ impl ControlSession {
     pub async fn serve(mut self, source: &impl AgentDevice) -> Result<(), EndpointError> {
         let result = self.serve_inner(source).await;
         // Whatever ended the session — a clean close, a write error, or an unexpected message — must
-        // not leave the student with their input blocked or a modifier stuck down because control was
-        // still on when the Console vanished. `set_control` is idempotent, so this is a no-op when
-        // control was never granted.
+        // not leave the student with their input blocked or a modifier stuck down because control or a
+        // screen lock was still on when the Console vanished. Both are idempotent, so releasing them is
+        // a no-op when neither was set. (A teacher who wants a lasting freeze re-applies on reconnect.)
         source.set_control(&self.peer, false);
+        source.set_screen_lock(&self.peer, false);
         result
     }
 
@@ -1034,9 +1078,17 @@ impl ControlSession {
                     let (active, problem) = source.set_exam(&self.peer, on, &message);
                     write_message(&mut self.send, &Control::ExamState { active, problem }).await?;
                 }
-                Control::SetWallpaper { image } => {
-                    let (ok, problem) = source.set_wallpaper(&self.peer, &image);
+                Control::SetWallpaper { image, fit } => {
+                    let (ok, problem) = source.set_wallpaper(&self.peer, &image, fit);
                     write_message(&mut self.send, &Control::WallpaperSet { ok, problem }).await?;
+                }
+                Control::SetScreenLock { on } => {
+                    let (locked, problem) = source.set_screen_lock(&self.peer, on);
+                    write_message(
+                        &mut self.send,
+                        &Control::ScreenLockState { locked, problem },
+                    )
+                    .await?;
                 }
                 Control::StartRecording { monitor, options } => {
                     let info = source.start_recording(&self.peer, monitor, options);
