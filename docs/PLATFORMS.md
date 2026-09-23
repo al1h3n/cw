@@ -30,6 +30,7 @@ cross-platform in principle; only the OS glue is missing.
 | Broadcast/exam **lockdown** desktop | `platform::present` / `platform::examlock` (`CreateDesktopW` + `SwitchDesktop`) | ✅ | ❌ n/a² | ❌ n/a² |
 | Wallpaper black-out | `platform::wallpaper` | ✅ | ❌ | ❌ |
 | Set a chosen wallpaper | `platform::wallpaper::set_image` (SPI_SETDESKWALLPAPER) | ✅ | ❌ stub³ | ❌ stub³ |
+| Focus an existing window (classroom switch) | `platform::window::focus` | ✅ | ❌ stub | ❌ stub |
 | Wake-on-LAN | `platform::wol` | ✅ (portable UDP) | likely ✅¹ | likely ✅¹ |
 | Service + per-session helper | `platform::service`, `platform::session` | ✅ (unverified, see §8 checklist) | ❌ | ❌ |
 | Console GUI (Tauri) | `crates/console` | ✅ | build not yet exercised | build not yet exercised |

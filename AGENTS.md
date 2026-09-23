@@ -6,6 +6,27 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-23, later — exam timer, wallpaper reset, classroom focus; `PROTOCOL_VERSION` 20):**
+- **Timed exam lock (AI "lock for 10 s" no longer locks forever):** `proto::Control::SetExam` gained a
+  `duration_seconds`; the **Agent** enforces the auto-release itself (a generation-guarded thread on
+  `ScreenCapture`, so a manual release or a fresh lock cancels a pending timer), which means a timed
+  lock ends even if the Console or the MCP process that started it has exited. Threaded through
+  `net::ControlSession::set_exam`, `manager::set_exam`, the Tauri/web `set_exam` (optional, default 0 =
+  until released), the MCP `set_exam` tool and Surey's `set_exam`.
+- **Reset wallpaper to default:** new closed `proto::Action::ResetWallpaper` →
+  `platform::wallpaper::reset_to_default`, which restores the student's own captured wallpaper, else the
+  Windows default image (`%WINDIR%\Web\Wallpaper\…\img0.jpg`), and forgets every override — so it works
+  even when nothing was locked (the earlier "AI couldn't set the wallpaper back to default" case, where
+  `unlock-wallpaper` only reverts an existing override). In both Console Restrictions menus, the MCP
+  `perform_action` and Surey `power_action` (`reset-wallpaper`).
+- **Classroom switch focuses an open window instead of opening a second one:** each console records its
+  window handle for its classroom (`classroom::record_window`, cleared on `Destroyed`); `switch_classroom`
+  focuses it via the new `platform::window::focus` (validates with `IsWindow`) when present, else spawns.
+- **Still open / documented as planned:** file transfer to/from student PCs (the channel features 7 and
+  14 need), collect-and-delete-specific student files (feature 7), and preloaded synchronised play-once
+  media (feature 14) — each its own batch (see `docs/FEATURES.md`).
+- Gates green: fmt, clippy `-D warnings`, **223 tests**, vite build, `cargo deny`.
+
 **Status (2026-09-23, later — screenshot / input-unblock / icon fixes):**
 - **Screenshot capture fixed (`media::windows_capture`):** the Screenshot button failed with "that
   PC's screen could not be captured right now" because at native resolution the mip level is 0 but the
