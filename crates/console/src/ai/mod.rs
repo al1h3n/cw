@@ -8,6 +8,7 @@
 pub mod client;
 pub mod provider;
 pub mod tools;
+pub mod transcribe;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -73,6 +74,9 @@ pub struct AiState {
     http: reqwest::Client,
     pending: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     next_id: AtomicU64,
+    /// Where recorded voice is transcribed (chat / dedicated endpoint / local program).
+    transcribe_store: transcribe::Store,
+    transcribe: Mutex<transcribe::TranscribeConfig>,
 }
 
 impl AiState {
@@ -81,13 +85,48 @@ impl AiState {
     pub fn load(data_dir: &std::path::Path) -> Self {
         let store = Store::new(data_dir);
         let config = store.load_config();
+        let transcribe_store = transcribe::Store::new(data_dir);
+        let transcribe_config = transcribe_store.load_config();
         Self {
             store,
             config: Mutex::new(config),
             http: reqwest::Client::new(),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
+            transcribe_store,
+            transcribe: Mutex::new(transcribe_config),
         }
+    }
+
+    /// The current transcription config as a UI view (no key).
+    #[must_use]
+    pub fn transcribe_view(&self) -> transcribe::TranscribeView {
+        let config = self.transcribe.lock().unwrap_or_else(|e| e.into_inner());
+        transcribe::TranscribeView {
+            mode: config.mode,
+            url: config.url.clone(),
+            model: config.model.clone(),
+            bin: config.bin.clone(),
+            args: config.args.clone(),
+            has_key: self.transcribe_store.has_key(),
+        }
+    }
+
+    /// Saves the transcription config (and its key when `key` is `Some`; `Some("")` clears it).
+    ///
+    /// # Errors
+    /// If persisting the config or key fails.
+    pub fn set_transcribe_config(
+        &self,
+        config: transcribe::TranscribeConfig,
+        key: Option<String>,
+    ) -> Result<(), String> {
+        self.transcribe_store.save_config(&config)?;
+        if let Some(key) = key {
+            self.transcribe_store.set_key(key.trim())?;
+        }
+        *self.transcribe.lock().unwrap_or_else(|e| e.into_inner()) = config;
+        Ok(())
     }
 
     /// The current config as a UI view (no key).
@@ -159,21 +198,61 @@ impl AiState {
         Ok(ids)
     }
 
-    /// Transcribes recorded audio to text via the endpoint's `/audio/transcriptions` (Whisper-shape).
+    /// Transcribes recorded audio to text using the teacher's chosen backend (chat endpoint, a
+    /// dedicated Whisper-shape endpoint, or a local program). See [`transcribe`].
     ///
     /// # Errors
-    /// Network failure, a non-success status, or the endpoint does not do transcription.
+    /// The chosen backend is unset/incomplete, a network or program failure, or it returns no text.
     pub async fn transcribe(&self, audio: Vec<u8>, filename: String) -> Result<String, String> {
-        let (base, key) = {
-            let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
-            (config.trimmed_base(), self.store.get_key())
-        };
+        let config = self
+            .transcribe
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        match config.mode {
+            transcribe::TranscribeMode::Local => {
+                transcribe::run_local(&config, &audio, &filename).await
+            }
+            transcribe::TranscribeMode::Endpoint => {
+                let base = config.url.trim().trim_end_matches('/');
+                if base.is_empty() {
+                    return Err("no transcription endpoint is set (Surey settings → Voice)".into());
+                }
+                self.http_transcribe(
+                    base,
+                    self.transcribe_store.get_key(),
+                    &config.model_or_default(),
+                    audio,
+                    filename,
+                )
+                .await
+            }
+            transcribe::TranscribeMode::Chat => {
+                let (base, key) = {
+                    let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+                    (config.trimmed_base(), self.store.get_key())
+                };
+                self.http_transcribe(&base, key, "whisper-1", audio, filename)
+                    .await
+            }
+        }
+    }
+
+    /// Posts audio to a Whisper-shape `/audio/transcriptions` endpoint and returns the text.
+    async fn http_transcribe(
+        &self,
+        base: &str,
+        key: Option<String>,
+        model: &str,
+        audio: Vec<u8>,
+        filename: String,
+    ) -> Result<String, String> {
         let part = reqwest::multipart::Part::bytes(audio)
             .file_name(filename)
             .mime_str("application/octet-stream")
             .map_err(|e| e.to_string())?;
         let form = reqwest::multipart::Form::new()
-            .text("model", "whisper-1")
+            .text("model", model.to_string())
             .part("file", part);
         let mut request = self
             .http
@@ -185,7 +264,8 @@ impl AiState {
         let response = request.send().await.map_err(|e| e.to_string())?;
         if !response.status().is_success() {
             return Err(format!(
-                "transcription returned {} (does this endpoint support Whisper?)",
+                "transcription returned {} (does this endpoint support Whisper? \
+                 set a dedicated endpoint or a local program in Surey settings → Voice)",
                 response.status()
             ));
         }

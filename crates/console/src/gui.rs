@@ -1100,7 +1100,7 @@ fn ai_choice_reply(state: State<'_, AppState>, id: String, value: String) -> boo
     state.ai.resolve_choice(&id, value)
 }
 
-/// Transcribes recorded voice audio to text via the endpoint's Whisper-shape transcription API.
+/// Transcribes recorded voice audio to text using the chosen backend (chat / endpoint / local).
 #[tauri::command]
 async fn ai_transcribe(
     state: State<'_, AppState>,
@@ -1108,6 +1108,22 @@ async fn ai_transcribe(
     filename: String,
 ) -> Result<String, String> {
     state.ai.transcribe(audio, filename).await
+}
+
+/// The current voice-transcription config for the settings panel (never the key).
+#[tauri::command]
+fn ai_transcribe_config(state: State<'_, AppState>) -> crate::ai::transcribe::TranscribeView {
+    state.ai.transcribe_view()
+}
+
+/// Saves the voice-transcription config. `key` = `None` keeps the stored key, `Some("")` clears it.
+#[tauri::command]
+fn ai_set_transcribe_config(
+    state: State<'_, AppState>,
+    config: crate::ai::transcribe::TranscribeConfig,
+    key: Option<String>,
+) -> Result<(), String> {
+    state.ai.set_transcribe_config(config, key)
 }
 
 // ---- Co-watcher subscription (placeholder) -----------------------------------------------------
@@ -1301,6 +1317,8 @@ pub fn run(
             ai_send,
             ai_choice_reply,
             ai_transcribe,
+            ai_transcribe_config,
+            ai_set_transcribe_config,
             subscription_config,
             subscription_set,
             open_dashboard,

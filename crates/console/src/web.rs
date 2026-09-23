@@ -524,6 +524,10 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
             .ai
             .transcribe(arg(a, "audio")?, arg(a, "filename")?)
             .await?),
+        "ai_transcribe_config" => ok(state.ai.transcribe_view()),
+        "ai_set_transcribe_config" => {
+            ok(state.ai.set_transcribe_config(arg(a, "config")?, arg(a, "key")?)?)
+        }
 
         // ---- subscription + cloud ----
         "subscription_config" => ok(state.subscription.view()),

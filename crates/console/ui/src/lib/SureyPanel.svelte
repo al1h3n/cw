@@ -210,6 +210,19 @@
   let models = $state<string[]>([])
   let settingsMsg = $state('')
 
+  // ---- voice transcription backend -------------------------------------------------------------
+  type Transcribe = {
+    mode: 'chat' | 'endpoint' | 'local'
+    url: string
+    model: string
+    bin: string
+    args: string
+    has_key: boolean
+  }
+  let tr = $state<Transcribe>({ mode: 'chat', url: '', model: '', bin: '', args: '', has_key: false })
+  let trKey = $state('')
+  let trMsg = $state('')
+
   // ---- Co-Watcher subscription (placeholder; endpoint wired later) ------------------------------
   type Sub = { dashboard_url: string; has_license: boolean; plan: string }
   let sub = $state<Sub>({ dashboard_url: '', has_license: false, plan: 'free' })
@@ -223,9 +236,29 @@
       settingsMsg = String(e)
     }
     try {
+      tr = await invoke<Transcribe>('ai_transcribe_config')
+    } catch {
+      /* keep defaults */
+    }
+    try {
       sub = await invoke<Sub>('subscription_config')
     } catch {
       /* placeholder unavailable */
+    }
+  }
+
+  async function saveTranscribe() {
+    trMsg = ''
+    try {
+      await invoke('ai_set_transcribe_config', {
+        config: { mode: tr.mode, url: tr.url, model: tr.model, bin: tr.bin, args: tr.args },
+        key: trKey ? trKey : null,
+      })
+      trKey = ''
+      tr = await invoke<Transcribe>('ai_transcribe_config')
+      trMsg = t('sureySaved')
+    } catch (e) {
+      trMsg = String(e)
     }
   }
 
@@ -452,6 +485,50 @@
       <div class="srow">
         <button class="primary" onclick={saveConfig}>{t('sureySave')}</button>
         <span class="smsg">{settingsMsg}</span>
+      </div>
+
+      <div class="subcard">
+        <h3>{t('voiceTitle')}</h3>
+        <p class="hint">{t('voiceLead')}</p>
+        <label>
+          {t('voiceMode')}
+          <select bind:value={tr.mode}>
+            <option value="chat">{t('voiceModeChat')}</option>
+            <option value="endpoint">{t('voiceModeEndpoint')}</option>
+            <option value="local">{t('voiceModeLocal')}</option>
+          </select>
+        </label>
+        {#if tr.mode === 'endpoint'}
+          <label>
+            {t('sureyBaseUrl')}
+            <input bind:value={tr.url} placeholder="http://localhost:8080/v1" />
+          </label>
+          <label>
+            {t('sureyModel')}
+            <input bind:value={tr.model} placeholder="whisper-1" />
+          </label>
+          <label>
+            {t('sureyApiKey')}
+            <input type="password" bind:value={trKey} placeholder={tr.has_key ? t('sureyKeySet') : t('voiceKeyOptional')} />
+          </label>
+          <p class="hint">{t('voiceEndpointHint')}</p>
+        {:else if tr.mode === 'local'}
+          <label>
+            {t('voiceBin')}
+            <input bind:value={tr.bin} placeholder="C:\\tools\\whisper\\whisper-cli.exe" />
+          </label>
+          <label>
+            {t('voiceArgs')}
+            <input bind:value={tr.args} placeholder={'-otxt -of {out} -f {in}'} />
+          </label>
+          <p class="hint">{t('voiceLocalHint')}</p>
+        {:else}
+          <p class="hint">{t('voiceChatHint')}</p>
+        {/if}
+        <div class="srow">
+          <button class="primary" onclick={saveTranscribe}>{t('sureySave')}</button>
+          <span class="smsg">{trMsg}</span>
+        </div>
       </div>
 
       <div class="subcard">
