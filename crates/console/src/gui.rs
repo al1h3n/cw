@@ -441,8 +441,12 @@ async fn set_exam(
     device_id: String,
     on: bool,
     message: String,
+    duration_seconds: Option<u32>,
 ) -> Result<(bool, String), String> {
-    state.manager.set_exam(&device_id, on, &message).await
+    state
+        .manager
+        .set_exam(&device_id, on, &message, duration_seconds.unwrap_or(0))
+        .await
 }
 
 /// Sets the desktop wallpaper on the chosen PCs (or every connected PC when `targets` is empty) to
@@ -1217,8 +1221,14 @@ fn create_classroom(
 /// teacher can watch several labs at once. Switching is deliberately a new instance (AGENTS feature 1).
 #[tauri::command]
 fn switch_classroom(state: State<'_, AppState>, slug: String) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     crate::classroom::remember(&state.base_dir, &slug);
+    // If a console window for this classroom is already open, focus it instead of opening a second one.
+    if let Some(handle) = crate::classroom::open_window(&state.base_dir, &slug)
+        && platform::window::focus(handle)
+    {
+        return Ok(());
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut command = std::process::Command::new(exe);
     command.arg("--classroom").arg(&slug);
     #[cfg(windows)]
@@ -1290,6 +1300,12 @@ pub fn run(
     classroom: String,
 ) -> Result<(), String> {
     let manager = Arc::new(DeviceManager::load(&data_dir)?);
+    // Clones for the window-lifecycle closures: record this classroom's window handle so switching to
+    // an already-open classroom focuses it instead of opening a second window, and clear it on close.
+    let setup_base = base_dir.clone();
+    let setup_classroom = classroom.clone();
+    let event_base = base_dir.clone();
+    let event_classroom = classroom.clone();
     tauri::Builder::default()
         .setup(move |app| {
             app.manage(AppState {
@@ -1304,7 +1320,27 @@ pub fn run(
                 base_dir: base_dir.clone(),
                 classroom: classroom.clone(),
             });
+            // Record the OS window handle so another instance switching to this classroom can focus it.
+            #[cfg(windows)]
+            if let Some(win) = app.get_webview_window("main")
+                && let Ok(hwnd) = win.hwnd()
+            {
+                crate::classroom::record_window(
+                    &setup_base,
+                    &setup_classroom,
+                    hwnd.0 as usize as u64,
+                );
+            }
+            #[cfg(not(windows))]
+            let _ = (&setup_base, &setup_classroom);
             Ok(())
+        })
+        .on_window_event(move |_window, event| {
+            // Forget the recorded handle when the window closes, so a stale one never wins over a live
+            // instance later.
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                crate::classroom::clear_window(&event_base, &event_classroom);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             console_info,

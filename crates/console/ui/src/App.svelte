@@ -124,8 +124,8 @@
       }
     }
   }
-  /** Apply the wallpaper-change policy (lock/unlock) to every connected PC. */
-  async function wallpaperPolicy(action: 'lock-wallpaper' | 'unlock-wallpaper') {
+  /** Apply the wallpaper-change policy (lock/unlock/reset) to every connected PC. */
+  async function wallpaperPolicy(action: 'lock-wallpaper' | 'unlock-wallpaper' | 'reset-wallpaper') {
     try {
       await invoke('perform', { deviceId: null, action, delaySeconds: 0 })
     } catch (e) {
@@ -502,6 +502,9 @@
         </button>
         <button class="mi" onclick={() => wallpaperPolicy('unlock-wallpaper')} disabled={!watching}>
           <Icon name="image" />{t('actUnlockWallpaper')}
+        </button>
+        <button class="mi" onclick={() => wallpaperPolicy('reset-wallpaper')} disabled={!watching}>
+          <Icon name="image" />{t('actResetWallpaper')}
         </button>
         <span class="sep"></span>
         <button class="mi" onclick={() => (editingBlocklist = true)}>

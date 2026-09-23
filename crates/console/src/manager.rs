@@ -110,6 +110,7 @@ pub fn parse_action(name: &str, delay_seconds: u16) -> Option<proto::Action> {
         Action::CancelShutdown,
         Action::LockWallpaper,
         Action::UnlockWallpaper,
+        Action::ResetWallpaper,
     ]
     .into_iter()
     .find(|action| action.name() == name)
@@ -177,6 +178,8 @@ enum DeviceRequest {
     SetExam {
         on: bool,
         message: String,
+        /// Auto-release after this many seconds (0 = until released).
+        duration_seconds: u32,
         reply: tokio::sync::oneshot::Sender<(bool, String)>,
     },
     /// Show one broadcast frame on this PC; the reply is `(showing, problem)`.
@@ -750,11 +753,13 @@ impl DeviceManager {
         device_id: &str,
         on: bool,
         message: &str,
+        duration_seconds: u32,
     ) -> Result<(bool, String), String> {
         let message = message.to_string();
         self.ask(device_id, move |reply| DeviceRequest::SetExam {
             on,
             message,
+            duration_seconds,
             reply,
         })
         .await
@@ -1319,9 +1324,14 @@ impl DeviceManager {
                         let closed = session.close_app(pid).await.map_err(|e| e.to_string())?;
                         let _ = reply.send(closed);
                     }
-                    DeviceRequest::SetExam { on, message, reply } => {
+                    DeviceRequest::SetExam {
+                        on,
+                        message,
+                        duration_seconds,
+                        reply,
+                    } => {
                         let state = session
-                            .set_exam(on, message)
+                            .set_exam(on, message, duration_seconds)
                             .await
                             .map_err(|e| e.to_string())?;
                         let _ = reply.send(state);

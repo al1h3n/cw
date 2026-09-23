@@ -158,8 +158,17 @@ pub trait AgentDevice {
 
     /// Starts or ends exam lockdown (a fullscreen lock on a separate desktop). Returns whether the
     /// PC is now locked, and a reason if it could not be. The default cannot lock.
-    fn set_exam(&self, from: &PeerInfo, on: bool, message: &str) -> (bool, String) {
-        let _ = (from, on, message);
+    ///
+    /// `duration_seconds` of 0 means "until released"; a positive value asks the device to auto-release
+    /// the lock after that long, enforced by the device itself so it ends even if the Console goes away.
+    fn set_exam(
+        &self,
+        from: &PeerInfo,
+        on: bool,
+        message: &str,
+        duration_seconds: u32,
+    ) -> (bool, String) {
+        let _ = (from, on, message, duration_seconds);
         (false, "this device cannot lock for an exam".to_string())
     }
 
@@ -588,8 +597,17 @@ impl ControlSession {
         &mut self,
         on: bool,
         message: String,
+        duration_seconds: u32,
     ) -> Result<(bool, String), EndpointError> {
-        write_message(&mut self.send, &Control::SetExam { on, message }).await?;
+        write_message(
+            &mut self.send,
+            &Control::SetExam {
+                on,
+                message,
+                duration_seconds,
+            },
+        )
+        .await?;
         match read_message::<Control>(&mut self.recv).await? {
             Control::ExamState { active, problem } => Ok((active, problem)),
             Control::Error(err) => Err(EndpointError::ControlRefused(err)),
@@ -1074,8 +1092,13 @@ impl ControlSession {
                     )
                     .await?;
                 }
-                Control::SetExam { on, message } => {
-                    let (active, problem) = source.set_exam(&self.peer, on, &message);
+                Control::SetExam {
+                    on,
+                    message,
+                    duration_seconds,
+                } => {
+                    let (active, problem) =
+                        source.set_exam(&self.peer, on, &message, duration_seconds);
                     write_message(&mut self.send, &Control::ExamState { active, problem }).await?;
                 }
                 Control::SetWallpaper { image, fit } => {

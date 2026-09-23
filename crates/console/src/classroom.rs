@@ -189,6 +189,35 @@ pub fn remember(base: &Path, slug: &str) {
     let _ = std::fs::write(base.join("last-classroom.txt"), slug);
 }
 
+/// The file inside a classroom directory that records the OS window handle of the console instance
+/// currently showing it, so switching to an already-open classroom can focus that window instead of
+/// opening a second one.
+fn window_lock_path(base: &Path, slug: &str) -> PathBuf {
+    dir_for(base, slug).join("window.lock")
+}
+
+/// Records the native window handle of the console showing this classroom (called at startup).
+pub fn record_window(base: &Path, slug: &str, handle: u64) {
+    let dir = dir_for(base, slug);
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(window_lock_path(base, slug), handle.to_string());
+}
+
+/// The window handle recorded for a classroom, if any instance registered one. Stale handles (from a
+/// closed instance) are the caller's problem to validate — see [`platform::window::focus`].
+#[must_use]
+pub fn open_window(base: &Path, slug: &str) -> Option<u64> {
+    std::fs::read_to_string(window_lock_path(base, slug))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&h| h != 0)
+}
+
+/// Forgets the recorded window handle for a classroom (called when its window closes).
+pub fn clear_window(base: &Path, slug: &str) {
+    let _ = std::fs::remove_file(window_lock_path(base, slug));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

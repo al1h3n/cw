@@ -3,7 +3,14 @@
 //! Keeping the trait in `net` and the implementation here means `media` stays a standalone capture
 //! crate with no knowledge of the network, and the Agent binary is the only place the two meet.
 
-use std::{path::Path, sync::Mutex, time::Duration};
+use std::{
+    path::Path,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use net::{AgentDevice, CaptureError, PeerInfo};
 use proto::{Action, ActionFailure, ActionOutcome};
@@ -33,7 +40,12 @@ pub struct ScreenCapture {
     /// The full-screen broadcast window, while a teacher is presenting. Dropping it closes it.
     broadcast: Mutex<Option<platform::present::Presenter>>,
     /// The exam lock, while the PC is locked down for an exam. Dropping it restores the desktop.
-    exam: Mutex<Option<platform::examlock::ExamLock>>,
+    /// Behind an `Arc` so a timed lock's auto-release thread can drop it after the requested duration
+    /// even if the Console has since disconnected.
+    exam: Arc<Mutex<Option<platform::examlock::ExamLock>>>,
+    /// Bumped on every exam change. A timed auto-release only fires if this still matches the value it
+    /// captured when it was armed, so a manual release (or a fresh lock) cancels an earlier timer.
+    exam_gen: Arc<AtomicU64>,
     /// Where recordings are written.
     recordings_dir: std::path::PathBuf,
     /// True while a teacher is watching and the wallpaper is blacked out (D11).
@@ -94,7 +106,8 @@ impl ScreenCapture {
             screen_locked: Mutex::new(false),
             recording: Mutex::new(None),
             broadcast: Mutex::new(None),
-            exam: Mutex::new(None),
+            exam: Arc::new(Mutex::new(None)),
+            exam_gen: Arc::new(AtomicU64::new(0)),
             recordings_dir: recordings_dir.to_path_buf(),
             watched: Mutex::new(false),
             watch_locked_wp: Mutex::new(false),
@@ -213,6 +226,9 @@ fn carry_out(action: Action) -> ActionOutcome {
                 }
             };
         }
+        // The reset itself needs the wallpaper save-path, which lives on `self`, so it is carried out
+        // in `perform`; report success here and let `perform` downgrade it if the reset fails.
+        Action::ResetWallpaper => return ActionOutcome::Started { delay_seconds: 0 },
     };
     match result {
         Ok(delay_seconds) => ActionOutcome::Started { delay_seconds },
@@ -230,11 +246,19 @@ fn carry_out(action: Action) -> ActionOutcome {
 
 impl AgentDevice for ScreenCapture {
     fn perform(&self, from: &PeerInfo, action: Action) -> ActionOutcome {
-        let outcome = carry_out(action);
+        let mut outcome = carry_out(action);
         // Turning wallpaper lock off also puts the student's own wallpaper back and forgets any pushed
         // image (bug: "wallpapers should go back to default when wallpaper lock is turned off").
         if matches!(action, Action::UnlockWallpaper) {
             let _ = platform::wallpaper::revert(&self.wallpaper_save);
+        }
+        // Reset-to-default actively puts the wallpaper back (student's own if captured, else the Windows
+        // default) even when nothing was locked — what "set the wallpaper back to default" needs.
+        if matches!(action, Action::ResetWallpaper)
+            && let Err(err) = platform::wallpaper::reset_to_default(&self.wallpaper_save)
+        {
+            eprintln!("reset wallpaper failed: {err}");
+            outcome = ActionOutcome::Failed(ActionFailure::Failed);
         }
         if let Err(err) =
             self.audit
@@ -462,7 +486,15 @@ impl AgentDevice for ScreenCapture {
         (false, String::new())
     }
 
-    fn set_exam(&self, from: &PeerInfo, on: bool, message: &str) -> (bool, String) {
+    fn set_exam(
+        &self,
+        from: &PeerInfo,
+        on: bool,
+        message: &str,
+        duration_seconds: u32,
+    ) -> (bool, String) {
+        // Any exam change (start, restart or release) invalidates a pending auto-release timer.
+        let generation = self.exam_gen.fetch_add(1, Ordering::SeqCst) + 1;
         let mut slot = self.exam.lock().unwrap_or_else(|e| e.into_inner());
         if on {
             // Replacing any current lock with a fresh one keeps a single lock desktop at a time.
@@ -470,10 +502,34 @@ impl AgentDevice for ScreenCapture {
             match platform::examlock::ExamLock::start(message) {
                 Ok(lock) => {
                     *slot = Some(lock);
-                    println!("console {} started exam lock", from.device_id);
+                    println!(
+                        "console {} started exam lock ({})",
+                        from.device_id,
+                        if duration_seconds == 0 {
+                            "until released".to_string()
+                        } else {
+                            format!("{duration_seconds}s")
+                        }
+                    );
                     let _ = self
                         .audit
                         .note(net::endpoint::now_ms(), from.device_id, "exam-start");
+                    // A timed lock releases itself after the requested duration, so an AI/MCP "lock for
+                    // 10 s" ends even if the Console (or the MCP process) has gone away by then. The
+                    // generation check makes a manual release or a fresh lock cancel this timer.
+                    if duration_seconds > 0 {
+                        let exam = Arc::clone(&self.exam);
+                        let exam_gen = Arc::clone(&self.exam_gen);
+                        std::thread::spawn(move || {
+                            std::thread::sleep(Duration::from_secs(u64::from(duration_seconds)));
+                            if exam_gen.load(Ordering::SeqCst) == generation {
+                                let mut slot = exam.lock().unwrap_or_else(|e| e.into_inner());
+                                if slot.take().is_some() {
+                                    println!("exam lock auto-released after {duration_seconds}s");
+                                }
+                            }
+                        });
+                    }
                     (true, String::new())
                 }
                 Err(err) => (false, err.to_string()),

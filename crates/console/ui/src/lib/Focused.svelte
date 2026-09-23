@@ -63,7 +63,7 @@
     }
   }
 
-  async function wallpaperPolicy(action: 'lock-wallpaper' | 'unlock-wallpaper') {
+  async function wallpaperPolicy(action: 'lock-wallpaper' | 'unlock-wallpaper' | 'reset-wallpaper') {
     try {
       await invoke('perform', { deviceId: device.device_id, action, delaySeconds: 0 })
     } catch (e) {
@@ -373,6 +373,9 @@
           onclick={() => wallpaperPolicy('unlock-wallpaper')}
         >
           <Icon name="image" />{t('actUnlockWallpaper')}{device.wallpaper_locked === false ? ` — ${t('wallpaperUnlocked')}` : ''}
+        </button>
+        <button class="mi" onclick={() => wallpaperPolicy('reset-wallpaper')} disabled={device.status !== 'live'}>
+          <Icon name="image" />{t('actResetWallpaper')}
         </button>
         <span class="sep"></span>
         <button class="mi" onclick={() => (showApps = true)}>

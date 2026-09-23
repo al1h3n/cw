@@ -397,7 +397,12 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
         }
         "set_exam" => {
             let (locked, problem) = m
-                .set_exam(&arg::<String>(a, "deviceId")?, arg(a, "on")?, &arg::<String>(a, "message")?)
+                .set_exam(
+                    &arg::<String>(a, "deviceId")?,
+                    arg(a, "on")?,
+                    &arg::<String>(a, "message")?,
+                    arg::<Option<u32>>(a, "durationSeconds")?.unwrap_or(0),
+                )
                 .await?;
             ok(json!([locked, problem]))
         }

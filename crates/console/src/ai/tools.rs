@@ -27,7 +27,7 @@ pub fn specs() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "targets": { "type": "array", "items": { "type": "string" }, "description": "device_ids to act on; empty = all connected." },
-                    "action": { "type": "string", "enum": ["shutdown", "reboot", "log-off", "lock-screen", "cancel-shutdown", "lock-wallpaper", "unlock-wallpaper"] },
+                    "action": { "type": "string", "enum": ["shutdown", "reboot", "log-off", "lock-screen", "cancel-shutdown", "lock-wallpaper", "unlock-wallpaper", "reset-wallpaper"] },
                     "delay_seconds": { "type": "integer", "minimum": 0, "maximum": 3600 }
                 },
                 "required": ["action"]
@@ -35,13 +35,14 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "set_exam".into(),
-            description: "Start or end exam lockdown on one PC (fullscreen lock on a separate desktop).".into(),
+            description: "Start or end exam lockdown on one PC (fullscreen lock on a separate desktop). Pass duration_seconds to auto-release after that long (0 = until you end it); the PC enforces the timer itself, so a timed lock ends even if this app closes.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "device_id": device_id,
                     "on": { "type": "boolean" },
-                    "message": { "type": "string" }
+                    "message": { "type": "string" },
+                    "duration_seconds": { "type": "integer", "minimum": 0, "maximum": 86400, "description": "Auto-release after this many seconds; 0 = until ended." }
                 },
                 "required": ["device_id", "on"]
             }),
@@ -166,7 +167,12 @@ pub async fn execute(manager: &DeviceManager, name: &str, args: &Value) -> Resul
                 .and_then(Value::as_bool)
                 .ok_or("missing boolean 'on'")?;
             let message = args.get("message").and_then(Value::as_str).unwrap_or("");
-            let (locked, problem) = manager.set_exam(id, on, message).await?;
+            let duration_seconds = args
+                .get("duration_seconds")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(0);
+            let (locked, problem) = manager.set_exam(id, on, message, duration_seconds).await?;
             Ok(json!({ "locked": locked, "problem": problem }))
         }
         "list_apps" => {

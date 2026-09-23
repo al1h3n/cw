@@ -86,7 +86,8 @@ pub fn line(at_ms: u64, console: DeviceId, action: Action, outcome: ActionOutcom
         | Action::LockScreen
         | Action::CancelShutdown
         | Action::LockWallpaper
-        | Action::UnlockWallpaper => "-".to_string(),
+        | Action::UnlockWallpaper
+        | Action::ResetWallpaper => "-".to_string(),
     };
     let result = match outcome {
         ActionOutcome::Started { delay_seconds } => format!("started in {delay_seconds}s"),

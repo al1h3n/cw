@@ -351,6 +351,11 @@ pub enum Action {
     LockWallpaper,
     /// Let the student change their wallpaper again.
     UnlockWallpaper,
+    /// Put the desktop wallpaper back to normal: the student's own wallpaper if it was captured before
+    /// an override, otherwise the Windows default image. Also forgets any pushed image so nothing
+    /// re-applies later. Unlike [`Self::UnlockWallpaper`] this changes the wallpaper even when nothing
+    /// was locked, which is what "set the wallpaper back to default" needs.
+    ResetWallpaper,
 }
 
 impl Action {
@@ -365,6 +370,7 @@ impl Action {
             Self::CancelShutdown => "cancel-shutdown",
             Self::LockWallpaper => "lock-wallpaper",
             Self::UnlockWallpaper => "unlock-wallpaper",
+            Self::ResetWallpaper => "reset-wallpaper",
         }
     }
 
@@ -596,6 +602,10 @@ pub enum Control {
         on: bool,
         /// The message shown on the lock (ignored when `on` is false).
         message: String,
+        /// Auto-release the lock after this many seconds. `0` means "until released" (the old
+        /// behaviour). The Agent enforces the timer itself, so a timed lock ends even if the Console
+        /// disconnects or the AI/MCP process that started it exits (bug: "lock for 10 s locked forever").
+        duration_seconds: u32,
     },
     /// Agent → Console: whether the PC is locked, and why not if the request failed.
     ExamState {
@@ -880,6 +890,12 @@ mod tests {
                 refused: false,
             },
             Control::Perform(Action::Shutdown { delay_seconds: 60 }),
+            Control::Perform(Action::ResetWallpaper),
+            Control::SetExam {
+                on: true,
+                message: "Exam in progress".into(),
+                duration_seconds: 600,
+            },
             Control::ActionDone {
                 action: Action::LockScreen,
                 outcome: ActionOutcome::Started { delay_seconds: 0 },
@@ -905,6 +921,7 @@ mod tests {
             Action::CancelShutdown,
             Action::LockWallpaper,
             Action::UnlockWallpaper,
+            Action::ResetWallpaper,
         ];
         let mut names: Vec<&str> = actions.iter().map(|a| a.name()).collect();
         names.sort_unstable();

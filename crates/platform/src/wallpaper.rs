@@ -161,6 +161,20 @@ pub fn revert(save_path: &std::path::Path) -> Result<(), WallpaperError> {
     imp::revert(save_path)
 }
 
+/// Puts the wallpaper back to "default", changing it even when nothing was locked.
+///
+/// Prefers the student's **own** wallpaper if it was captured before an override; otherwise falls back
+/// to the Windows default image (`%WINDIR%\Web\Wallpaper\…\img0.jpg`), and clears the wallpaper only if
+/// even that cannot be found. Every override (pushed image, sticky marker, black-out save, the original
+/// snapshot) is forgotten so nothing re-applies later. This is what "set the wallpaper back to default"
+/// (from the Console menu or the AI) calls — unlike [`revert`], it never silently does nothing.
+///
+/// # Errors
+/// [`WallpaperError::Os`] if pointing the desktop at the wallpaper fails.
+pub fn reset_to_default(save_path: &std::path::Path) -> Result<(), WallpaperError> {
+    imp::reset_to_default(save_path)
+}
+
 /// Re-applies the last pushed wallpaper, if any, from the sticky marker written by [`set_image`].
 ///
 /// A teacher's pushed wallpaper is meant to *stay*, including across a reboot (e.g. one triggered to
@@ -388,6 +402,52 @@ mod imp {
         }
     }
 
+    /// The Windows default desktop wallpaper file, if one of the well-known paths exists.
+    fn windows_default_wallpaper() -> Option<String> {
+        let windir = std::env::var("WINDIR")
+            .or_else(|_| std::env::var("SystemRoot"))
+            .ok()?;
+        for rel in [
+            "Web\\Wallpaper\\Windows\\img0.jpg",
+            "Web\\Wallpaper\\img0.jpg",
+            "Web\\Wallpaper\\Theme1\\img1.jpg",
+        ] {
+            let candidate = Path::new(&windir).join(rel);
+            if candidate.exists() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+        None
+    }
+
+    pub fn reset_to_default(save_path: &Path) -> Result<(), WallpaperError> {
+        // Prefer the student's genuine wallpaper if we captured one before any override.
+        let original = original_path(save_path);
+        let own = std::fs::read_to_string(&original)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        // Forget every override so nothing re-applies later (same set of files as `revert`).
+        let _ = std::fs::remove_file(marker_path(save_path));
+        let _ = std::fs::remove_file(save_path);
+        let _ = std::fs::remove_file(save_path.with_extension("bmp"));
+        for ext in ["png", "jpg", "bmp", "gif"] {
+            let _ =
+                std::fs::remove_file(save_path.with_file_name(format!("wallpaper-chosen.{ext}")));
+        }
+        let _ = std::fs::remove_file(&original);
+        // The student's own wallpaper if we have it and it still exists, else the Windows default.
+        if let Some(path) = own
+            && Path::new(&path).exists()
+        {
+            return apply_wallpaper(&path);
+        }
+        match windows_default_wallpaper() {
+            Some(default) => apply_wallpaper(&default),
+            None => apply_wallpaper(""),
+        }
+    }
+
     pub fn set_image(image: &[u8], save_path: &Path, fit: Fit) -> Result<(), WallpaperError> {
         // An empty image means "no wallpaper": clear it and stop remembering any earlier choice.
         if image.is_empty() {
@@ -596,6 +656,10 @@ mod imp {
     }
 
     pub fn revert(_save_path: &std::path::Path) -> Result<(), WallpaperError> {
+        Ok(())
+    }
+
+    pub fn reset_to_default(_save_path: &std::path::Path) -> Result<(), WallpaperError> {
         Ok(())
     }
 

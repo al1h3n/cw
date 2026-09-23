@@ -9,7 +9,10 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 ///
 /// Bump it on every breaking change to message layout or meaning. Peers with different
 /// versions must refuse the session with a clear error instead of guessing.
-/// Version 19 added a `fit` to `SetWallpaper` and `SetScreenLock`/`ScreenLockState` (freeze a
+/// Version 20 added a `duration_seconds` to `SetExam` (the Agent auto-releases a timed lock, so an
+/// AI/MCP "lock for 10 s" no longer locks forever) and a `ResetWallpaper` action (put the wallpaper
+/// back to the student's own, else the Windows default);
+/// version 19 added a `fit` to `SetWallpaper` and `SetScreenLock`/`ScreenLockState` (freeze a
 /// student's input without taking control);
 /// version 18 added `FetchRunningIcon` (a running process's icon, replied via `AppIcon`);
 /// version 17 added a per-request JPEG `quality` to `RequestThumbnail` (compression separate from
@@ -24,7 +27,7 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 /// added remote mouse/keyboard input; version 2 added remote actions. Each shifted the later
 /// `Control` discriminants, so a peer on an older version would decode them as the wrong message and
 /// the handshake refuses it outright.
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// Default JPEG quality (`1..=100`) for screen thumbnails when the Console does not specify one, and
 /// what non-preview callers (diagnostics, the MCP screenshot tool) pass. 60 measured ~5–7 KB at

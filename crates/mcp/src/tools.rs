@@ -106,12 +106,13 @@ pub fn catalogue() -> Value {
             "perform_action",
             "Perform one power/lock action on a PC. DESTRUCTIVE actions (shutdown, reboot, log-off) \
              interrupt the student — confirm with the teacher first. Allowed actions: shutdown, \
-             reboot, log-off, lock-screen, cancel-shutdown, lock-wallpaper, unlock-wallpaper.",
+             reboot, log-off, lock-screen, cancel-shutdown, lock-wallpaper, unlock-wallpaper, \
+             reset-wallpaper (put the wallpaper back to the student's own, else the Windows default).",
             json!({
                 "device_id": device_id_prop(),
                 "action": {
                     "type": "string",
-                    "enum": ["shutdown", "reboot", "log-off", "lock-screen", "cancel-shutdown", "lock-wallpaper", "unlock-wallpaper"]
+                    "enum": ["shutdown", "reboot", "log-off", "lock-screen", "cancel-shutdown", "lock-wallpaper", "unlock-wallpaper", "reset-wallpaper"]
                 },
                 "delay_seconds": { "type": "integer", "minimum": 0, "maximum": 3600, "description": "Countdown for shutdown/reboot (default 0)." }
             }),
@@ -120,11 +121,14 @@ pub fn catalogue() -> Value {
         tool(
             "set_exam",
             "Start or end exam lockdown on a PC: a fullscreen lock on a separate desktop the student \
-             cannot Alt+Tab or Win-key away from. This seizes the student's screen — confirm intent.",
+             cannot Alt+Tab or Win-key away from. This seizes the student's screen — confirm intent. \
+             Pass duration_seconds to auto-release after that long; the PC enforces the timer itself, \
+             so a timed lock ends even if this server exits (0 = until you release it).",
             json!({
                 "device_id": device_id_prop(),
                 "on": { "type": "boolean", "description": "True to lock, false to release." },
-                "message": { "type": "string", "description": "Message shown on the lock (when on)." }
+                "message": { "type": "string", "description": "Message shown on the lock (when on)." },
+                "duration_seconds": { "type": "integer", "minimum": 0, "maximum": 86400, "description": "Auto-release after this many seconds (default 0 = until released)." }
             }),
             &["device_id", "on"],
         ),
@@ -298,9 +302,14 @@ pub async fn call(fleet: &Fleet, name: &str, args: &Value) -> Result<Vec<Value>,
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
+            let duration_seconds = args
+                .get("duration_seconds")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(0);
             let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
             let (locked, problem) = session
-                .set_exam(on, message)
+                .set_exam(on, message, duration_seconds)
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(vec![json_text(
@@ -373,6 +382,7 @@ fn build_action(name: &str, delay_seconds: u16) -> Option<proto::Action> {
         "cancel-shutdown" => Some(Action::CancelShutdown),
         "lock-wallpaper" => Some(Action::LockWallpaper),
         "unlock-wallpaper" => Some(Action::UnlockWallpaper),
+        "reset-wallpaper" => Some(Action::ResetWallpaper),
         _ => None,
     }
 }
