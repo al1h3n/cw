@@ -6,6 +6,27 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-23, later — blocklist + Surey polish):**
+- **OS-agnostic blocklist suggestions (`BlocklistDialog`):** the starter list was Windows-only and
+  factually wrong — `minecraft.exe` is not Minecraft Java (it runs as `javaw.exe`, sometimes
+  `java.exe`). Suggestions are now grouped by OS (Windows / macOS / Linux) using the real
+  *process* names the blocker matches (matching is case-insensitive and extension-agnostic), plus a
+  row of community-maintained, constantly-updated reference catalogs (SteamDB, PCGamingWiki,
+  ProcessLibrary) for finding any game's process name on any platform. Links open in the OS browser
+  via a new `open_link` console command (Tauri + web), which reuses `platform::browser::open`
+  (http(s) only), so it cannot become "run anything".
+- **Surey icons centred:** the launcher spark, composer mic and send glyphs are redrawn as single
+  shapes centred in their 24×24 box (mic/send now stroke icons like the rest of the panel), so they
+  sit dead-centre in their buttons.
+- **Surey works in the background:** closing the side tab used to unmount the panel, killing the
+  in-flight reply, any running tool loop and its listeners. The panel now stays mounted and is only
+  hidden, so a conversation keeps running in the background and reopens where it was; the launcher
+  pulses while Surey is still busy with the panel closed, and a hidden panel no longer eats
+  keystrokes from the main app. (Deeper multi-step "loops of work" that survive a full app restart
+  would need the agent loop state moved into Rust — a later batch.)
+- **Still open** (unchanged): file send/receive (feature 3), global-vs-local overrides + clock-
+  independent retention (feature 5), and the secure-desktop cluster (bugs 3/5/6).
+
 **Status (2026-09-23, testing batch: keybind, wallpaper, screenshot, voice):**
 - **Right Ctrl host key (bug 2):** the viewer's control toggle was `Ctrl+Alt+Esc`, which never worked to
   *take* control — `Alt+Esc` is a shell shortcut the OS eats before any window/hook sees it, so capture
