@@ -6,6 +6,21 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-23, later — file transfer + full MCP parity goal; `PROTOCOL_VERSION` 21):**
+- **File transfer to/from student PCs.** New wire messages `ListFiles`/`Files`, `FetchFile`/
+  `FileTransfer` (download on a uni-stream), `SendFile`/`FileSendReady`/`FileSent` (upload on a
+  uni-stream). All transfer is confined to a per-student **workspace** folder: `agent::workspace`
+  resolves every path against it and refuses anything that escapes (absolute, drive prefix, `..`), with
+  a canonicalised re-check for symlinks and unit tests (AGENTS §5). Default root `Co-watcher` in the
+  student profile, override `COWATCHER_WORKSPACE`. Console side: `manager::{list_files, download_file,
+  send_file}`, Tauri/web commands, and a **Files** dialog in the Content menu (browse, upload, download).
+- **AI reach.** The three tools are on the **MCP** (`list_files`, `fetch_file`, `send_file`) and Surey.
+  Recorded the standing goal in `crates/mcp/README.md`: **the MCP tool surface should mirror the full
+  Console capability set** — adding a console capability means adding the matching MCP tool in the same
+  change; the only current gap is the class-wide convenience wrappers (freeze-all/exam-all/record-all),
+  which an AI reproduces by iterating `list_devices`.
+- Gates green: fmt, clippy `-D warnings`, **228 tests**, vite build, `cargo deny`.
+
 **Status (2026-09-23, later — exam timer, wallpaper reset, classroom focus; `PROTOCOL_VERSION` 20):**
 - **Timed exam lock (AI "lock for 10 s" no longer locks forever):** `proto::Control::SetExam` gained a
   `duration_seconds`; the **Agent** enforces the auto-release itself (a generation-guarded thread on

@@ -177,15 +177,23 @@ and ffmpeg-based recording with download-to-teacher (#12). Elevation paths still
   window handle for its classroom; `switch_classroom` focuses that window instead of spawning a second
   process when one is already open (`platform::window::focus`, stale handles validated with `IsWindow`).
 
-### Planned next — file transfer and what needs it
+### Done 2026-09-23 (file transfer)
 
-Not built yet; documented here so the plan is explicit:
+`PROTOCOL_VERSION` is now **21**.
 
-- **File transfer to/from student PCs** (send a file into a chosen directory in Content; download a
-  file a student made, e.g. a Python script). New typed proto messages with **path-traversal /
-  write-scope guards** (AGENTS §5). This is the channel features 7 and 14 depend on.
+- **File transfer to/from student PCs — built.** A **Files** entry in the Console's Content menu browses
+  a student's shared **workspace** folder, **sends** a file into it (any directory under it, created if
+  needed) and **downloads** a file the student made (e.g. a Python script to assess). Transfer is
+  confined to that one folder on the Agent: `crates/agent/src/workspace.rs` refuses any path that
+  escapes it — absolute paths, a drive prefix, or a `..` component — with a canonicalised re-check for
+  symlinks, and the guard is unit-tested (AGENTS §5). Wire: `ListFiles`/`Files`,
+  `FetchFile`/`FileTransfer` (download on a uni-stream, like a recording), `SendFile`/`FileSendReady`/
+  `FileSent` (upload on a uni-stream). Exposed to the AI on the **MCP** (`list_files`, `fetch_file`,
+  `send_file`) and Surey. The workspace root defaults to `Co-watcher` in the student's profile, override
+  with `COWATCHER_WORKSPACE`.
 - **Feature 7** (collect + delete student files, choosing specific ones) and **feature 14** (preloaded,
-  synchronised play-once media) build on that channel; each is its own batch.
+  synchronised play-once media) now have the channel they needed; each is still its own batch — feature
+  7 adds *delete* (scope-proven, choose specific files) on top of the browse/download already here.
 
 ### Done 2026-09-22 → 2026-09-23 (newest)
 
