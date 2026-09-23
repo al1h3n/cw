@@ -1,7 +1,7 @@
 # Manual test checklist (two real PCs)
 
 Everything in here is a check that **cannot** be automated from a single developer machine. The
-179 automated tests already cover the pure logic, the file formats, the protocol round-trips and
+222 automated tests already cover the pure logic, the file formats, the protocol round-trips and
 the trust boundaries; `cargo test -- --ignored` additionally runs the two network end-to-end tests.
 What is left needs a second machine, administrator rights, real hardware, or a human's eyes.
 
@@ -121,12 +121,18 @@ Automated tests pair two endpoints **inside one process**. This proves it across
 - [ ] Your mouse moves STUDENT's pointer and lands where you expect **even though the two screens
       are different sizes/scales**. (This is the fractions-not-pixels claim.)
 - [ ] Clicking focuses a window on STUDENT; typing appears there.
-- [ ] Press **Win** → Start opens **on STUDENT**, not on TEACHER. *(Currently expected to open on
-      both — the local-side keyboard hook is not built yet. Note which happens.)*
-- [ ] Press **Ctrl+Alt+Esc** → control is released immediately.
+- [ ] Take control with **Right Ctrl** (VirtualBox-style host key). The viewer border/hint shows
+      control is on.
+- [ ] Press **Win** → Start opens **on STUDENT only**, not on TEACHER. *(Now expected on the student
+      side — the local keyboard grab `platform::keygrab` is built. Note if it still opens on TEACHER.)*
+- [ ] Also try **Alt+Tab**, **Ctrl+Esc**, **Alt+F4** while controlling → they go to STUDENT, not
+      TEACHER.
+- [ ] Press **Right Ctrl** again → control is released immediately.
 - [ ] After releasing, no modifier is stuck on STUDENT (type a letter — it should be lower case,
       not a shortcut).
-- [ ] Ctrl+Alt+Del is **not** forwarded (documented as impossible).
+- [ ] Right Ctrl only grabs while the viewer window is **focused** — click another app on TEACHER and
+      confirm Right Ctrl works normally there.
+- [ ] Ctrl+Alt+Del / Win+L are **not** forwarded (documented as impossible — Secure Attention Sequence).
 
 ---
 
@@ -137,10 +143,17 @@ Automated tests pair two endpoints **inside one process**. This proves it across
 - [ ] Kill the agent while the view is open (Task Manager on STUDENT) → restart it → wallpaper is
       restored. *Pass = a crash never leaves a black desktop.*
 - [ ] Also: `cowatcher-agent.exe wallpaper-selftest` → prints **PASS**.
-- [ ] **Broadcast**: `cowatcher-console.exe broadcast <STUDENT-key> 10` → TEACHER's screen fills
-      STUDENT's screen, then disappears.
-- [ ] Note honestly whether **Alt+Tab still escapes it** — it should, today. Input-blocking needs
-      the exam lock screen, which is not built.
+- [ ] **Broadcast** (unlocked): from the Console's **Content → Broadcast** picker choose a monitor or
+      window and target PCs → TEACHER's screen fills STUDENT's screen, then Stop makes it disappear.
+- [ ] Note honestly whether **Alt+Tab still escapes** the *unlocked* broadcast — it should, today.
+- [ ] **Locked broadcast**: tick **Lock students onto it** → on STUDENT try Alt+Tab / Win / Ctrl+Esc /
+      Alt+F4. **Pass = none of them escape** (it shows on a separate desktop with the key guard). This is
+      built but unverified live — record exactly what happens.
+- [ ] The client cursor over a broadcast is a **normal arrow**, not a busy spinner.
+- [ ] **Wallpaper reverts on unlock**: lock the wallpaper (or push one), then unlock → STUDENT's *own*
+      original wallpaper returns (not a black or blank one). The opened-PC menu shows locked/unlocked.
+- [ ] **Exam lock**: from the opened view start exam lock → STUDENT sees the fullscreen message on a
+      separate desktop; Alt+Tab/Win do nothing; End exam → the student's desktop returns intact.
 
 ---
 
@@ -241,10 +254,38 @@ On STUDENT, while a broadcast or lock is active, try each and record what happen
 - [ ] Ctrl+Alt+Del   - [ ] Win+L   - [ ] Unplug the network   - [ ] End the agent from Task Manager
 - [ ] Safe mode   - [ ] Change the system clock
 
-Expected today: several of these **do** escape, because the separate-desktop exam lock is not built.
-The point is to record exactly which, so the claims in `docs/FEATURES.md` stay honest.
+Expected today: the separate-desktop exam lock and locked broadcast **are** built (with the
+`platform::keyguard` hook), so Alt+Tab / Win / Win+D / Win+Tab / Ctrl+Shift+Esc should be trapped;
+**Ctrl+Alt+Del and Win+L still escape** (Secure Attention Sequence, unblockable from user space), and
+Task Manager is not yet stripped (the `DisableTaskMgr` policy of D23 is not wired). Killing the agent,
+safe mode and a clock change are organisational/OS limits (see *Impossible* in FEATURES). The point is
+to record exactly which escape, so the claims in `docs/FEATURES.md` stay honest.
 
 ---
+
+## 12. Newer features (2026-09-22 → 09-23 batches)
+
+- [ ] **Screenshot**: opened view → **Screenshot** → a full-resolution `.jpg` is saved on TEACHER
+      (in the console data dir's `screenshots/`) and a toast confirms it. Locked/prompted screens error
+      cleanly instead of saving a black image.
+- [ ] **Recording resolution guard**: try to record a PC at a size **larger** than its monitor → a
+      clear error, no file. With `record all`, if even one watched PC is smaller than the requested
+      size the whole batch is refused and the too-small PCs are named.
+- [ ] **Freeze input (screen lock)**: opened view → freeze a student's own mouse+keyboard *without*
+      taking control → STUDENT cannot type/click; release, or disconnect the Console, frees it.
+- [ ] **Per-PC wallpaper + fit**: push a wallpaper to one PC from its Restrictions menu with a fit
+      (fill/fit/stretch/centre/tile) → it applies; reboot STUDENT → the pushed wallpaper returns.
+- [ ] **Broadcast survives a client reboot**: start a broadcast, reboot one STUDENT → the broadcast
+      does **not** stay "stuck on" for that PC (dead-audience timeout); the banner clears.
+- [ ] **Voice input**: in Surey, pick a transcription mode (chat / custom Whisper endpoint / local
+      program), record → the recognised text lands in the box. Chat mode against an endpoint with no
+      Whisper route should give a clear message, not a bare 404.
+- [ ] **Surey in the background**: send a message, close the panel, reopen → the conversation is still
+      there and any in-flight reply completed; the launcher pulses while it was still working.
+- [ ] **Multiple classrooms**: header switcher → **New classroom** opens a second Console window; each
+      has its own devices/room/blocklist.
+- [ ] **Browser dashboard**: run `cowatcher-console web`, open the printed loopback URL (with its
+      token) → the same grid works; a request without the token is refused (401).
 
 ## Already verified — do not repeat unless something changed
 

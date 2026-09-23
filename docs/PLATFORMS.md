@@ -19,6 +19,10 @@ cross-platform in principle; only the OS glue is missing.
 | H.264 encode/decode | `media::h264` (OpenH264) | ✅ | ✅ portable¹ | ✅ portable¹ |
 | Audio capture | `media::audio` (cpal) | ✅ | ✅ portable¹ | ✅ portable¹ |
 | Remote input (mouse/keyboard) | `platform::input` (SendInput) | ✅ | ❌ | ❌ |
+| Freeze student's own input (screen lock) | `platform::input` (BlockInput) | ✅ | ❌ | ❌ |
+| Viewer keyboard grab (Right-Ctrl release) | `platform::keygrab` (WH_KEYBOARD_LL) | ✅ | ❌ n/a | ❌ n/a |
+| Lockdown key guard (Alt+Tab/Win/…) | `platform::keyguard` (WH_KEYBOARD_LL) | ✅ | ❌ n/a | ❌ n/a |
+| Screenshot one PC (full-res JPEG) | `net::request_thumbnail` → `media::ThumbnailCapturer` | ✅ | ❌ stub | ❌ stub |
 | Power (shutdown/reboot/logoff/lock) | `platform::power` | ✅ | ❌ | ❌ |
 | App catalogue + launch | `platform::apps` (Start Menu, ShellExecute) | ✅ | ❌ | ❌ |
 | App icons | `platform::apps::icon_bgra` (SHGetFileInfo) | ✅ | ❌ returns none | ❌ returns none |

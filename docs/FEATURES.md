@@ -1,14 +1,22 @@
 # Feature status against the brief
 
 Every capability named in [`../ClassWatcher.md`](../ClassWatcher.md), with an honest state. Updated
-2026-09-14. Legend: **done** = built and tested · **partial** = some of it works · **planned** = designed
-but no code.
+2026-09-23. Legend: **done** = built and tested · **partial** = some of it works · **planned** = designed
+but no code. "Built, unverified live" means the code exists and its pure parts are tested, but the
+disruptive on-a-real-student-PC behaviour still needs the two-machine/VM checklist
+([`TEST-CHECKLIST.md`](TEST-CHECKLIST.md)).
 
-**Summary: 12 of 27 done, 6 partial, 9 planned.** The product can now *watch* screens, *listen* to a PC, *drive* its mouse and keyboard, *lock* and
-*power off* one PC or a whole room, *block* apps and games, *start and close programs*, *record* a
-screen to a file, and *broadcast* the teacher's screen. What it still cannot do is run an exam: there
-is no inescapable lock screen, no file collection, and no signed offline policy engine yet (blocking
-and wallpaper persist on the Agent, but lock and power do not).
+**Summary: ~14 of 27 done, ~7 partial, ~6 planned.** The product can now *watch* screens, *listen* to
+a PC, *drive* its mouse and keyboard (with a real local keyboard grab, VirtualBox-style Right-Ctrl
+release), *lock* and *power off* one PC or a whole room, *freeze* a student's own input, *block* apps
+and games, *start and close programs*, *push and lock the wallpaper* (per-PC or class-wide), *record* a
+screen, *screenshot* one, and *broadcast* the teacher's screen (optionally locking students onto it on
+a separate desktop). It also runs several **classrooms** side by side, serves the same UI in a
+**browser** (`cowatcher-console web`), has **Settings** (AI toggle, theme) and an in-Console **AI
+assistant (Surey)**. What still gates a real exam: the secure-desktop cluster (login/lock/UAC screens,
+Ctrl+Alt+Del) needs a SYSTEM Winlogon helper and a driver-free policy lockdown (D23) verified on a VM;
+file collection/wipe (#7) and the signed offline **policy engine** (D9) are not built, so lock, power
+and exam do not yet survive a reboot the way blocking and pushed wallpaper do.
 
 There is also a list of things that **cannot** be built at all, and things we **will not** build:
 see [Impossible, and deliberately refused](#impossible-and-deliberately-refused) at the end.
@@ -19,8 +27,8 @@ see [Impossible, and deliberately refused](#impossible-and-deliberately-refused)
 |---|----------------|-------|-------|
 | 1 | Screen share, pin other monitors, virtual desktops | **done** | Every monitor is enumerated and selectable per PC. The grid uses change-only JPEG thumbnails at a teacher-chosen width; opening one screen now gives a real **H.264 video stream** on its own QUIC uni-stream. Measured on the dev PC: 720p30 and 1080p30 both at a true 30.2 fps, every packet decoded, and about 57–78 kbit/s on a near-idle screen — a full 1080p stream for roughly what one 320×180 JPEG thumbnail used to cost. Inactive virtual desktops cannot be captured by anyone — see *Impossible*. |
 | 2 | Audio share, on/off switch | **done** | WASAPI loopback of what the student hears, downmixed to mono and decimated to ~16 kHz (~256 kbit/s). Off until asked for, and exclusive: one PC at a time. Verified end to end — 16 kHz mono, 64 000 samples for 4.0 s, loud while a tone played and exactly 0 in silence. Raw PCM for now; Opus would cut it to ~32 kbit/s when several PCs need listening at once. |
-| 3 | Remote mouse and keyboard, Win key captured, exit chord | **done** | Move, click, scroll, keys and direct Unicode. Positions travel as screen *fractions*, so a teacher on 1080p driving a student on 1440p (or a scaled display, or a second monitor) lands where they meant. Input is dropped unless the teacher has explicitly taken control, and taking or releasing it is audit-logged. Win goes to the remote PC; plain Esc still reaches the remote program; **Ctrl+Alt+Esc** hands the keyboard back; every held modifier is released when control ends. Verified live: refused before consent, then a click focused Notepad and the typed text read back exactly. Still missing: the low-level hook that stops the *local* PC reacting too (the decision function is written and unit-tested; the hook needs a physical-keyboard check). |
-| 4 | Lock screen like parental controls | **partial** (built, unverified) | Two locks now: the standard Windows lock (Win+L), and **exam lockdown** — a fullscreen message window on a **separate Win32 desktop** (`CreateDesktopW` + `SwitchDesktop`, spike 0.8) that the student cannot Alt+Tab or Win-key away from; the teacher starts/ends it. Built but not yet verified live (it seizes the desktop, so it needs a VM/second machine). Honest limits: **Ctrl+Alt+Del** always reaches Winlogon, and Task Manager is not yet disabled — locking those down needs the policy engine (`DisableTaskMgr`). A per-PC custom lock UI (#10) builds on this. |
+| 3 | Remote mouse and keyboard, Win key captured, exit chord | **done** | Move, click, scroll, keys and direct Unicode. Positions travel as screen *fractions*, so a teacher on 1080p driving a student on 1440p (or a scaled display, or a second monitor) lands where they meant. Input is dropped unless the teacher has explicitly taken control, and taking or releasing it is audit-logged. Win goes to the remote PC; plain Esc still reaches the remote program; every held modifier is released when control ends. The native viewer now installs a real low-level keyboard grab (`platform::keygrab`, `WH_KEYBOARD_LL`): while controlling it swallows every key locally and forwards it (Windows key, Alt+Tab, Ctrl+Esc, Alt+F4), and **Right Ctrl** takes/releases control (VirtualBox convention — the old `Ctrl+Alt+Esc` never worked because `Alt+Esc` is a shell shortcut the OS ate first). The grab is armed only while the viewer is focused, so it never steals keys from other apps. Verified live: refused before consent, then a click focused Notepad and the typed text read back exactly. **Still unverified live:** the Right-Ctrl grab and Win-key forwarding on a second machine. Ctrl+Alt+Del / Win+L stay OS-reserved (see *Impossible*). |
+| 4 | Lock screen like parental controls | **partial** (built, unverified) | Two locks now: the standard Windows lock (Win+L), and **exam lockdown** — a fullscreen message window on a **separate Win32 desktop** (`CreateDesktopW` + `SwitchDesktop`, spike 0.8) that the student cannot Alt+Tab or Win-key away from; the teacher starts/ends it. Built but not yet verified live (it seizes the desktop, so it needs a VM/second machine). A `platform::keyguard` `WH_KEYBOARD_LL` hook is installed while the lock is up, dropping Alt+Tab, Alt+Esc, Ctrl+Esc, the Windows keys and Alt+F4 (plus a `SC_CLOSE` block), and a watchdog re-asserts the lock desktop after a Win+L cycle. Honest limits (D23): **Ctrl+Alt+Del** and **Win+L** always reach Winlogon (Secure Attention Sequence, unblockable from user space), and Task Manager is not yet stripped — the driver-free path is toggling documented registry policies (`DisableTaskMgr`, `DisableLockWorkstation`, `NoLogoff`, …) at lock start, which is written down but not yet wired. The **secure-desktop cluster** (seeing/typing the login-lock password screen, showing overlays on the lock screen, Ctrl+Alt+Del re-enabling host control) needs a SYSTEM helper bound to the Winlogon desktop. A per-PC custom lock UI (#10) builds on this. |
 | 5 | Shut down / power off all or one PC | **done** | Shut down, restart, sign out and cancel, for one PC or the whole room, with a Now / 1 min / 5 min warning. Windows shows its own localised countdown; an immediate shutdown force-closes programs. Offline PCs are never queued. Every action is audit-logged (D3). **Wake-on-LAN** is built too: the Console (or an awake Agent in the same room) broadcasts a magic packet for a PC's stored MAC; the PC wakes if its BIOS/UEFI has WoL enabled (a one-time IT setting). Verified live: countdown started+cancelled; a wake packet broadcast on the LAN. |
 | 6 | Constant wallpaper nobody can change | **built, needs the service (which now exists)** | The `NoChangingWallPaper` policy is now enforced by the Agent **service** (`cowatcher-agent install` / `run`), which runs as LocalSystem and so can write the admin-only Policies hive. Installing the service needs one elevated command; verifying the whole install→boot→enforce path needs an admin machine or VM (the elevation gate is unchanged). A *specific* school image still needs file transfer. |
 | 7 | Keep student files temporarily, wipe with one button, host can browse | planned | Baseline + diff design; wipe must be scope-proven by tests. |
@@ -29,19 +37,19 @@ see [Impossible, and deliberately refused](#impossible-and-deliberately-refused)
 | 10 | Custom lock screen: background, per-PC shortcuts, terminal with `unlock` and power commands | planned | Depends on #4. |
 | 11 | Black background while the host watches | **done** | The Agent swaps the wallpaper for black when a teacher opens the PC's screen and restores it on close/disconnect (unelevated SPI). Restore is guarded four ways (on close, on disconnect, on start-up, on Drop) so a student is never left with a black desktop. Verified live via `wallpaper-selftest`. |
 | 12 | Screen recordings, all or one, scheduled | **done** (manual) / planned (scheduled, two-pass) | Records on the student PC at a chosen size and frame rate, e.g. a 1440p screen saved as 1080p, area-averaged so text stays readable. When an `ffmpeg.exe` is present next to the Agent (or on PATH) it encodes real video — **H.264/H.265/AV1** with a chosen preset, CRF quality, B-frames and the lanczos scaler — to an `.mp4`; without it, the built-in **MJPEG-in-AVI** writer is used (every frame independent, index rewritten every 30 frames, so a power cut still leaves a playable file, and the **measured** fps is written so it plays at normal speed). The teacher can **download** any recording to their own PC (streamed over a QUIC uni-stream, path-traversal guarded). Still planned: **two-pass** encode (needs a post-record re-encode, not a live pipe) and scheduling from a Policy. |
-| 13 | Broadcast the host screen to all/some, input blocked | **partial** | The teacher's screen appears full-screen and on top on the student PC, scaled to whatever resolution that PC has, and disappears on command. Input is **not** blocked yet: Alt+Tab and the Windows key still work, because trapping a session needs the separate Win32 desktop from spike 0.8 — that is #4/#10. So today this is "everyone look at my screen", not "nobody can do anything else". |
+| 13 | Broadcast the host screen to all/some, input blocked | **partial** (locked mode built, unverified live) | The teacher's screen appears full-screen and on top on the student PC, scaled to whatever resolution that PC has, and disappears on command. Several broadcasts can run at once to different PC groups, each with its own Stop, and they survive closing the picker. The teacher can tick **Lock students onto it**: a locked broadcast shows on a **separate Win32 desktop** (`platform::present::open_locked`, plus `platform::keyguard` dropping Alt+Tab/Alt+Esc/Ctrl+Esc/Win/Alt+F4) so an ordinary user cannot Alt+Tab or Win-key away — built, but the on-student lockdown itself is best confirmed on a second machine. Unlocked mode is still "everyone look at my screen". A busy-cursor spinner over the broadcast was fixed (the present window now sets a normal arrow cursor). |
 | 14 | Send audio/video in real time, notification, play once | planned | Preload + synchronised start beats live streaming for exams. |
 | 15 | Update centre from the deploy branch | planned | Signed manifests, channels, rollback. |
 | 16 | Tutorial on first start, skippable | **done** | A five-step tour on first run — add PCs, watch, open one screen, take control, room password — skippable from every step and re-openable from the Help button. |
-| 17 | One binary, choose client or server, ID added later | **partial** | Two binaries today. The agent can install itself as an auto-start Windows service (`install`/`uninstall`/`status`/`run`): starts at boot, absent from Task Manager's Startup tab (as every service is), removable only by an admin — not hidden (still in services.msc, Details, tray, login notice). A single installer with a role picker is still the plan (D8). |
+| 17 | One binary, choose client or server, ID added later | **partial** | Still three binaries (Console, Agent, Viewer), but a single **installer** (`installer/cowatcher.iss`, Inno Setup) now bundles all three and picks the role at first run (D8) — Console = GUI + shortcut, Agent = the auto-start Windows service. The agent can install itself as an auto-start service (`install`/`uninstall`/`status`/`run`): starts at boot, copies itself to `%ProgramData%\co-watcher\agent` first so deleting the source folder cannot break it, absent from Task Manager's Startup tab (as every service is), removable only by an admin — not hidden (still in services.msc, Details, tray, login notice). A true single fat binary with a role flag is still the longer-term plan. |
 
 ## Paid tier (AI)
 
 | # | From the brief | State | Notes |
 |---|----------------|-------|-------|
 | 18 | AI lesson summaries | planned | — |
-| 19 | Bring your own API key (Claude/ChatGPT/Gemini/DeepSeek), or a hosted model | planned | Two adapters cover nearly everything: OpenAI-compatible and Anthropic. |
-| 20 | AI watches the screen and acts (close games etc.) | planned | Cost ladder designed: rules → change gate → OCR text → local classifier → batched vision. |
+| 19 | Bring your own API key (Claude/ChatGPT/Gemini/DeepSeek), or a hosted model | **done** (BYOK) | **Surey**, the in-Console assistant (D22): OpenAI, Anthropic native, any OpenAI-compatible endpoint, and local Ollama/LM Studio, with a "list models" helper. The key is sealed with DPAPI and every request is proxied through Rust, never the web layer. Voice input has three transcription modes (chat / custom Whisper endpoint / local program). The hosted-model option waits on the Hub. |
+| 20 | AI watches the screen and acts (close games etc.) | **partial** | Surey can already *act* on the class through the same typed fleet tools the MCP exposes (list/close apps, blocklist, exam, power, recording, `set_wallpaper`), with an `ask_user` selection tool and confirmation of destructive actions — driven by the teacher, not yet autonomous. Autonomous *watching* (the cost ladder: rules → change gate → OCR text → local classifier → batched vision) is still planned. |
 | 21 | More than 10 devices needs a subscription | planned | Enforceable only in official builds and our hosted service — see AGENTS.md D1. |
 | 22 | Pricing (schools per room, business per device) | **done** (as a plan) | `docs/BUSINESS.md`. |
 
@@ -150,6 +158,51 @@ interface now is what keeps that door open, and costs nothing today.
 installs as an auto-start service that launches a capture helper into the logged-in student's session;
 and ffmpeg-based recording with download-to-teacher (#12). Elevation paths still need VM verification
 (`docs/TEST-CHECKLIST.md §8`).
+
+### Done 2026-09-22 → 2026-09-23 (newest)
+
+Fast follow-ups from live two-machine testing. `PROTOCOL_VERSION` is now **19** (added `FetchRunningIcon`
+= 18, then a `fit` on `SetWallpaper` plus `SetScreenLock`/`ScreenLockState` = 19).
+
+- **Multiple classrooms.** A classroom is a separate profile directory (own identity, paired devices,
+  room password, blocklist). A header switcher lists them; "New classroom" opens it in its own Console
+  window (`switch_classroom` spawns `cowatcher-console --classroom <slug>`). CLI: `classrooms`,
+  `--classroom <slug>`.
+- **`cowatcher-console web` — the same Svelte UI in a browser** at full parity (`crate::web`, axum +
+  `rust-embed`). `lib/bridge.ts` makes every component transport-agnostic; a per-run random token
+  (loopback by default) guards `/invoke` and `/events` (SSE). Native viewer + in-window classroom
+  switching stay desktop-only and say so.
+- **Settings: AI on/off + theme** (`crate::settings`, shared across classrooms). Turning AI off hides
+  Surey and guarantees no AI request. Theme is dark / light / custom (all CSS variables). An **About**
+  card credits the author and dependencies.
+- **Cloud sync prepared (no server yet):** a secret-free `ClassroomSnapshot` and `SyncClient` against a
+  subscription dashboard URL + licence key; returns a clear "not configured" until pointed at a hosted
+  endpoint. Settings has a **subscription placeholder** (DPAPI-sealed licence, opens the dashboard).
+- **Grouped toolbars + drag-to-reorder grid with named groups**, a right-click-anywhere action menu, a
+  tile-size (zoom) slider, per-PC IP display once hole-punching promotes off the relay, and a resizable
+  opened view.
+- **Screen lock (freeze a student's own input without taking control)** — per-PC and "freeze all";
+  released automatically if the Console disconnects (`SetScreenLock`).
+- **Push wallpaper with a fit (fill/fit/stretch/centre/tile)**, per-PC from the opened view's
+  Restrictions menu as well as class-wide; pushed wallpaper survives a reboot (sticky marker + reapply).
+- **Wallpaper reverts to the student's own on unlock (bug 4) + a locked/unlocked indicator (feature 6):**
+  `platform::wallpaper` snapshots the genuine original once and `revert()` restores it and forgets every
+  override; the opened-PC menu shows the current lock state.
+- **Screenshot a PC** to the teacher's PC at full resolution (`manager::screenshot`), and a **recording
+  resolution guard** — recording refuses a size larger than the target screen; `record_all` is
+  all-or-nothing and names every too-small PC.
+- **Configurable voice transcription (`ai::transcribe`):** chat provider / custom Whisper endpoint /
+  local program, so voice never forces a specific setup (the 404 came from assuming the chat endpoint
+  also served Whisper). Endpoint key sealed with DPAPI.
+- **Right-Ctrl control keybind** (see #3), **broadcast dead-audience timeout** (a rebooted client no
+  longer leaves a broadcast "stuck on"), **Surey works in the background** (closing the panel hides it
+  instead of unmounting, so a reply/tool loop keeps running and reopens where it was), Surey icon
+  alignment, and **OS-agnostic blocklist suggestions** with real process names (Minecraft Java is
+  `javaw.exe`, not "minecraft.exe") plus updated cross-platform reference catalogs.
+- **Still open (each its own batch):** file send/receive to/from student PCs (#7 in spirit — new proto +
+  path-traversal guards), a global-vs-local settings **override view** with reset and clock-independent
+  recording retention, and the **secure-desktop cluster** (login/lock/UAC/Ctrl+Alt+Del — needs a SYSTEM
+  Winlogon helper + a VM).
 
 ### Reported from live testing, queued (2026-09-16)
 

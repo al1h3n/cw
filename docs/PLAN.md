@@ -149,8 +149,10 @@
 - [ ] **1.4 (superseded by 1.4a + 1.4b) Agent service install/uninstall** (the helper from 0.7, made production-grade): auto-start,
   restart on crash.
   **Done when:** VM test — reboot → Agent back within 30 s of login; killing the helper → it respawns.
-- [~] **1.5 Thumbnail grid** in the Console (Tauri + Svelte). The Agent captures only while a Console
-  grid is open.
+- [x] **1.5 Thumbnail grid** in the Console (Tauri + Svelte). The Agent captures only while a Console
+  grid is open. *Built and shipping: change-only JPEG thumbnails, per-PC monitor + quality choice,
+  grouped/draggable tiles, a tile-size slider. Idle-when-not-watching holds; the slow-PC budget
+  numbers still want a rerun (TEST-CHECKLIST §10).*
   **Done when:** budget check (§6) passes, and minimising the Console drops Agent CPU to idle within 3 s.
   - [x] **1.5a Control session + on-demand thumbnails (transport + logic).** → `net::control`
     (`ControlSession::connect`/`accept`/`request_thumbnail`/`serve_thumbnails`, `CaptureSource` trait,
@@ -160,22 +162,35 @@
     `CaptureSource`, and capture happens only on request (0 before, 3 after → satisfies "zero capture
     when idle"). An untrusted Console is refused with `Unauthorized` and gets nothing. Framing capped
     at 64 KiB (trust boundary).*
-  - [ ] **1.5b Real capture source.** Port spike 0.4's DXGI→JPEG into `crates/media` implementing
+  - [x] **1.5b Real capture source.** Port spike 0.4's DXGI→JPEG into `crates/media` implementing
     `CaptureSource`; the Agent wires it into `serve_thumbnails`. Multi-monitor via `monitor` index.
-  - [ ] **1.5c Console grid UI (Tauri 2 + Svelte 5).** Poll each paired Agent at ≤1 fps, show the grid;
+    *Done: `media::ThumbnailCapturer` (DXGI + GDI fallback), per-monitor, per-request width + quality.*
+  - [x] **1.5c Console grid UI (Tauri 2 + Svelte 5).** Poll each paired Agent at ≤1 fps, show the grid;
     stop polling when minimised (drives the Agent to idle within 3 s). Native viewer window is Phase 1.6.
-- [ ] **1.6 Full view** in the native viewer (from 0.5/0.6). Wallpaper goes black while streaming (D11).
+    *Done and shipping; refresh cadence tuned faster than 1 fps since the encode is change-only.*
+- [x] **1.6 Full view** in the native viewer (from 0.5/0.6). Wallpaper goes black while streaming (D11).
   **Done when:** latency budget passes; wallpaper restores after disconnect, **including after the
-  Console crashes** (test it).
-- [ ] **1.7 Remote control.** Mouse, keyboard, Win key capture, exit chord, Ctrl+Alt+Del button (SendSAS).
+  Console crashes** (test it). *Built: `crates/viewer` (winit + softbuffer, H.264), launched from the
+  focused view; black-out restore guarded four ways (close / disconnect / start-up / Drop), verified via
+  `wallpaper-selftest`. Live glass-to-glass latency across two PCs still to measure (TEST-CHECKLIST §2).*
+- [x] **1.7 Remote control.** Mouse, keyboard, Win key capture, exit chord, Ctrl+Alt+Del button (SendSAS).
   **Done when:** an E2E test injects scripted input into a test app on the VM and asserts the result.
-  Manual check: control an elevated window (UIPI).
-- [ ] **1.8 Visible indicator + login notice + local audit log** (D3).
+  Manual check: control an elevated window (UIPI). *Built and verified live for input (refused before
+  consent; typed text read back). The local keyboard grab (`platform::keygrab`) is now built too —
+  **Right Ctrl** takes/releases control and Win/Alt+Tab forward to the client; that grab needs the
+  two-machine check. Ctrl+Alt+Del/Win+L stay OS-reserved.*
+- [~] **1.8 Visible indicator + login notice + local audit log** (D3).
   **Done when:** a test asserts the badge appears when a stream opens and every remote action writes
-  an audit row.
-- [ ] **1.9 First-run wizard.** Choose the role (Console/Agent), plus a skippable tutorial (3–5 screens,
+  an audit row. *Partial: only the agent audit log is done (`audit.log`, one line per action incl.
+  refusals). The D3 indicator trio on the student side — tray icon, a "being viewed" badge, and the
+  un-disable-able login notice — is **entirely missing** (see `platform::service` notes); a release
+  blocker.*
+- [~] **1.9 First-run wizard.** Choose the role (Console/Agent), plus a skippable tutorial (3–5 screens,
   "Skip" on every screen, re-openable from Help).
   **Done when:** a UI test covers both paths; after "Skip", the tutorial never auto-shows again.
+  *Partial: the skippable five-step tutorial is done (skippable from every step, re-openable from Help,
+  never auto-shows again). The **role picker** is not built — role is chosen by which binary runs; the
+  installer picks it at install time instead (D8).*
 - [ ] **Bug bash + M1:** founder uses it daily at home on 2+ PCs for 1 week (client #0). Every annoyance
   becomes an issue.
 
@@ -183,22 +198,37 @@
 
 Order = what a teacher needs first in a real lesson.
 
+> **Pulled forward from live testing (not numbered here):** multiple **classrooms**, the browser
+> dashboard (`cowatcher-console web`), **Settings** (AI toggle + theme), the in-Console **AI assistant
+> (Surey)** and its **MCP server**, push-a-wallpaper (per-PC + fit), **screenshot**, freeze-input
+> **screen lock**, and grouped/draggable grid UI all landed out of roadmap order because the founder's
+> two-machine testing asked for them. They are recorded in `docs/FEATURES.md` and AGENTS.md's status
+> log. **Still not built in this phase:** the signed offline **policy engine (2.1)**, unlock/break-glass
+> codes (2.4), the launcher shell (2.7), student file collect/wipe (2.8), media broadcast (2.11) and
+> scheduled recordings (2.12).
+
 - [ ] **2.1 Policy engine** (`crates/policy`). Signed, versioned desired state. The Agent persists it
   and enforces it offline, then reports the actual state back (D9).
   **Done when:** property tests (proptest) show diff→apply is idempotent; a tampered Policy is rejected;
   an older version never overwrites a newer one; with the network unplugged the Agent still applies the
   stored Policy after a reboot.
-- [ ] **2.2 Power.** Shutdown/reboot/log-off for all or selected PCs, with an optional countdown
-  message. Wake-on-LAN: an online Agent in the same room sends the magic packet.
+- [~] **2.2 Power.** Shutdown/reboot/log-off for all or selected PCs, with an optional countdown
+  message. Wake-on-LAN: an online Agent in the same room sends the magic packet. *(Built; full VM
+  power-off/log-off and a real WoL wake still on the checklist — §9.)*
   **Done when:** VM test for each action; WoL is verified on one real PC.
-  *Done 2026-09-14 except WoL: `proto::Action` (closed enum, PROTOCOL_VERSION 2), `platform::power`
+  *Done 2026-09-14 (WoL added since): `proto::Action` (closed enum, PROTOCOL_VERSION 2), `platform::power`
   (InitiateSystemShutdownExW / AbortSystemShutdownW / ExitWindowsEx / LockWorkStation, privilege
   enabled at start-up), agent `audit.log` (tab-separated, one line per action including refusals),
   console room-wide and per-PC menu with a confirm step. Live on the dev PC: shutdown 300 s started,
   cancelled, and a second cancel reported "nothing scheduled". **User TODO:** log-off and an actual
   power-off on a VM or spare PC (not run on the dev machine for obvious reasons).*
-- [ ] **2.3 Lock screen on demand** (lock desktop from 0.8) with the teacher's message.
+- [~] **2.3 Lock screen on demand** (lock desktop from 0.8) with the teacher's message.
   **Done when:** the escape checklist from 0.8 passes on a real PC; the lock survives Agent helper restarts.
+  *Built, unverified live: `platform::examlock` (fullscreen message on a separate `CreateDesktopW`
+  desktop) + `platform::keyguard` (drops Alt+Tab/Alt+Esc/Ctrl+Esc/Win/Alt+F4) + a watchdog that
+  re-asserts after Win+L. Also a lighter `SetScreenLock` that just freezes a student's own input without
+  taking control (per-PC and freeze-all). Remaining: the `DisableTaskMgr`/`DisableLockWorkstation`
+  registry policies (D23), the secure-desktop cluster, and the real-PC escape checklist (§11).*
 - [ ] **2.4 Unlock codes + break-glass** (D10). Terminal command `unlock` → per-device offline OTP or
   the Org code. `admin` → break-glass pauses all enforcement for N minutes and notifies the Console.
   **Done when:** tests cover: correct code works offline; clock skew of ±2 min is accepted; 5 wrong
@@ -247,12 +277,19 @@ Order = what a teacher needs first in a real lesson.
   16 kHz mono, 64 000 samples for 4.0 s, loudest sample 16386 during a tone and exactly 0 in silence.*
   `ponytail:` still raw PCM (~256 kbit/s). Opus (~32 kbit/s) and the A/V drift measurement wait until
   full-rate video exists to drift against.
-- [ ] **2.10 Presentation mode.** The Console shares its full screen, a region or one window
+- [~] **2.10 Presentation mode.** The Console shares its full screen, a region or one window
   (Windows.Graphics.Capture) to all or selected Agents. They show it on the lock desktop with input
   blocked.
   **Done when:** a testkit run with 30 simulated Agents on one LAN stays under the measured bandwidth
   budget; a real PC cannot escape presentation mode (checklist from 0.8).
   `ponytail:` unicast fan-out; Hub/peer relaying when > 40 viewers or on weak Wi-Fi.
+  *Built: a Zoom/Teams-style source picker (`list_broadcast_sources`) over every monitor and app window
+  (`media::window_capture`, `EnumWindows` + `PrintWindow`); several parallel broadcasts to different PC
+  groups; an optional **Lock students onto it** on a separate desktop (`platform::present::open_locked`).
+  The fan-out skips identical frames and pushes in parallel (the ~25 s-to-update-a-class problem, now
+  ~1–2 s), with a dead-audience timeout so a rebooted client can't leave it "stuck on". Still to do: the
+  30-Agent bandwidth run and the real-PC escape check for the locked mode; capture still uses
+  PrintWindow/BitBlt, not yet Windows.Graphics.Capture.*
 - [ ] **2.11 Media broadcast** (listening exams). The file is **preloaded** to the Agents, then they
   start **in sync** at time T. No controls, plays once, and is deleted afterwards. Live mode (teacher's
   microphone) reuses 2.10.
@@ -334,10 +371,15 @@ Order = what a teacher needs first in a real lesson.
   builds; `--features pro` compiles in the private crates.
   **Done when:** tests cover expired/forged/over-limit tokens; the community build compiles and runs
   without `pro/`.
-- [ ] **6.2 AI provider layer.** Two adapters cover almost everything: **OpenAI-compatible**
+- [~] **6.2 AI provider layer.** Two adapters cover almost everything: **OpenAI-compatible**
   (OpenAI, DeepSeek, Google's OpenAI-compatible endpoint, OpenRouter, local Ollama) and
   **Anthropic native**. BYOK keys are stored encrypted in the Console only.
   **Done when:** contract tests with recorded responses; a key never appears in logs (tested).
+  *Built ahead of Phase 6, shipping in the current (non-pro) build as **Surey** (`crates/console/src/ai`,
+  D22): both adapters, local Ollama/LM Studio, a "list models" helper, three voice-transcription modes,
+  DPAPI-sealed keys, all proxied through Rust. Unit-tested for wire shape/DPAPI/tool schemas; live LLM
+  calls need a real endpoint. What remains for Phase 6 is the **entitlement gate** (6.1) that would make
+  richer AI a Pro-only feature.*
 - [ ] **6.3 AI Watch — cheapest check first.** Each stage runs only if the previous one can't decide:
   1. Rules (process / window title / URL) — free, catches most games and videos.
   2. Change gate — only when the foreground app changed or a perceptual hash differs.
