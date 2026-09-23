@@ -278,12 +278,70 @@ mod imp {
         MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VIRTUAL_KEY,
     };
 
+    use std::sync::{
+        Mutex, OnceLock,
+        mpsc::{self, Sender},
+    };
+
     use super::{ButtonState, InputError, MouseButton};
 
+    /// A reply channel the worker uses to hand the result of one `BlockInput` call back to the caller.
+    type BlockReply = Sender<Result<(), InputError>>;
+
+    /// The dedicated `BlockInput` owner thread's command queue.
+    ///
+    /// Windows ties a block to the thread that set it: **only the thread that called `BlockInput(TRUE)`
+    /// can `BlockInput(FALSE)`**. The Agent calls this from Tokio worker threads, which are not stable —
+    /// take-control and release-control almost always land on different workers, so releasing from a
+    /// different thread than the one that blocked silently fails and the student's mouse and keyboard
+    /// stay frozen forever (only visible when the Agent runs elevated, where the block actually sticks).
+    /// Routing every call through one long-lived thread makes the release always come from the blocker.
+    static BLOCKER: OnceLock<Mutex<Sender<(bool, BlockReply)>>> = OnceLock::new();
+
+    fn blocker() -> &'static Mutex<Sender<(bool, BlockReply)>> {
+        BLOCKER.get_or_init(|| {
+            let (tx, rx) = mpsc::channel::<(bool, BlockReply)>();
+            // A named, long-lived thread that owns every BlockInput call for the process. If the spawn
+            // ever fails, `rx` is dropped with it, so later sends return `Refused` rather than panicking.
+            let _ = std::thread::Builder::new()
+                .name("input-blocker".into())
+                .spawn(move || {
+                    let mut blocked = false;
+                    while let Ok((want, reply)) = rx.recv() {
+                        // Idempotent: skip a redundant call (which would also error — e.g. unblocking
+                        // when nothing is blocked), and keep our tracked state in step only on success.
+                        let result = if want == blocked {
+                            Ok(())
+                        } else {
+                            // SAFETY: BlockInput takes a plain bool and keeps no memory of ours. It runs
+                            // here, on the single owner thread, so a later BlockInput(FALSE) is issued by
+                            // the same thread that issued BlockInput(TRUE) and therefore succeeds.
+                            match unsafe { BlockInput(want) } {
+                                Ok(()) => {
+                                    blocked = want;
+                                    Ok(())
+                                }
+                                Err(_) => Err(InputError::Refused),
+                            }
+                        };
+                        let _ = reply.send(result);
+                    }
+                });
+            Mutex::new(tx)
+        })
+    }
+
     pub fn set_local_input_blocked(blocked: bool) -> Result<(), InputError> {
-        // SAFETY: BlockInput takes a plain bool and keeps no state of ours. Injected SendInput still
-        // works while a block is active, which is exactly what lets the teacher keep control.
-        unsafe { BlockInput(blocked) }.map_err(|_| InputError::Refused)
+        // Injected SendInput still works while a block is active, which is what lets the teacher keep
+        // control. The call is synchronous — we wait for the worker's result so the caller can log a
+        // refusal — but it hops to the one thread allowed to toggle the block.
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let tx = blocker().lock().unwrap_or_else(|e| e.into_inner());
+            tx.send((blocked, reply_tx))
+                .map_err(|_| InputError::Refused)?;
+        }
+        reply_rx.recv().map_err(|_| InputError::Refused)?
     }
 
     pub fn confine_cursor(left: i32, top: i32, right: i32, bottom: i32) -> Result<(), InputError> {
