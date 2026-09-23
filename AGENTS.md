@@ -6,6 +6,38 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-23, testing batch: keybind, wallpaper, screenshot, voice):**
+- **Right Ctrl host key (bug 2):** the viewer's control toggle was `Ctrl+Alt+Esc`, which never worked to
+  *take* control — `Alt+Esc` is a shell shortcut the OS eats before any window/hook sees it, so capture
+  never armed and the Windows key never forwarded. Replaced with a single **Right Ctrl** host key
+  (VirtualBox convention). `platform::keygrab` now has two states — *armed* (`set_focused`, viewer has
+  focus) and *active* (`set_active`, controlling); Right Ctrl is swallowed and toggles control whenever
+  armed or active, so control can be taken before capture starts, and while active every other key
+  (Win, Alt+Tab, Ctrl+Esc, Alt+F4) forwards to the client like a VM guest. Ctrl+Alt+Del / Win+L stay
+  OS-reserved. The host key is armed only while the viewer is focused, so it never steals Right Ctrl
+  from other apps. **Unverified live** (needs the 2nd machine).
+- **Wallpaper reverts to the student's own on unlock (bug 4) + lock indicator (feature 6):**
+  `platform::wallpaper` snapshots the genuine original once (`wallpaper-original.txt`) on the first
+  override, and a new `revert()` restores it and forgets every override (pushed image, sticky marker,
+  black-out save). The agent runs `revert()` on `UnlockWallpaper`. The opened-PC Restrictions menu shows
+  locked/unlocked, tracked console-side per PC from the lock/unlock actions sent
+  (`DeviceView.wallpaper_locked`, cleared on disconnect).
+- **Screenshot + recording resolution guard (feature 2):** a "Screenshot" button saves one
+  full-resolution JPEG of a PC to the teacher's PC (width capped at the PC's own monitor;
+  `DeviceRequest::Screenshot` via `request_thumbnail`; `manager::screenshot`). Recording now refuses a
+  size larger than the target screen — single recordings error, `record_all` is all-or-nothing and lists
+  every too-small PC (`manager::monitor_size`), in both the Tauri and web paths.
+- **Configurable voice transcription (`ai::transcribe`):** chat / custom Whisper endpoint / local
+  program modes, so voice never forces a specific setup (see the minimize-teacher-setup principle). The
+  broadcast spinner-cursor, orphaned-broadcast timeout and Surey icon alignment from the previous batch
+  are also in.
+- **Still open (each its own batch):** file send/receive to/from student PCs (feature 3 — new proto +
+  path-traversal guards; security-sensitive, not rushed); global-vs-local settings override view + clock-
+  independent recording retention (feature 5); and the **secure-desktop cluster (bugs 3/5/6)** — the
+  login/lock/UAC screen is a separate secure desktop reachable only by a SYSTEM helper bound to the
+  Winlogon desktop, and hardware Ctrl+Alt+Del cannot be suppressed without a kernel driver (D23), so
+  that needs a dedicated SYSTEM secure-desktop helper and the VM to verify.
+
 **Status (2026-09-22, classrooms + settings + web dashboard):** three larger features.
 - **Multiple classrooms (feature 1):** a *classroom* is a separate profile directory — its own
   identity, paired devices, room password and blocklist (`crate::classroom`). The base directory is
