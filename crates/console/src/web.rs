@@ -548,6 +548,7 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
             .subscription
             .set(&arg::<String>(a, "dashboardUrl")?, arg(a, "license")?)?),
         "open_dashboard" => ok(state.subscription.open_dashboard()?),
+        "open_link" => ok(platform::browser::open(&arg::<String>(a, "url")?).map_err(|e| e.to_string())?),
         "cloud_status" => ok(sync_client(state).status()),
         "cloud_push" => {
             let (room_name, _) = m.room();

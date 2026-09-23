@@ -1188,6 +1188,14 @@ fn open_dashboard(state: State<'_, AppState>) -> Result<(), String> {
     state.subscription.open_dashboard()
 }
 
+/// Opens an arbitrary `http(s)` link in the default browser (e.g. a game-executable reference from
+/// the blocklist dialog). Non-web URLs are refused by `platform::browser::open`, so this can never be
+/// turned into "run anything".
+#[tauri::command]
+fn open_link(url: String) -> Result<(), String> {
+    platform::browser::open(&url).map_err(|e| e.to_string())
+}
+
 // ---- Classrooms --------------------------------------------------------------------------------
 
 /// Every classroom, marking the one this instance is showing.
@@ -1360,6 +1368,7 @@ pub fn run(
             subscription_config,
             subscription_set,
             open_dashboard,
+            open_link,
             classrooms,
             create_classroom,
             switch_classroom,

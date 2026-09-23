@@ -4,16 +4,50 @@
 
   let { onclose }: { onclose: () => void } = $props()
 
-  /** A starter set of the games and stores the brief names, so a teacher rarely types from scratch. */
-  const SUGGESTIONS = [
-    'steam.exe',
-    'roblox.exe',
-    'robloxplayerbeta.exe',
-    'epicgameslauncher.exe',
-    'minecraft.exe',
-    'minecraftlauncher.exe',
-    'discord.exe',
+  // Starter names grouped by OS, so the list is useful no matter which platform a lab runs. These are
+  // the real *process/executable* names the blocker matches, not friendly titles — e.g. Minecraft Java
+  // runs as javaw.exe (sometimes java.exe) on Windows, never "minecraft.exe". Matching is
+  // case-insensitive and ignores the extension, so a bare "steam" also blocks "steam.exe".
+  type OsGroup = { os: string; items: string[] }
+  const SUGGESTIONS: OsGroup[] = [
+    {
+      os: 'Windows',
+      items: [
+        'steam.exe',
+        'javaw.exe',
+        'java.exe',
+        'robloxplayerbeta.exe',
+        'epicgameslauncher.exe',
+        'fortniteclient-win64-shipping.exe',
+        'valorant.exe',
+        'discord.exe',
+      ],
+    },
+    {
+      os: 'macOS',
+      items: ['Steam', 'Minecraft', 'Roblox', 'Discord', 'League of Legends'],
+    },
+    {
+      os: 'Linux',
+      items: ['steam', 'minecraft-launcher', 'lutris', 'discord', 'java'],
+    },
   ]
+
+  // OS-agnostic, community-maintained catalogs that stay updated with new releases, for looking up a
+  // game/app's real process name on any platform. Opened in the OS browser (http(s) only).
+  const REFERENCES = [
+    { label: 'SteamDB', url: 'https://steamdb.info/' },
+    { label: 'PCGamingWiki', url: 'https://www.pcgamingwiki.com' },
+    { label: 'ProcessLibrary', url: 'https://www.processlibrary.com' },
+  ]
+
+  async function openRef(url: string) {
+    try {
+      await invoke('open_link', { url })
+    } catch (e) {
+      alert(String(e))
+    }
+  }
 
   let programs = $state<string[]>([])
   let draft = $state('')
@@ -26,7 +60,14 @@
   }
   load()
 
-  const missing = $derived(SUGGESTIONS.filter((s) => !programs.includes(s)))
+  // Suggestion chips per OS, hiding any name already on the list (compared case-insensitively, since
+  // that is how the blocker matches and how add() stores them).
+  const missingByOs = $derived(
+    SUGGESTIONS.map((g) => ({
+      os: g.os,
+      items: g.items.filter((s) => !programs.includes(s.toLowerCase())),
+    })).filter((g) => g.items.length > 0),
+  )
 
   function add(name: string) {
     const clean = name.trim().toLowerCase()
@@ -86,14 +127,26 @@
         </ul>
       {/if}
 
-      {#if missing.length > 0}
+      {#if missingByOs.length > 0}
         <p class="hint">{t('blockSuggest')}</p>
-        <div class="chips">
-          {#each missing as name (name)}
-            <button class="chip" onclick={() => add(name)}>+ {name}</button>
-          {/each}
-        </div>
+        {#each missingByOs as group (group.os)}
+          <div class="osrow">
+            <span class="oslabel">{group.os}</span>
+            <div class="chips">
+              {#each group.items as name (name)}
+                <button class="chip" onclick={() => add(name)}>+ {name}</button>
+              {/each}
+            </div>
+          </div>
+        {/each}
       {/if}
+
+      <p class="hint">{t('blockReferences')}</p>
+      <div class="chips">
+        {#each REFERENCES as ref (ref.url)}
+          <button class="chip link" onclick={() => openRef(ref.url)}>{ref.label} ↗</button>
+        {/each}
+      </div>
     {/if}
 
     <footer>
@@ -203,11 +256,38 @@
     margin-bottom: 12px;
   }
 
+  .osrow {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .oslabel {
+    flex: none;
+    width: 62px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .osrow .chips {
+    flex: 1;
+    margin-bottom: 0;
+  }
+
   .chip {
     padding: 4px 10px;
     font-size: 11.5px;
     border-radius: 999px;
     background: transparent;
+  }
+
+  .chip.link {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+    color: var(--accent);
   }
 
   footer {
