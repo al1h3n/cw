@@ -2,7 +2,13 @@
   // A small, draggable, icon-only launcher for Surey. No text, no gradient, no stray dot — just a
   // clean round button you can drop anywhere. A press that doesn't move opens the panel; a press
   // that moves repositions the button (and remembers where).
-  let { onopen }: { onopen: () => void } = $props()
+  // `hidden` while the panel is open (the launcher gets out of the way); `busy` pulses a ring so the
+  // teacher can see Surey is still working in the background even with the panel closed.
+  let {
+    onopen,
+    hidden = false,
+    busy = false,
+  }: { onopen: () => void; hidden?: boolean; busy?: boolean } = $props()
 
   let pos = $state({ x: window.innerWidth - 76, y: window.innerHeight - 84 })
   let moved = false
@@ -59,6 +65,8 @@
 
 <button
   class="launcher"
+  class:hidden
+  class:busy
   style="left:{pos.x}px; top:{pos.y}px;"
   onpointerdown={down}
   onpointermove={move}
@@ -66,16 +74,12 @@
   aria-label="Surey"
   title="Surey"
 >
-  <!-- A four-point spark: distinct from the app's other glyphs, reads as "assistant". -->
+  <!-- A single four-point spark, symmetric about the centre of the 24×24 box (top 12,4 · right 20,12 ·
+       bottom 12,20 · left 4,12), so it sits in the exact optical centre of the round button. -->
   <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
     <path
-      d="M12 2.5c.5 3.6 1.9 5 5.5 5.5-3.6.5-5 1.9-5.5 5.5-.5-3.6-1.9-5-5.5-5.5 3.6-.5 5-1.9 5.5-5.5Z"
+      d="M12 4C12.6 8.9 15.1 11.4 20 12 15.1 12.6 12.6 15.1 12 20 11.4 15.1 8.9 12.6 4 12 8.9 11.4 11.4 8.9 12 4Z"
       fill="currentColor"
-    />
-    <path
-      d="M18.5 13.5c.28 1.8 1 2.5 2.8 2.8-1.8.28-2.5 1-2.8 2.8-.28-1.8-1-2.5-2.8-2.8 1.8-.28 2.5-1 2.8-2.8Z"
-      fill="currentColor"
-      opacity="0.75"
     />
   </svg>
 </button>
@@ -102,6 +106,24 @@
   }
   .launcher:hover {
     filter: brightness(1.08);
+  }
+  .launcher.hidden {
+    display: none;
+  }
+  /* A soft pulsing ring while Surey is still working with the panel closed. */
+  .launcher.busy {
+    animation: surey-busy 1.4s ease-out infinite;
+  }
+  @keyframes surey-busy {
+    0% {
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4), 0 0 0 0 var(--accent, #3b6fd4);
+    }
+    70% {
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4), 0 0 0 9px transparent;
+    }
+    100% {
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4), 0 0 0 0 transparent;
+    }
   }
   .launcher svg {
     display: block;

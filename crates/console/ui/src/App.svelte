@@ -37,6 +37,8 @@
   let showRecordings = $state(false)
   let settingWallpaper = $state(false)
   let sureyOpen = $state(false)
+  // Whether Surey is still working (reply in flight / tool loop), so the closed launcher can pulse.
+  let sureyBusy = $state(false)
   let editingBlocklist = $state(false)
   let showTutorial = $state(false)
   let showSettings = $state(false)
@@ -840,13 +842,12 @@
   />
 {/if}
 
-<!-- Surey (AI) appears only when AI features are enabled in Settings. -->
+<!-- Surey (AI) appears only when AI features are enabled in Settings. The panel stays mounted and is
+     merely hidden when "closed", so a running conversation / tool loop keeps working in the background
+     and reopens exactly where it was; the launcher pulses while it is still busy. -->
 {#if settings.ai_enabled}
-  {#if sureyOpen}
-    <SureyPanel onclose={() => (sureyOpen = false)} />
-  {:else}
-    <SureyLauncher onopen={() => (sureyOpen = true)} />
-  {/if}
+  <SureyLauncher onopen={() => (sureyOpen = true)} hidden={sureyOpen} busy={sureyBusy} />
+  <SureyPanel hidden={!sureyOpen} onclose={() => (sureyOpen = false)} onbusy={(b) => (sureyBusy = b)} />
 {/if}
 
 {#if focusedDevice}

@@ -6,7 +6,16 @@
 
   // Surey: a floating, draggable/dockable AI assistant panel (Notion/VS Code side-panel style).
   // It chats with a user-configured provider and can act on the class through Rust-side tools.
-  let { onclose }: { onclose: () => void } = $props()
+  //
+  // `hidden` hides the panel without unmounting it, so closing the tab never kills an in-flight reply,
+  // a running tool loop or its event listeners — the conversation keeps working in the background and
+  // is exactly where you left it when reopened. `onbusy` reports that "still working" state up so the
+  // launcher can show a pulse while the panel is hidden.
+  let {
+    onclose,
+    hidden = false,
+    onbusy,
+  }: { onclose: () => void; hidden?: boolean; onbusy?: (busy: boolean) => void } = $props()
 
   type Msg = { role: 'user' | 'assistant'; content: string }
   type Choice = { id: string; prompt: string; options: string[]; allow_custom: boolean }
@@ -397,9 +406,18 @@
   })
 
   function onGlobalKey(event: KeyboardEvent) {
+    // A hidden (background) panel must never eat keystrokes from the main app — number keys especially,
+    // which it would otherwise consume for a pending choice.
+    if (hidden) return
     if (pendingChoice) onChoiceKey(event)
     else if (event.key === 'Escape' && !showSettings) onclose()
   }
+
+  // Report the "working" state (a reply in flight, transcribing, or a tool loop running) up to the
+  // launcher, so a closed Surey still shows it is busy.
+  $effect(() => {
+    onbusy?.(busy || activity !== '')
+  })
 </script>
 
 <svelte:window
@@ -409,7 +427,7 @@
   on:resize={onResize}
 />
 
-<div class="surey" class:float={dock === 'float'} {style} role="dialog" aria-label="Surey">
+<div class="surey" class:float={dock === 'float'} class:hidden {style} role="dialog" aria-label="Surey">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header class="bar" onpointerdown={startDrag}>
     <span class="who">
@@ -629,9 +647,11 @@
         {#if listening}
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" /></svg>
         {:else}
+          <!-- Lucide "mic", centred in the 24×24 box (x 5–19, y 2–22) so it sits dead-centre in the button. -->
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="9" y="3" width="6" height="11" rx="3" />
-            <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <path d="M12 19v3" />
           </svg>
         {/if}
       </button>
@@ -647,7 +667,11 @@
         }}
       ></textarea>
       <button class="primary send" disabled={busy || !input.trim()} aria-label={t('sureyAsk')}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-5 16-3.5-6.5L4 12Z" fill="currentColor" stroke="none" /></svg>
+        <!-- Lucide "send", centred in the 24×24 box (x 2–22, y 2–22) so the glyph is optically centred. -->
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M22 2 11 13" />
+          <path d="M22 2 15 22 11 13 2 9 22 2Z" />
+        </svg>
       </button>
     </form>
   {/if}
@@ -692,6 +716,10 @@
   }
   .surey.float {
     border-radius: 14px;
+  }
+  /* Hidden = kept mounted (so the conversation and any running work survive) but off-screen. */
+  .surey.hidden {
+    display: none;
   }
 
   .bar {
