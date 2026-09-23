@@ -6,6 +6,23 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-23, later — screenshot / input-unblock / icon fixes):**
+- **Screenshot capture fixed (`media::windows_capture`):** the Screenshot button failed with "that
+  PC's screen could not be captured right now" because at native resolution the mip level is 0 but the
+  duplication still allocated a `MipLevels: 1` texture with `D3D11_RESOURCE_MISC_GENERATE_MIPS`, which
+  D3D11 rejects (`E_INVALIDARG`). The mip texture/SRV are now optional and skipped when `level == 0`
+  (a direct `CopyResource`), and `capture_jpeg`/`recover` drop any live duplication before rebuilding
+  and fall back to GDI instead of erroring. New `captures_a_jpeg_at_native_resolution` test.
+- **Student input no longer stuck after control ends (`platform::input`):** Win32 `BlockInput(FALSE)`
+  only works from the thread that called `BlockInput(TRUE)`; the Agent toggled it from different Tokio
+  workers, so (especially when elevated) the release silently failed and the student's mouse/keyboard
+  stayed frozen. All `BlockInput` calls now route through one long-lived `input-blocker` thread, so the
+  release always comes from the blocker; calls stay synchronous and idempotent.
+- **Icon alignment:** a shared `.withicon` utility (inline-flex, centred, `svg { display: block }`)
+  centres the Screenshot button's icon; Surey's mic/send buttons reset the inherited
+  `button { padding: 9px 14px }` (with `box-sizing: border-box`) so the glyphs sit dead-centre.
+- Gates green: fmt, clippy `-D warnings`, **223 tests**, vite build, `cargo deny`.
+
 **Status (2026-09-23, later — blocklist + Surey polish):**
 - **OS-agnostic blocklist suggestions (`BlocklistDialog`):** the starter list was Windows-only and
   factually wrong — `minecraft.exe` is not Minecraft Java (it runs as `javaw.exe`, sometimes
