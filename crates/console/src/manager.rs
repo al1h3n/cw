@@ -200,6 +200,13 @@ enum DeviceRequest {
         on: bool,
         reply: tokio::sync::oneshot::Sender<(bool, String)>,
     },
+    /// Grab one full-resolution JPEG of this PC's screen; the reply is the encoded bytes.
+    Screenshot {
+        monitor: u8,
+        max_width: u16,
+        quality: u8,
+        reply: tokio::sync::oneshot::Sender<Vec<u8>>,
+    },
 }
 
 /// Connection state of one device, in the order the UI colours them.
@@ -787,6 +794,63 @@ impl DeviceManager {
         .await
     }
 
+    /// Takes one full-resolution screenshot of a PC and saves it as a JPEG on the teacher's PC,
+    /// returning the saved path. The width is capped at the PC's own monitor width (a screenshot can
+    /// never be sharper than the screen), and `quality` is the JPEG quality (1–100).
+    ///
+    /// # Errors
+    /// The PC is unknown or not connected, or the file cannot be written.
+    pub async fn screenshot(&self, device_id: &str, quality: u8) -> Result<String, String> {
+        // The selected monitor and its native width, so we ask for the screen at its real resolution.
+        let (monitor, native_width) = {
+            let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+            let state = devices.get(device_id).ok_or("unknown device")?;
+            let width = state
+                .monitors
+                .iter()
+                .find(|m| m.index == state.monitor)
+                .or_else(|| state.monitors.first())
+                .map_or(1920, |m| m.width);
+            (state.monitor, u16::try_from(width).unwrap_or(u16::MAX))
+        };
+        let quality = quality.clamp(1, 100);
+        let jpeg = self
+            .ask(device_id, move |reply| DeviceRequest::Screenshot {
+                monitor,
+                max_width: native_width,
+                quality,
+                reply,
+            })
+            .await?;
+        if jpeg.is_empty() {
+            return Err(
+                "that PC's screen could not be captured right now (locked or a prompt is up)"
+                    .into(),
+            );
+        }
+
+        let dir = self.data_dir.join("screenshots");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+        let stamp = net::endpoint::now_ms();
+        let file = dir.join(format!("{device_id}-{stamp}.jpg"));
+        std::fs::write(&file, &jpeg).map_err(|e| format!("write {}: {e}", file.display()))?;
+        Ok(file.display().to_string())
+    }
+
+    /// The native resolution `(width, height)` of a PC's currently-selected monitor, if known. Used to
+    /// refuse a recording bigger than the screen (upscaling only wastes space).
+    #[must_use]
+    pub fn monitor_size(&self, device_id: &str) -> Option<(u32, u32)> {
+        let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        let state = devices.get(device_id)?;
+        state
+            .monitors
+            .iter()
+            .find(|m| m.index == state.monitor)
+            .or_else(|| state.monitors.first())
+            .map(|m| (m.width, m.height))
+    }
+
     /// Lists the recordings stored on one PC.
     ///
     /// # Errors
@@ -1290,6 +1354,22 @@ impl DeviceManager {
                             .await
                             .map_err(|e| e.to_string())?;
                         let _ = reply.send(state);
+                    }
+                    DeviceRequest::Screenshot {
+                        monitor,
+                        max_width,
+                        quality,
+                        reply,
+                    } => {
+                        // A momentarily uncapturable screen (locked / UAC) must not tear the session,
+                        // so reply empty bytes on that transient case and let the caller report it.
+                        let jpeg =
+                            match session.request_thumbnail(monitor, max_width, quality).await {
+                                Ok(jpeg) => jpeg,
+                                Err(net::EndpointError::ScreenUnavailable) => Vec::new(),
+                                Err(e) => return Err(e.to_string()),
+                            };
+                        let _ = reply.send(jpeg);
                     }
                 }
             }

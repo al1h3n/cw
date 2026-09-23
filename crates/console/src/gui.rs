@@ -383,7 +383,24 @@ async fn start_recording(
         scaler: parse_scaler(&scaler),
         two_pass,
     };
+    if let Some((w, h)) = state.manager.monitor_size(&device_id)
+        && (w < max_width || h < max_height)
+    {
+        return Err(format!(
+            "that PC's screen is {w}x{h}, smaller than the requested {max_width}x{max_height} — lower the recording size or it would only be upscaled"
+        ));
+    }
     state.manager.start_recording(&device_id, options).await
+}
+
+/// Takes one full-resolution screenshot of a PC and saves it on the teacher's PC, returning the path.
+#[tauri::command]
+async fn screenshot(
+    state: State<'_, AppState>,
+    device_id: String,
+    quality: u8,
+) -> Result<String, String> {
+    state.manager.screenshot(&device_id, quality).await
 }
 
 pub(crate) fn parse_codec(s: &str) -> proto::Codec {
@@ -623,6 +640,26 @@ async fn record_all(
         scaler: parse_scaler(&scaler),
         two_pass,
     };
+    // All-or-nothing on resolution: if any connected PC's screen is smaller than the requested size,
+    // refuse the whole batch with a clear message rather than upscale some and not others.
+    let mut too_small: Vec<String> = Vec::new();
+    for device in state.manager.devices() {
+        if device.status != crate::manager::DeviceStatus::Live {
+            continue;
+        }
+        if let Some((w, h)) = state.manager.monitor_size(&device.device_id)
+            && (w < max_width || h < max_height)
+        {
+            let label = device.name.unwrap_or(device.device_id);
+            too_small.push(format!("{label} ({w}x{h})"));
+        }
+    }
+    if !too_small.is_empty() {
+        return Err(format!(
+            "these PCs' screens are smaller than {max_width}x{max_height}, so recording was not started: {}. Lower the size and try again.",
+            too_small.join(", ")
+        ));
+    }
     let mut result = BulkResult { ok: 0, failed: 0 };
     for device in state.manager.devices() {
         if device.status != crate::manager::DeviceStatus::Live {
@@ -1283,6 +1320,7 @@ pub fn run(
             rename_device,
             open_viewer,
             start_recording,
+            screenshot,
             stop_recording,
             recording_status,
             list_recordings,

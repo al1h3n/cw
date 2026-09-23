@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from './bridge'
   import { t } from './i18n.svelte'
+  import { toasts } from './toast-store.svelte'
   import type { Device } from './types'
   import ActionMenu from './ActionMenu.svelte'
   import ActionResult from './ActionResult.svelte'
@@ -34,6 +35,20 @@
   let showWallpaper = $state(false)
   let examOn = $state(false)
   let screenLockOn = $state(false)
+  let shooting = $state(false)
+
+  async function takeScreenshot() {
+    shooting = true
+    try {
+      // Full-resolution capture (the backend caps width at the PC's own screen); quality high.
+      const path = await invoke<string>('screenshot', { deviceId: device.device_id, quality: 92 })
+      toasts.push(t('screenshotSaved', path), 'ok')
+    } catch (e) {
+      onerror(String(e))
+    } finally {
+      shooting = false
+    }
+  }
 
   async function toggleScreenLock() {
     try {
@@ -365,6 +380,14 @@
         </button>
       </Menu>
 
+      <button
+        class="withicon"
+        onclick={takeScreenshot}
+        disabled={device.status !== 'live' || shooting}
+        title={t('screenshotHint')}
+      >
+        <Icon name="image" />{t('screenshotButton')}
+      </button>
       <RecordButton deviceId={device.device_id} {onerror} />
       <ActionResult report={device.last_action} />
       <ActionMenu deviceId={device.device_id} liveCount={device.status === 'live' ? 1 : 0} {onerror} />

@@ -436,9 +436,22 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
         )),
 
         // ---- recordings ----
-        "start_recording" => ok(m
-            .start_recording(&arg::<String>(a, "deviceId")?, record_options(a)?)
+        "screenshot" => ok(m
+            .screenshot(&arg::<String>(a, "deviceId")?, arg(a, "quality")?)
             .await?),
+        "start_recording" => {
+            let device_id: String = arg(a, "deviceId")?;
+            let options = record_options(a)?;
+            if let Some((w, h)) = m.monitor_size(&device_id)
+                && (w < options.max_width || h < options.max_height)
+            {
+                return Err(format!(
+                    "that PC's screen is {w}x{h}, smaller than the requested {}x{} — lower the recording size",
+                    options.max_width, options.max_height
+                ));
+            }
+            ok(m.start_recording(&device_id, options).await?)
+        }
         "stop_recording" => ok(m.stop_recording(&arg::<String>(a, "deviceId")?).await?),
         "recording_status" => ok(m.recording_status(&arg::<String>(a, "deviceId")?).await?),
         "list_recordings" => ok(m.list_recordings(&arg::<String>(a, "deviceId")?).await?),
@@ -446,7 +459,7 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
             .download_recording(&arg::<String>(a, "deviceId")?, &arg::<String>(a, "file")?)
             .await?),
         "recording_overview" => ok(recording_overview(state).await),
-        "record_all" => ok(record_all(state, record_options(a)?).await),
+        "record_all" => record_all(state, record_options(a)?).await,
         "stop_all_recording" => ok(stop_all_recording(state).await),
 
         // ---- broadcast ----
@@ -630,8 +643,31 @@ async fn set_wallpaper(state: &WebState, a: &Value) -> Result<Value, String> {
     Ok(json!({ "ok": okc, "failed": failed }))
 }
 
-/// Starts recording on every connected PC — mirrors [`crate::gui`]'s command.
-async fn record_all(state: &WebState, options: proto::RecordOptions) -> Value {
+/// Starts recording on every connected PC — mirrors [`crate::gui`]'s command. All-or-nothing on
+/// resolution: refuses if any connected PC's screen is smaller than the requested size.
+async fn record_all(state: &WebState, options: proto::RecordOptions) -> Result<Value, String> {
+    let mut too_small: Vec<String> = Vec::new();
+    for device in state.manager.devices() {
+        if device.status != DeviceStatus::Live {
+            continue;
+        }
+        if let Some((w, h)) = state.manager.monitor_size(&device.device_id)
+            && (w < options.max_width || h < options.max_height)
+        {
+            too_small.push(format!(
+                "{} ({w}x{h})",
+                device.name.unwrap_or(device.device_id)
+            ));
+        }
+    }
+    if !too_small.is_empty() {
+        return Err(format!(
+            "these PCs' screens are smaller than {}x{}, so recording was not started: {}",
+            options.max_width,
+            options.max_height,
+            too_small.join(", ")
+        ));
+    }
     let (mut okc, mut failed) = (0u32, 0u32);
     for device in state.manager.devices() {
         if device.status != DeviceStatus::Live {
@@ -646,7 +682,7 @@ async fn record_all(state: &WebState, options: proto::RecordOptions) -> Value {
             Err(_) => failed += 1,
         }
     }
-    json!({ "ok": okc, "failed": failed })
+    Ok(json!({ "ok": okc, "failed": failed }))
 }
 
 /// Stops recording on every connected PC — mirrors [`crate::gui`]'s command.
