@@ -132,6 +132,25 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "list_workspace".into(),
+            description: "Recursively list every file in one PC's workspace (paths and sizes), e.g. to collect all work or see what changed.".into(),
+            parameters: json!({ "type": "object", "properties": { "device_id": device_id }, "required": ["device_id"] }),
+        },
+        ToolSpec {
+            name: "delete_file".into(),
+            description: "Delete one file from one PC's workspace (a specific file). Destructive — confirm with ask_user first. path is workspace-relative.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "device_id": device_id, "path": { "type": "string" } },
+                "required": ["device_id", "path"]
+            }),
+        },
+        ToolSpec {
+            name: "clear_workspace".into(),
+            description: "Wipe EVERY file in one PC's workspace (one-button clear of student files). Destructive and irreversible — always confirm with ask_user first.".into(),
+            parameters: json!({ "type": "object", "properties": { "device_id": device_id }, "required": ["device_id"] }),
+        },
+        ToolSpec {
             name: "ask_user".into(),
             description: "Ask the teacher to pick one option (or type their own). Use this to confirm a destructive action or to choose between alternatives before acting. Returns the chosen text.".into(),
             parameters: json!({
@@ -278,6 +297,22 @@ pub async fn execute(manager: &DeviceManager, name: &str, args: &Value) -> Resul
                 .download_file(arg_str(args, "device_id")?, arg_str(args, "path")?)
                 .await?;
             Ok(json!({ "ok": true, "saved_to": saved }))
+        }
+        "list_workspace" => {
+            let files = manager
+                .workspace_manifest(arg_str(args, "device_id")?)
+                .await?;
+            serde_json::to_value(json!({ "files": files })).map_err(|e| e.to_string())
+        }
+        "delete_file" => {
+            manager
+                .delete_file(arg_str(args, "device_id")?, arg_str(args, "path")?)
+                .await?;
+            Ok(json!({ "ok": true }))
+        }
+        "clear_workspace" => {
+            let removed = manager.clear_workspace(arg_str(args, "device_id")?).await?;
+            Ok(json!({ "ok": true, "removed": removed }))
         }
         ASK_USER => Err("ask_user is handled by the orchestrator".into()),
         other => Err(format!("unknown tool '{other}'")),

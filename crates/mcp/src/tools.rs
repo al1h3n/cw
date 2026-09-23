@@ -175,6 +175,31 @@ pub fn catalogue() -> Value {
             &["device_id", "name", "data_base64"],
         ),
         tool(
+            "list_workspace",
+            "Recursively list every file in a student PC's workspace (paths and sizes), e.g. to collect \
+             all exam work or see what changed. Files only.",
+            json!({ "device_id": device_id_prop() }),
+            &["device_id"],
+        ),
+        tool(
+            "delete_file",
+            "Delete one file from a student PC's workspace (choose a specific file to remove). \
+             DESTRUCTIVE — confirm intent. path is workspace-relative.",
+            json!({
+                "device_id": device_id_prop(),
+                "path": { "type": "string", "description": "Workspace-relative path of the file to delete." }
+            }),
+            &["device_id", "path"],
+        ),
+        tool(
+            "clear_workspace",
+            "Wipe EVERY file in a student PC's workspace (the one-button clear of student files). \
+             DESTRUCTIVE and irreversible — always confirm with the teacher first. Confined to the \
+             workspace folder.",
+            json!({ "device_id": device_id_prop() }),
+            &["device_id"],
+        ),
+        tool(
             "recording_status",
             "Report whether a PC is currently recording its screen, and the running frame count.",
             json!({ "device_id": device_id_prop() }),
@@ -397,6 +422,25 @@ pub async fn call(fleet: &Fleet, name: &str, args: &Value) -> Result<Vec<Value>,
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(vec![json_text(&json!({ "ok": true, "bytes": data.len() }))])
+        }
+        "list_workspace" => {
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            let files = session.list_workspace().await.map_err(|e| e.to_string())?;
+            Ok(vec![json_text(&json!({ "files": files }))])
+        }
+        "delete_file" => {
+            let path = arg_str(args, "path")?.to_string();
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            session
+                .delete_file(&path)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(vec![json_text(&json!({ "deleted": true }))])
+        }
+        "clear_workspace" => {
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            let removed = session.clear_workspace().await.map_err(|e| e.to_string())?;
+            Ok(vec![json_text(&json!({ "removed": removed }))])
         }
         "recording_status" => {
             let mut session = fleet.connect(arg_str(args, "device_id")?).await?;

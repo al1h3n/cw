@@ -25,6 +25,39 @@
   let loading = $state(false)
   let busy = $state(false)
   let status = $state('')
+  // A baseline snapshot (workspace path -> size) taken at lesson start, so the teacher can see which
+  // files a student added or changed. Size-based, never time-based (a student can change the clock).
+  let baseline = $state<Record<string, number> | null>(null)
+
+  function baselineKey(id: string): string {
+    return `cowatcher.filebaseline.${id}`
+  }
+  function loadBaseline() {
+    baseline = null
+    if (!deviceId) return
+    try {
+      const raw = localStorage.getItem(baselineKey(deviceId))
+      if (raw) baseline = JSON.parse(raw)
+    } catch {
+      /* ignore */
+    }
+  }
+  // Re-load the baseline whenever the chosen PC changes.
+  $effect(() => {
+    void deviceId
+    loadBaseline()
+  })
+
+  function entryPath(entry: FileEntry): string {
+    return [...segments, entry.name].join('/')
+  }
+  // '' | 'new' | 'changed' relative to the baseline (empty when no baseline is set).
+  function diff(entry: FileEntry): string {
+    if (!baseline || entry.is_dir) return ''
+    const path = entryPath(entry)
+    if (!(path in baseline)) return 'new'
+    return baseline[path] !== entry.bytes ? 'changed' : ''
+  }
 
   // Pick the first live PC by default, and load its root when the dialog opens or the PC changes.
   $effect(() => {
@@ -96,6 +129,85 @@
     }
   }
 
+  async function deleteEntry(entry: FileEntry) {
+    if (busy) return
+    if (!confirm(t('filesDeleteConfirm', entry.name))) return
+    busy = true
+    status = ''
+    try {
+      await invoke('delete_file', { deviceId, path: entryPath(entry) })
+      status = t('filesDeleted', entry.name)
+      await refresh()
+    } catch (e) {
+      onerror(String(e))
+    } finally {
+      busy = false
+    }
+  }
+
+  async function wipeAll() {
+    if (busy || !deviceId) return
+    if (!confirm(t('filesWipeConfirm'))) return
+    busy = true
+    status = ''
+    try {
+      const removed = await invoke<number>('clear_workspace', { deviceId })
+      status = t('filesWiped', removed)
+      // The workspace is now empty, so the old baseline is meaningless.
+      try {
+        localStorage.removeItem(baselineKey(deviceId))
+      } catch {
+        /* ignore */
+      }
+      baseline = null
+      await refresh()
+    } catch (e) {
+      onerror(String(e))
+    } finally {
+      busy = false
+    }
+  }
+
+  async function markBaseline() {
+    if (busy || !deviceId) return
+    busy = true
+    status = ''
+    try {
+      const files = await invoke<FileEntry[]>('workspace_manifest', { deviceId })
+      const map: Record<string, number> = {}
+      for (const f of files) map[f.name] = f.bytes
+      try {
+        localStorage.setItem(baselineKey(deviceId), JSON.stringify(map))
+      } catch {
+        /* ignore */
+      }
+      baseline = map
+      status = t('filesBaselineSet', files.length)
+    } catch (e) {
+      onerror(String(e))
+    } finally {
+      busy = false
+    }
+  }
+
+  async function collectAll() {
+    if (busy || !deviceId) return
+    busy = true
+    status = ''
+    try {
+      const files = await invoke<FileEntry[]>('workspace_manifest', { deviceId })
+      let saved = ''
+      for (const f of files) {
+        saved = await invoke<string>('download_file', { deviceId, path: f.name })
+      }
+      status = files.length > 0 ? t('filesCollected', files.length, saved) : t('filesEmpty')
+    } catch (e) {
+      onerror(String(e))
+    } finally {
+      busy = false
+    }
+  }
+
   function fmtSize(n: number): string {
     if (n < 1024) return `${n} B`
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
@@ -135,6 +247,10 @@
     <div class="crumbs">
       <button class="up" onclick={up} disabled={segments.length === 0}>↑ {t('filesUp')}</button>
       <code class="path">{t('filesRoot')}{dir ? `/${dir}` : ''}</code>
+      <span class="spacer"></span>
+      <button class="act" onclick={markBaseline} disabled={!deviceId || busy}>{t('filesBaseline')}</button>
+      <button class="act" onclick={collectAll} disabled={!deviceId || busy}>{t('filesCollect')}</button>
+      <button class="act danger" onclick={wipeAll} disabled={!deviceId || busy}>{t('filesWipe')}</button>
     </div>
 
     <div class="list">
@@ -144,6 +260,7 @@
         <p class="hint">{t('filesEmpty')}</p>
       {:else}
         {#each entries as entry (entry.name)}
+          {@const mark = diff(entry)}
           <div class="item">
             {#if entry.is_dir}
               <button class="entry dir" onclick={() => open(entry)}>
@@ -151,8 +268,11 @@
               </button>
             {:else}
               <span class="entry file"><span class="ic">📄</span><span class="nm">{entry.name}</span></span>
+              {#if mark === 'new'}<span class="badge new">{t('filesNew')}</span>{/if}
+              {#if mark === 'changed'}<span class="badge changed">{t('filesChanged')}</span>{/if}
               <span class="sz">{fmtSize(entry.bytes)}</span>
               <button class="dl" onclick={() => download(entry)} disabled={busy}>{t('filesDownload')}</button>
+              <button class="del" onclick={() => deleteEntry(entry)} disabled={busy} aria-label={t('filesDelete')} title={t('filesDelete')}>✕</button>
             {/if}
           </div>
         {/each}
@@ -324,6 +444,54 @@
   }
   .dl:hover:not(:disabled) {
     border-color: var(--accent);
+  }
+  .del {
+    flex: none;
+    width: 26px;
+    padding: 3px 0;
+    font-size: 12px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .del:hover:not(:disabled) {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+  .act {
+    padding: 4px 10px;
+    font-size: 12px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .act:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+  .act.danger:hover:not(:disabled) {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+  .badge {
+    flex: none;
+    padding: 1px 7px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    border-radius: 999px;
+  }
+  .badge.new {
+    color: #06101f;
+    background: var(--live, #3ecf8e);
+  }
+  .badge.changed {
+    color: #06101f;
+    background: var(--accent, #6ea8fe);
   }
   .hint {
     color: var(--muted);

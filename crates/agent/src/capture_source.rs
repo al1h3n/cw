@@ -580,6 +580,34 @@ impl AgentDevice for ScreenCapture {
         Some(dest)
     }
 
+    fn workspace_manifest(&self, _from: &PeerInfo) -> Result<Vec<proto::FileEntry>, String> {
+        crate::workspace::manifest(&self.workspace)
+    }
+
+    fn delete_file(&self, from: &PeerInfo, path: &str) -> String {
+        match crate::workspace::delete(&self.workspace, path) {
+            Ok(()) => {
+                let _ = self.audit.note(
+                    net::endpoint::now_ms(),
+                    from.device_id,
+                    &format!("file-delete:{path}"),
+                );
+                String::new()
+            }
+            Err(problem) => problem,
+        }
+    }
+
+    fn clear_workspace(&self, from: &PeerInfo) -> Result<u32, String> {
+        let removed = crate::workspace::clear(&self.workspace)?;
+        let _ = self.audit.note(
+            net::endpoint::now_ms(),
+            from.device_id,
+            &format!("workspace-clear:{removed}"),
+        );
+        Ok(removed)
+    }
+
     fn set_wallpaper(
         &self,
         from: &PeerInfo,

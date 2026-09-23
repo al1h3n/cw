@@ -477,6 +477,11 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
                 arg::<Vec<u8>>(a, "data")?,
             )
             .await?),
+        "workspace_manifest" => ok(m.workspace_manifest(&arg::<String>(a, "deviceId")?).await?),
+        "delete_file" => ok(m
+            .delete_file(&arg::<String>(a, "deviceId")?, &arg::<String>(a, "path")?)
+            .await?),
+        "clear_workspace" => ok(m.clear_workspace(&arg::<String>(a, "deviceId")?).await?),
         "recording_overview" => ok(recording_overview(state).await),
         "record_all" => record_all(state, record_options(a)?).await,
         "stop_all_recording" => ok(stop_all_recording(state).await),

@@ -186,6 +186,24 @@ pub trait AgentDevice {
         None
     }
 
+    /// Recursively lists every file in the workspace (for "collect all" / diffing). The default has none.
+    fn workspace_manifest(&self, from: &PeerInfo) -> Result<Vec<proto::FileEntry>, String> {
+        let _ = from;
+        Err("this device has no file workspace".to_string())
+    }
+
+    /// Deletes one workspace file. Returns an empty string on success, else why not. Default: refuses.
+    fn delete_file(&self, from: &PeerInfo, path: &str) -> String {
+        let _ = (from, path);
+        "this device has no file workspace".to_string()
+    }
+
+    /// Wipes the whole workspace, returning the number of entries removed, or a reason. Default: refuses.
+    fn clear_workspace(&self, from: &PeerInfo) -> Result<u32, String> {
+        let _ = from;
+        Err("this device has no file workspace".to_string())
+    }
+
     /// The absolute path to **write** an uploaded file to (directory created), or `None` if the
     /// destination is outside the workspace or the name is not a plain file name. Default: no writes.
     fn file_write_path(
@@ -919,6 +937,55 @@ impl ControlSession {
         }
     }
 
+    /// Console side: recursively list every file in the student's workspace (paths in each entry's
+    /// `name`), for collecting or diffing against a baseline.
+    ///
+    /// # Errors
+    /// Stream failure, an unexpected reply, or the workspace could not be walked.
+    pub async fn list_workspace(&mut self) -> Result<Vec<proto::FileEntry>, EndpointError> {
+        write_message(&mut self.send, &Control::ListWorkspace).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::WorkspaceManifest { files, problem } if problem.is_empty() => Ok(files),
+            Control::WorkspaceManifest { problem, .. } => Err(EndpointError::Capture(problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: delete one file (workspace-relative `path`) from the student's workspace.
+    ///
+    /// # Errors
+    /// Stream failure, an unexpected reply, or the Agent refusing the delete.
+    pub async fn delete_file(&mut self, path: &str) -> Result<(), EndpointError> {
+        write_message(
+            &mut self.send,
+            &Control::DeleteFile {
+                path: path.to_string(),
+            },
+        )
+        .await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::FileDeleted { problem } if problem.is_empty() => Ok(()),
+            Control::FileDeleted { problem } => Err(EndpointError::Capture(problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: wipe the whole workspace, returning how many entries were removed.
+    ///
+    /// # Errors
+    /// Stream failure, an unexpected reply, or the wipe failing.
+    pub async fn clear_workspace(&mut self) -> Result<u32, EndpointError> {
+        write_message(&mut self.send, &Control::ClearWorkspace).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::WorkspaceCleared { removed, problem } if problem.is_empty() => Ok(removed),
+            Control::WorkspaceCleared { problem, .. } => Err(EndpointError::Capture(problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Reads the one reply every recording request produces.
     async fn read_recording_state(&mut self) -> Result<proto::RecordingInfo, EndpointError> {
         match read_message::<Control>(&mut self.recv).await? {
@@ -1389,6 +1456,32 @@ impl ControlSession {
                             .await?;
                         }
                     }
+                }
+                Control::ListWorkspace => {
+                    let (files, problem) = match source.workspace_manifest(&self.peer) {
+                        Ok(files) => (files, String::new()),
+                        Err(problem) => (Vec::new(), problem),
+                    };
+                    write_message(
+                        &mut self.send,
+                        &Control::WorkspaceManifest { files, problem },
+                    )
+                    .await?;
+                }
+                Control::DeleteFile { path } => {
+                    let problem = source.delete_file(&self.peer, &path);
+                    write_message(&mut self.send, &Control::FileDeleted { problem }).await?;
+                }
+                Control::ClearWorkspace => {
+                    let (removed, problem) = match source.clear_workspace(&self.peer) {
+                        Ok(removed) => (removed, String::new()),
+                        Err(problem) => (0, problem),
+                    };
+                    write_message(
+                        &mut self.send,
+                        &Control::WorkspaceCleared { removed, problem },
+                    )
+                    .await?;
                 }
                 Control::ListApps => {
                     write_message(&mut self.send, &Control::Apps(source.list_apps())).await?;

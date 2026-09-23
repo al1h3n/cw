@@ -122,6 +122,101 @@ pub fn write_path(root: &Path, dir: &str, name: &str) -> Option<PathBuf> {
     Some(dir_path.join(name))
 }
 
+/// Recursively lists **every file** in the workspace (directories excluded), each entry's `name`
+/// carrying its workspace-relative path with `/` separators. Symlinks are skipped (never followed out
+/// of the workspace). Capped at [`MAX_FILE_LIST`].
+///
+/// # Errors
+/// If the workspace root cannot be read.
+pub fn manifest(root: &Path) -> Result<Vec<FileEntry>, String> {
+    let _ = std::fs::create_dir_all(root);
+    let mut out = Vec::new();
+    walk_files(root, root, &mut out);
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// Depth-first walk collecting files (not directories), never following symlinks.
+fn walk_files(root: &Path, dir: &Path, out: &mut Vec<FileEntry>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if out.len() >= MAX_FILE_LIST {
+            return;
+        }
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        // symlink_metadata via file_type on DirEntry does not follow the link.
+        let is_symlink = entry.file_type().map(|t| t.is_symlink()).unwrap_or(false);
+        if is_symlink {
+            continue; // never descend through or report a symlink
+        }
+        if meta.is_dir() {
+            walk_files(root, &path, out);
+        } else if meta.is_file()
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            out.push(FileEntry {
+                name: rel.to_string_lossy().replace('\\', "/"),
+                is_dir: false,
+                bytes: meta.len(),
+            });
+        }
+    }
+}
+
+/// Deletes one file from the workspace. Refuses a path that escapes the workspace, a missing file, or a
+/// directory (only files are deletable here; use [`clear`] to wipe everything).
+///
+/// # Errors
+/// If the path is outside the workspace, is not an existing file, or the OS refuses the delete.
+pub fn delete(root: &Path, rel: &str) -> Result<(), String> {
+    let path = safe_join(root, rel).ok_or("that path is outside the workspace")?;
+    if !path.is_file() || !confined(root, &path) {
+        return Err("no such file in the workspace".into());
+    }
+    std::fs::remove_file(&path).map_err(|e| e.to_string())
+}
+
+/// Wipes the whole workspace — every file and sub-directory inside `root`, leaving `root` itself. Never
+/// follows a symlink out of the workspace (a symlink is removed as a link, its target untouched), so a
+/// wipe can only ever delete inside the configured scope (AGENTS.md §5). Returns how many entries went.
+///
+/// # Errors
+/// If the workspace cannot be read.
+pub fn clear(root: &Path) -> Result<u32, String> {
+    if !root.is_dir() {
+        return Ok(0);
+    }
+    let mut removed = 0u32;
+    remove_children(root, &mut removed)?;
+    Ok(removed)
+}
+
+/// Removes everything inside `dir` (not `dir` itself), recursing into real sub-directories only and
+/// removing symlinks as links. Confined by construction: it only ever touches paths under `dir`.
+fn remove_children(dir: &Path, removed: &mut u32) -> Result<(), String> {
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        let is_symlink = entry.file_type().map(|t| t.is_symlink()).unwrap_or(false);
+        if is_symlink {
+            // Remove the link itself; never follow it. Try file then dir form (Windows dir-symlinks).
+            let _ = std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path));
+            *removed += 1;
+        } else if path.is_dir() {
+            remove_children(&path, removed)?;
+            let _ = std::fs::remove_dir(&path);
+            *removed += 1;
+        } else {
+            let _ = std::fs::remove_file(&path);
+            *removed += 1;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +285,70 @@ mod tests {
         );
         assert_eq!(read_path(&root, "missing.txt"), None);
         assert_eq!(read_path(&root, "../notes.txt"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_removes_a_file_and_refuses_escaping_or_missing_paths() {
+        let root = root();
+        std::fs::write(root.join("keep.txt"), b"k").unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub").join("x.py"), b"x").unwrap();
+        assert!(delete(&root, "sub/x.py").is_ok());
+        assert!(!root.join("sub").join("x.py").exists());
+        assert!(
+            root.join("keep.txt").exists(),
+            "unrelated files are untouched"
+        );
+        assert!(delete(&root, "../evil").is_err(), "escaping is refused");
+        assert!(delete(&root, "missing").is_err(), "missing file is refused");
+        assert!(
+            delete(&root, "sub").is_err(),
+            "a directory is not a deletable file"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn clear_wipes_the_workspace_but_nothing_outside_it() {
+        let parent = root();
+        let root = parent.join("ws");
+        std::fs::create_dir_all(root.join("a").join("b")).unwrap();
+        std::fs::write(root.join("top.txt"), b"t").unwrap();
+        std::fs::write(root.join("a").join("mid.txt"), b"m").unwrap();
+        std::fs::write(root.join("a").join("b").join("deep.txt"), b"d").unwrap();
+        // A file that lives OUTSIDE the workspace, next to it, must survive the wipe.
+        std::fs::write(parent.join("outside.txt"), b"safe").unwrap();
+
+        let removed = clear(&root).expect("clear");
+        assert!(removed >= 5, "removed files and dirs, got {removed}");
+        assert!(root.is_dir(), "the workspace root itself remains");
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            0,
+            "workspace is empty"
+        );
+        assert!(
+            parent.join("outside.txt").exists(),
+            "files outside the workspace are never touched"
+        );
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn manifest_lists_every_file_with_its_relative_path() {
+        let root = root();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.txt"), b"aa").unwrap();
+        std::fs::write(root.join("sub").join("hw.py"), b"print").unwrap();
+        let files = manifest(&root).expect("manifest");
+        let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"a.txt"));
+        assert!(
+            names.contains(&"sub/hw.py"),
+            "paths use / and are workspace-relative"
+        );
+        assert!(files.iter().all(|f| !f.is_dir), "manifest is files only");
         let _ = std::fs::remove_dir_all(&root);
     }
 

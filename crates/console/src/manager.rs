@@ -163,6 +163,19 @@ enum DeviceRequest {
         data: Vec<u8>,
         reply: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
+    /// Recursively list every file in this PC's workspace; the reply is the manifest or an error.
+    ListWorkspace {
+        reply: tokio::sync::oneshot::Sender<Result<Vec<proto::FileEntry>, String>>,
+    },
+    /// Delete one workspace file; the reply is `Ok(())` or an error.
+    DeleteFile {
+        path: String,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    /// Wipe this PC's whole workspace; the reply is how many entries were removed, or an error.
+    ClearWorkspace {
+        reply: tokio::sync::oneshot::Sender<Result<u32, String>>,
+    },
     /// What this PC can start.
     ListApps {
         reply: tokio::sync::oneshot::Sender<Vec<proto::AppEntry>>,
@@ -956,6 +969,40 @@ impl DeviceManager {
         .await?
     }
 
+    /// Recursively lists every file in one PC's workspace (for collect/diff).
+    ///
+    /// # Errors
+    /// The PC is unknown, not connected, or the workspace could not be walked.
+    pub async fn workspace_manifest(
+        &self,
+        device_id: &str,
+    ) -> Result<Vec<proto::FileEntry>, String> {
+        self.ask(device_id, |reply| DeviceRequest::ListWorkspace { reply })
+            .await?
+    }
+
+    /// Deletes one file (workspace-relative `path`) from a PC's workspace.
+    ///
+    /// # Errors
+    /// The PC is unknown, not connected, or the Agent refused the delete.
+    pub async fn delete_file(&self, device_id: &str, path: &str) -> Result<(), String> {
+        let path = path.to_string();
+        self.ask(device_id, move |reply| DeviceRequest::DeleteFile {
+            path,
+            reply,
+        })
+        .await?
+    }
+
+    /// Wipes one PC's whole workspace, returning how many entries were removed.
+    ///
+    /// # Errors
+    /// The PC is unknown, not connected, or the wipe failed.
+    pub async fn clear_workspace(&self, device_id: &str) -> Result<u32, String> {
+        self.ask(device_id, |reply| DeviceRequest::ClearWorkspace { reply })
+            .await?
+    }
+
     /// The programs one PC offers to start.
     ///
     /// # Errors
@@ -1386,6 +1433,18 @@ impl DeviceManager {
                             .send_file(&dir, &name, &data)
                             .await
                             .map_err(|e| e.to_string());
+                        let _ = reply.send(result);
+                    }
+                    DeviceRequest::ListWorkspace { reply } => {
+                        let result = session.list_workspace().await.map_err(|e| e.to_string());
+                        let _ = reply.send(result);
+                    }
+                    DeviceRequest::DeleteFile { path, reply } => {
+                        let result = session.delete_file(&path).await.map_err(|e| e.to_string());
+                        let _ = reply.send(result);
+                    }
+                    DeviceRequest::ClearWorkspace { reply } => {
+                        let result = session.clear_workspace().await.map_err(|e| e.to_string());
                         let _ = reply.send(result);
                     }
                     DeviceRequest::ListApps { reply } => {

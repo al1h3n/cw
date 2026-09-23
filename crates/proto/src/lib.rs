@@ -9,7 +9,10 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 ///
 /// Bump it on every breaking change to message layout or meaning. Peers with different
 /// versions must refuse the session with a clear error instead of guessing.
-/// Version 21 added workspace file transfer (`ListFiles`/`Files`, `FetchFile`/`FileTransfer`,
+/// Version 22 added workspace collect/wipe (`ListWorkspace`/`WorkspaceManifest`, `DeleteFile`/
+/// `FileDeleted`, `ClearWorkspace`/`WorkspaceCleared`) — recursively list, delete a chosen file, or
+/// wipe every student file, all confined to the workspace;
+/// version 21 added workspace file transfer (`ListFiles`/`Files`, `FetchFile`/`FileTransfer`,
 /// `SendFile`/`FileSendReady`/`FileSent`) — browse, download and upload files inside a student PC's
 /// shared workspace folder;
 /// version 20 added a `duration_seconds` to `SetExam` (the Agent auto-releases a timed lock, so an
@@ -30,7 +33,7 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 /// added remote mouse/keyboard input; version 2 added remote actions. Each shifted the later
 /// `Control` discriminants, so a peer on an older version would decode them as the wrong message and
 /// the handshake refuses it outright.
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 
 /// Default JPEG quality (`1..=100`) for screen thumbnails when the Console does not specify one, and
 /// what non-preview callers (diagnostics, the MCP screenshot tool) pass. 60 measured ~5–7 KB at

@@ -747,6 +747,39 @@ pub enum Control {
         /// Non-empty when the bytes could not be written.
         problem: String,
     },
+    /// Console → Agent: list **every** file in the workspace, recursively (for "collect all" and for
+    /// diffing against a baseline). Directories are not listed; only files, with their full paths.
+    ListWorkspace,
+    /// Agent → Console: the recursive file manifest (capped at [`MAX_FILE_LIST`]).
+    ///
+    /// Each entry's `name` holds the **workspace-relative path** (with `/` separators) and `is_dir` is
+    /// always false — the manifest is files only, so a teacher can collect or diff them.
+    WorkspaceManifest {
+        /// Every file in the workspace, `name` = its workspace-relative path.
+        files: Vec<FileEntry>,
+        /// Non-empty when the workspace could not be walked.
+        problem: String,
+    },
+    /// Console → Agent: delete one file from the workspace (choosing specific student files to remove).
+    DeleteFile {
+        /// Workspace-relative path of the file to delete.
+        path: String,
+    },
+    /// Agent → Console: whether the file was deleted, and why not if it failed.
+    FileDeleted {
+        /// Non-empty when the file could not be deleted (outside the workspace, missing, a directory).
+        problem: String,
+    },
+    /// Console → Agent: delete **everything** in the workspace (the one-button wipe of student files).
+    /// Confined to the workspace and never follows a symlink out of it (AGENTS.md §5).
+    ClearWorkspace,
+    /// Agent → Console: how many entries the wipe removed, and why not if it failed.
+    WorkspaceCleared {
+        /// Number of files and directories removed.
+        removed: u32,
+        /// Non-empty when the wipe could not complete.
+        problem: String,
+    },
     /// Console → Agent: what programs can this PC start?
     ListApps,
     /// Agent → Console: the programs it offers, as `(id, name)` pairs.
@@ -984,6 +1017,26 @@ mod tests {
                 problem: String::new(),
             },
             Control::FileSent {
+                problem: String::new(),
+            },
+            Control::ListWorkspace,
+            Control::WorkspaceManifest {
+                files: vec![FileEntry {
+                    name: "sub/hw.py".into(),
+                    is_dir: false,
+                    bytes: 42,
+                }],
+                problem: String::new(),
+            },
+            Control::DeleteFile {
+                path: "sub/hw.py".into(),
+            },
+            Control::FileDeleted {
+                problem: String::new(),
+            },
+            Control::ClearWorkspace,
+            Control::WorkspaceCleared {
+                removed: 3,
                 problem: String::new(),
             },
             Control::SetExam {

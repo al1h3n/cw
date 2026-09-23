@@ -561,6 +561,31 @@ async fn send_file(
     state.manager.send_file(&device_id, &dir, &name, data).await
 }
 
+/// Recursively lists every file in one PC's workspace (for collect/diff).
+#[tauri::command]
+async fn workspace_manifest(
+    state: State<'_, AppState>,
+    device_id: String,
+) -> Result<Vec<proto::FileEntry>, String> {
+    state.manager.workspace_manifest(&device_id).await
+}
+
+/// Deletes one file from a PC's workspace.
+#[tauri::command]
+async fn delete_file(
+    state: State<'_, AppState>,
+    device_id: String,
+    path: String,
+) -> Result<(), String> {
+    state.manager.delete_file(&device_id, &path).await
+}
+
+/// Wipes one PC's whole workspace, returning how many entries were removed.
+#[tauri::command]
+async fn clear_workspace(state: State<'_, AppState>, device_id: String) -> Result<u32, String> {
+    state.manager.clear_workspace(&device_id).await
+}
+
 /// Stops the recording on one PC.
 #[tauri::command]
 async fn stop_recording(
@@ -1404,6 +1429,9 @@ pub fn run(
             list_files,
             download_file,
             send_file,
+            workspace_manifest,
+            delete_file,
+            clear_workspace,
             recording_overview,
             record_all,
             stop_all_recording,
