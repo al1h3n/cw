@@ -24,6 +24,8 @@ export interface Device {
   macs: string[]
   /** The PC's direct IP (host:port) once a direct path is open; null while relay-only or offline. */
   ip: string | null
+  /** Whether the wallpaper is locked this session (true/false), or null when unknown. */
+  wallpaper_locked: boolean | null
   /** The answer to the last lock/power action sent to this PC. */
   last_action: ActionReport | null
 }

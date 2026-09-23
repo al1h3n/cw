@@ -345,11 +345,19 @@
         <button class="mi" onclick={() => (showWallpaper = true)} disabled={device.status !== 'live'}>
           <Icon name="image" />{t('wallpaperButton')}…
         </button>
-        <button class="mi" onclick={() => wallpaperPolicy('lock-wallpaper')}>
-          <Icon name="lock" />{t('actLockWallpaper')}
+        <button
+          class="mi"
+          class:on={device.wallpaper_locked === true}
+          onclick={() => wallpaperPolicy('lock-wallpaper')}
+        >
+          <Icon name="lock" />{t('actLockWallpaper')}{device.wallpaper_locked === true ? ` — ${t('wallpaperLocked')}` : ''}
         </button>
-        <button class="mi" onclick={() => wallpaperPolicy('unlock-wallpaper')}>
-          <Icon name="image" />{t('actUnlockWallpaper')}
+        <button
+          class="mi"
+          class:on={device.wallpaper_locked === false}
+          onclick={() => wallpaperPolicy('unlock-wallpaper')}
+        >
+          <Icon name="image" />{t('actUnlockWallpaper')}{device.wallpaper_locked === false ? ` — ${t('wallpaperUnlocked')}` : ''}
         </button>
         <span class="sep"></span>
         <button class="mi" onclick={() => (showApps = true)}>

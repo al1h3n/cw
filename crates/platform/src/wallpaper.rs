@@ -148,6 +148,19 @@ pub fn set_image(
     imp::set_image(image, save_path, fit)
 }
 
+/// Fully reverts to the student's **own** wallpaper: restores the genuine original captured the first
+/// time any override (black-out or a pushed image) was applied, and forgets every override (the sticky
+/// pushed image, its marker, and the black-out save), so nothing re-applies on the next start.
+///
+/// This is what "turn wallpaper lock off → the wallpaper goes back to default" calls, in addition to
+/// clearing the change policy with [`unlock`].
+///
+/// # Errors
+/// [`WallpaperError::Os`] if restoring the original fails.
+pub fn revert(save_path: &std::path::Path) -> Result<(), WallpaperError> {
+    imp::revert(save_path)
+}
+
 /// Re-applies the last pushed wallpaper, if any, from the sticky marker written by [`set_image`].
 ///
 /// A teacher's pushed wallpaper is meant to *stay*, including across a reboot (e.g. one triggered to
@@ -302,6 +315,9 @@ mod imp {
     }
 
     pub fn set_black(save_path: &Path) -> Result<(), WallpaperError> {
+        // Capture the genuine original once, so a later `revert`/unlock restores it even if a wallpaper
+        // is pushed while watching.
+        snapshot_original(save_path);
         // If we already saved a wallpaper (black is already up), do not overwrite the save with the
         // black path — that would lose the student's real wallpaper.
         if !save_path.exists() {
@@ -332,6 +348,46 @@ mod imp {
         save_path.with_file_name("wallpaper-active.txt")
     }
 
+    /// The durable snapshot of the student's genuine wallpaper, taken the first time any override is
+    /// applied, so [`revert`] can put it back even after a pushed image or a reboot.
+    fn original_path(save_path: &Path) -> std::path::PathBuf {
+        save_path.with_file_name("wallpaper-original.txt")
+    }
+
+    /// Records the student's real wallpaper once, before the first override overwrites it. If the
+    /// black-out is already up, `save_path` holds the real one; otherwise ask the OS.
+    fn snapshot_original(save_path: &Path) {
+        let original = original_path(save_path);
+        if original.exists() {
+            return; // already captured; never overwrite with an override path
+        }
+        let real = if save_path.exists() {
+            std::fs::read_to_string(save_path).unwrap_or_default()
+        } else {
+            current_wallpaper()
+        };
+        let _ = std::fs::write(original, real);
+    }
+
+    pub fn revert(save_path: &Path) -> Result<(), WallpaperError> {
+        let original = original_path(save_path);
+        let restore_to = std::fs::read_to_string(&original).ok();
+        // Forget every override so nothing re-applies later.
+        let _ = std::fs::remove_file(marker_path(save_path));
+        let _ = std::fs::remove_file(save_path);
+        let _ = std::fs::remove_file(save_path.with_extension("bmp"));
+        for ext in ["png", "jpg", "bmp", "gif"] {
+            let _ =
+                std::fs::remove_file(save_path.with_file_name(format!("wallpaper-chosen.{ext}")));
+        }
+        let _ = std::fs::remove_file(&original);
+        // Put the student's own wallpaper back (empty = no wallpaper). Nothing captured = nothing to do.
+        match restore_to {
+            Some(path) => apply_wallpaper(path.trim()),
+            None => Ok(()),
+        }
+    }
+
     pub fn set_image(image: &[u8], save_path: &Path, fit: Fit) -> Result<(), WallpaperError> {
         // An empty image means "no wallpaper": clear it and stop remembering any earlier choice.
         if image.is_empty() {
@@ -339,6 +395,8 @@ mod imp {
             let _ = std::fs::remove_file(marker_path(save_path));
             return apply_wallpaper("");
         }
+        // Capture the student's genuine wallpaper before the first override, so unlock can restore it.
+        snapshot_original(save_path);
         // Lay it out as the teacher asked (fill/fit/stretch/centre/tile) before pointing at the image.
         let _ = set_desktop_fit(fit);
         // Write the chosen image beside the save file with a concrete extension the OS understands.
@@ -534,6 +592,10 @@ mod imp {
     }
 
     pub fn restore(_save_path: &std::path::Path) -> Result<(), WallpaperError> {
+        Ok(())
+    }
+
+    pub fn revert(_save_path: &std::path::Path) -> Result<(), WallpaperError> {
         Ok(())
     }
 

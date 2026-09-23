@@ -60,6 +60,8 @@ pub struct DeviceView {
     /// The PC's direct IP address (host:port) once a direct path is open, shown beside its id. `None`
     /// while relay-only or offline.
     pub ip: Option<String>,
+    /// Whether the wallpaper is locked this session (`Some(true)`/`Some(false)`), or unknown (`None`).
+    pub wallpaper_locked: Option<bool>,
     /// What happened to the last action sent to this PC, for the UI to show.
     pub last_action: Option<ActionReport>,
 }
@@ -233,6 +235,10 @@ struct DeviceState {
     /// While this PC is a broadcast target, the last frame the teacher is presenting to it (a data
     /// URL). Shown on its tile instead of its own screen so the grid reflects what the class sees.
     broadcast: Option<String>,
+    /// Whether the teacher has locked this PC's wallpaper this session: `Some(true)` locked,
+    /// `Some(false)` unlocked, `None` unknown (never set, or the PC reconnected). Tracked from the
+    /// lock/unlock actions the console sends, so the UI can show a locked/unlocked indicator.
+    wallpaper_locked: Option<bool>,
     /// Actions the teacher asked for that the device's task has not sent yet.
     pending: Vec<proto::Action>,
     /// Input events waiting to be sent while this PC is being controlled.
@@ -256,6 +262,7 @@ impl DeviceState {
             macs: Vec::new(),
             ip: None,
             broadcast: None,
+            wallpaper_locked: None,
             pending: Vec::new(),
             pending_input: Vec::new(),
             requests: Vec::new(),
@@ -456,6 +463,7 @@ impl DeviceManager {
                 monitor: state.monitor,
                 macs: state.macs.clone(),
                 ip: state.ip.clone(),
+                wallpaper_locked: state.wallpaper_locked,
                 last_action: state.last_action,
             })
             .collect()
@@ -557,6 +565,12 @@ impl DeviceManager {
     /// # Errors
     /// Returns a message if the named PC is unknown or not connected.
     pub fn perform(&self, device_id: Option<&str>, action: proto::Action) -> Result<usize, String> {
+        // Remember a wallpaper lock/unlock so the UI can show the current state per PC.
+        let wallpaper_lock = match action {
+            proto::Action::LockWallpaper => Some(true),
+            proto::Action::UnlockWallpaper => Some(false),
+            _ => None,
+        };
         let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(id) = device_id {
             let state = devices
@@ -566,12 +580,18 @@ impl DeviceManager {
                 return Err("that PC is not connected".into());
             }
             state.pending.push(action);
+            if let Some(locked) = wallpaper_lock {
+                state.wallpaper_locked = Some(locked);
+            }
             return Ok(1);
         }
         let mut sent = 0;
         for state in devices.values_mut() {
             if state.status == DeviceStatus::Live {
                 state.pending.push(action);
+                if let Some(locked) = wallpaper_lock {
+                    state.wallpaper_locked = Some(locked);
+                }
                 sent += 1;
             }
         }
@@ -1399,6 +1419,8 @@ impl DeviceManager {
                 state.requests.clear();
                 // A stale IP is worse than none once the PC is no longer reachable.
                 state.ip = None;
+                // The wallpaper-lock state was session-tracked; on a fresh connection it is unknown.
+                state.wallpaper_locked = None;
             }
             state.status = status;
             state.detail = detail;

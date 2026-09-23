@@ -231,6 +231,11 @@ fn carry_out(action: Action) -> ActionOutcome {
 impl AgentDevice for ScreenCapture {
     fn perform(&self, from: &PeerInfo, action: Action) -> ActionOutcome {
         let outcome = carry_out(action);
+        // Turning wallpaper lock off also puts the student's own wallpaper back and forgets any pushed
+        // image (bug: "wallpapers should go back to default when wallpaper lock is turned off").
+        if matches!(action, Action::UnlockWallpaper) {
+            let _ = platform::wallpaper::revert(&self.wallpaper_save);
+        }
         if let Err(err) =
             self.audit
                 .record(net::endpoint::now_ms(), from.device_id, action, outcome)

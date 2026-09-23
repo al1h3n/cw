@@ -202,6 +202,7 @@ mod tests {
             monitor: 0,
             macs: vec![],
             ip: None,
+            wallpaper_locked: None,
             last_action: None,
         }];
         let snap = ClassroomSnapshot::build(
