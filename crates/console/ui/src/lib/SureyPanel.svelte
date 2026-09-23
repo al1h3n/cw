@@ -936,6 +936,12 @@
   .send {
     display: grid;
     place-items: center;
+    /* Reset the global `button { padding: 9px 14px }` — with the default content-box that padding made
+       the real box ~62x52 while place-items only centred the glyph in the 34x34 content area, so the
+       icon sat left-and-high of the visible button. A square box with no padding centres it exactly. */
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
     width: 34px;
     height: 34px;
     flex: none;
@@ -947,6 +953,10 @@
     display: block;
     width: 18px;
     height: 18px;
+  }
+  /* The paper plane's mass leans to its lower-left tail, so nudge it a hair to sit optically centred. */
+  .send :global(svg) {
+    transform: translate(1px, -1px);
   }
   .mic {
     color: var(--muted);

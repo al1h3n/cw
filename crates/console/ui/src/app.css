@@ -93,6 +93,21 @@ button:focus-visible,
   outline-offset: 2px;
 }
 
+/* Icon-plus-label buttons: lay the icon and text out as a centred flex row so the icon aligns to the
+   text's vertical centre instead of dropping to its baseline. */
+.withicon,
+button.withicon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.withicon svg {
+  display: block;
+  flex-shrink: 0;
+}
+
 code {
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
