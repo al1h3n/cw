@@ -683,6 +683,7 @@
 
   .sessions {
     display: flex;
+    align-items: center;
     gap: 6px;
     padding: 8px 10px 0;
   }
@@ -972,7 +973,9 @@
   .sessions .iconbtn {
     display: grid;
     place-items: center;
-    width: 32px;
+    width: 34px;
+    height: 34px;
+    flex: none;
     padding: 0;
     color: var(--muted);
     background: var(--bg);

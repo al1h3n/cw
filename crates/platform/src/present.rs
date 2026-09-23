@@ -82,11 +82,11 @@ mod imp {
             },
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetSystemMetrics,
-                HMENU, HWND_TOPMOST, KillTimer, MSG, PostMessageW, PostQuitMessage,
-                RegisterClassExW, SC_CLOSE, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SWP_NOACTIVATE,
-                SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow,
-                TranslateMessage, WM_CLOSE, WM_DESTROY, WM_PAINT, WM_SYSCOMMAND, WM_TIMER,
-                WNDCLASSEXW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+                HMENU, HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, MSG, PostMessageW,
+                PostQuitMessage, RegisterClassExW, SC_CLOSE, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetTimer,
+                SetWindowPos, ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_PAINT,
+                WM_SYSCOMMAND, WM_TIMER, WNDCLASSEXW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
             },
         },
         core::{PCWSTR, w},
@@ -337,6 +337,10 @@ mod imp {
                 lpfnWndProc: Some(window_proc),
                 lpszClassName: CLASS,
                 hbrBackground: HBRUSH(std::ptr::null_mut()),
+                // A normal arrow cursor. Without this the class cursor is null, so the student sees the
+                // "app-starting" spinning-circle cursor over the presentation (bug report). A plain
+                // pointer reads as a normal, non-busy screen.
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
                 ..Default::default()
             };
             let _ = RegisterClassExW(&class);

@@ -43,9 +43,10 @@ pub struct StartParams {
     pub targets: Vec<String>,
 }
 
-/// Every broadcast currently running, and the id counter that keeps them distinct.
+/// Every broadcast currently running, and the id counter that keeps them distinct. The list is behind
+/// an `Arc` so a fan-out task can remove its own handle when its whole audience has gone away.
 pub struct Broadcasts {
-    list: Mutex<Vec<BroadcastHandle>>,
+    list: Arc<Mutex<Vec<BroadcastHandle>>>,
     next_id: AtomicU64,
 }
 
@@ -59,7 +60,7 @@ impl Broadcasts {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            list: Mutex::new(Vec::new()),
+            list: Arc::new(Mutex::new(Vec::new())),
             next_id: AtomicU64::new(1),
         }
     }
@@ -208,10 +209,19 @@ impl Broadcasts {
             let stop = Arc::clone(&stop);
             let source_lost = Arc::clone(&source_lost);
             let emitter = emitter.clone();
+            let list = Arc::clone(&self.list);
             let lost_id = id;
             tokio::spawn(async move {
+                // How long the *whole* audience may be gone before the broadcast ends itself. A monitor
+                // source is always capturable, so without this a broadcast whose PCs all rebooted or
+                // disconnected would run forever and its banner would never clear (bug report). A brief
+                // client reboot (well under this) is tolerated: the moment a PC shows a frame again the
+                // timer resets.
+                const DEAD_AUDIENCE: Duration = Duration::from_secs(20);
                 let mut showing: std::collections::HashMap<String, bool> =
                     targets.iter().map(|t| (t.clone(), false)).collect();
+                let mut last_alive = std::time::Instant::now();
+                let mut audience_gone = false;
                 while let Some(jpeg) = rx.recv().await {
                     if stop.load(Ordering::SeqCst) {
                         break;
@@ -239,12 +249,25 @@ impl Broadcasts {
                         }
                         showing.insert(target, now);
                     }
+                    if showing.values().any(|&v| v) {
+                        last_alive = std::time::Instant::now();
+                    } else if last_alive.elapsed() >= DEAD_AUDIENCE {
+                        audience_gone = true;
+                        break;
+                    }
                 }
-                if source_lost.load(Ordering::SeqCst) {
+                // Ended because the source window closed, or the whole audience stayed gone: take it off
+                // every screen, remove its handle so the banner really disappears (and does not come back
+                // on the next status poll), and tell the UI.
+                if source_lost.load(Ordering::SeqCst) || audience_gone {
                     for target in &targets {
                         let _ = manager.stop_broadcast(target).await;
                         manager.set_broadcast_frame(target, None);
                     }
+                    stop.store(true, Ordering::SeqCst);
+                    list.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .retain(|h| h.id != lost_id);
                     emitter.emit("cowatcher://broadcast-source-lost", lost_id);
                 }
             });

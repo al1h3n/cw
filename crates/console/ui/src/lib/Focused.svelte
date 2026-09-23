@@ -6,6 +6,7 @@
   import ActionResult from './ActionResult.svelte'
   import RecordButton from './RecordButton.svelte'
   import AppsDialog from './AppsDialog.svelte'
+  import WallpaperDialog from './WallpaperDialog.svelte'
   import Menu from './Menu.svelte'
   import Icon from './Icon.svelte'
 
@@ -30,6 +31,7 @@
   } = $props()
 
   let showApps = $state(false)
+  let showWallpaper = $state(false)
   let examOn = $state(false)
   let screenLockOn = $state(false)
 
@@ -340,6 +342,9 @@
           <Icon name="lock" />{examOn ? t('examStop') : t('examStart')}
         </button>
         <span class="sep"></span>
+        <button class="mi" onclick={() => (showWallpaper = true)} disabled={device.status !== 'live'}>
+          <Icon name="image" />{t('wallpaperButton')}…
+        </button>
         <button class="mi" onclick={() => wallpaperPolicy('lock-wallpaper')}>
           <Icon name="lock" />{t('actLockWallpaper')}
         </button>
@@ -389,6 +394,11 @@
     ></div>
   </div>
 </div>
+
+{#if showWallpaper}
+  <!-- Scoped to just this PC: the dialog targets only the device passed to it. -->
+  <WallpaperDialog devices={[device]} onclose={() => (showWallpaper = false)} {onerror} />
+{/if}
 
 {#if showApps}
   <AppsDialog deviceId={device.device_id} onclose={() => (showApps = false)} {onerror} />
