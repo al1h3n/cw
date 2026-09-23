@@ -31,6 +31,7 @@ mod record_id;
 mod recording;
 mod streaming;
 mod supervisor;
+mod workspace;
 
 use std::{
     path::{Path, PathBuf},
@@ -223,6 +224,7 @@ fn cmd_capture(args: &[String]) -> Result<(), String> {
         &blocklist_path(),
         &recording::directory(&data_dir()),
         &data_dir().join("wallpaper-prev.txt"),
+        &workspace::default_root(),
     )
     .map_err(|e| e.to_string())?;
     println!("monitors: {}", capture.monitor_count());
@@ -306,6 +308,7 @@ async fn run_agent(banner: bool) -> Result<(), String> {
             &blocklist_path(),
             &recording::directory(&data_dir()),
             &data_dir().join("wallpaper-prev.txt"),
+            &workspace::default_root(),
         )
         .map_err(|e| e.to_string())?,
     );

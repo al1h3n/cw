@@ -142,6 +142,39 @@ pub fn catalogue() -> Value {
             &["device_id", "image_base64"],
         ),
         tool(
+            "list_files",
+            "List a directory in a student PC's shared workspace folder (where files are exchanged). \
+             dir is workspace-relative; empty lists the workspace root. File transfer is confined to \
+             this folder — paths outside it are refused.",
+            json!({
+                "device_id": device_id_prop(),
+                "dir": { "type": "string", "description": "Workspace-relative directory; empty = root." }
+            }),
+            &["device_id"],
+        ),
+        tool(
+            "fetch_file",
+            "Download a file from a student PC's workspace and return its bytes as base64 (e.g. to \
+             collect a script a student wrote). path is workspace-relative.",
+            json!({
+                "device_id": device_id_prop(),
+                "path": { "type": "string", "description": "Workspace-relative path of the file to download." }
+            }),
+            &["device_id", "path"],
+        ),
+        tool(
+            "send_file",
+            "Send a file to a student PC's workspace: write base64 bytes as `name` inside workspace \
+             directory `dir` (created if needed). Only the workspace folder can be written to.",
+            json!({
+                "device_id": device_id_prop(),
+                "dir": { "type": "string", "description": "Workspace-relative destination directory; empty = root." },
+                "name": { "type": "string", "description": "File name to write (no path separators)." },
+                "data_base64": { "type": "string", "description": "The file's bytes, base64-encoded." }
+            }),
+            &["device_id", "name", "data_base64"],
+        ),
+        tool(
             "recording_status",
             "Report whether a PC is currently recording its screen, and the running frame count.",
             json!({ "device_id": device_id_prop() }),
@@ -329,6 +362,41 @@ pub async fn call(fleet: &Fleet, name: &str, args: &Value) -> Result<Vec<Value>,
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(vec![json_text(&json!({ "ok": ok, "problem": problem }))])
+        }
+        "list_files" => {
+            let dir = args.get("dir").and_then(Value::as_str).unwrap_or("");
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            let entries = session.list_files(dir).await.map_err(|e| e.to_string())?;
+            Ok(vec![json_text(&json!({ "entries": entries }))])
+        }
+        "fetch_file" => {
+            let path = arg_str(args, "path")?.to_string();
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            // Download to a private temp folder, read it back as base64, then remove it.
+            let dir = std::env::temp_dir().join(format!("cowatcher-mcp-{}", std::process::id()));
+            let saved = session
+                .fetch_file(&path, &dir)
+                .await
+                .map_err(|e| e.to_string())?;
+            let bytes = std::fs::read(&saved).map_err(|e| e.to_string())?;
+            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let _ = std::fs::remove_file(&saved);
+            Ok(vec![json_text(
+                &json!({ "bytes": bytes.len(), "data_base64": data }),
+            )])
+        }
+        "send_file" => {
+            let dir = args.get("dir").and_then(Value::as_str).unwrap_or("");
+            let name = arg_str(args, "name")?.to_string();
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(arg_str(args, "data_base64")?)
+                .map_err(|e| format!("data_base64 is not valid base64: {e}"))?;
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            session
+                .send_file(dir, &name, &data)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(vec![json_text(&json!({ "ok": true, "bytes": data.len() }))])
         }
         "recording_status" => {
             let mut session = fleet.connect(arg_str(args, "device_id")?).await?;

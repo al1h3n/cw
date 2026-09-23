@@ -146,6 +146,23 @@ enum DeviceRequest {
         file: String,
         reply: tokio::sync::oneshot::Sender<Result<String, String>>,
     },
+    /// List a directory in this PC's shared workspace; the reply is the entries or an error.
+    ListFiles {
+        dir: String,
+        reply: tokio::sync::oneshot::Sender<Result<Vec<proto::FileEntry>, String>>,
+    },
+    /// Download a workspace file to the teacher's PC; the reply is the saved path or an error.
+    FetchFile {
+        path: String,
+        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
+    /// Upload bytes to this PC's workspace; the reply is `Ok(())` or an error.
+    SendFile {
+        dir: String,
+        name: String,
+        data: Vec<u8>,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
     /// What this PC can start.
     ListApps {
         reply: tokio::sync::oneshot::Sender<Vec<proto::AppEntry>>,
@@ -887,6 +904,58 @@ impl DeviceManager {
             .await
     }
 
+    /// Lists a directory in one PC's shared workspace folder (empty `dir` = root).
+    ///
+    /// # Errors
+    /// The PC is unknown, not connected, or the directory is outside the workspace / unreadable.
+    pub async fn list_files(
+        &self,
+        device_id: &str,
+        dir: &str,
+    ) -> Result<Vec<proto::FileEntry>, String> {
+        let dir = dir.to_string();
+        self.ask(device_id, move |reply| DeviceRequest::ListFiles {
+            dir,
+            reply,
+        })
+        .await?
+    }
+
+    /// Downloads one workspace file from a PC to this teacher's `downloads` folder, returning the
+    /// saved path.
+    ///
+    /// # Errors
+    /// The PC is unknown, not connected, or the file could not be transferred.
+    pub async fn download_file(&self, device_id: &str, path: &str) -> Result<String, String> {
+        let path = path.to_string();
+        self.ask(device_id, move |reply| DeviceRequest::FetchFile {
+            path,
+            reply,
+        })
+        .await?
+    }
+
+    /// Uploads `data` to one PC's workspace as `name` inside workspace directory `dir`.
+    ///
+    /// # Errors
+    /// The PC is unknown, not connected, or the destination was refused / could not be written.
+    pub async fn send_file(
+        &self,
+        device_id: &str,
+        dir: &str,
+        name: &str,
+        data: Vec<u8>,
+    ) -> Result<(), String> {
+        let (dir, name) = (dir.to_string(), name.to_string());
+        self.ask(device_id, move |reply| DeviceRequest::SendFile {
+            dir,
+            name,
+            data,
+            reply,
+        })
+        .await?
+    }
+
     /// The programs one PC offers to start.
     ///
     /// # Errors
@@ -1291,6 +1360,31 @@ impl DeviceManager {
                             .fetch_recording(&file, &dest)
                             .await
                             .map(|p| p.display().to_string())
+                            .map_err(|e| e.to_string());
+                        let _ = reply.send(result);
+                    }
+                    DeviceRequest::ListFiles { dir, reply } => {
+                        let result = session.list_files(&dir).await.map_err(|e| e.to_string());
+                        let _ = reply.send(result);
+                    }
+                    DeviceRequest::FetchFile { path, reply } => {
+                        let dest = self.data_dir.join("downloads");
+                        let result = session
+                            .fetch_file(&path, &dest)
+                            .await
+                            .map(|p| p.display().to_string())
+                            .map_err(|e| e.to_string());
+                        let _ = reply.send(result);
+                    }
+                    DeviceRequest::SendFile {
+                        dir,
+                        name,
+                        data,
+                        reply,
+                    } => {
+                        let result = session
+                            .send_file(&dir, &name, &data)
+                            .await
                             .map_err(|e| e.to_string());
                         let _ = reply.send(result);
                     }

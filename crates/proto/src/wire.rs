@@ -14,6 +14,14 @@ use crate::{DeviceId, PROTOCOL_VERSION};
 /// bound this size keeps the watch loop cheap and stops a malformed message asking for millions.
 pub const MAX_BLOCKLIST: usize = 256;
 
+/// The most entries a single workspace directory listing returns. A shared class folder holds tens to
+/// hundreds of files; this bound keeps a listing cheap and stops a malformed reply asking for millions.
+pub const MAX_FILE_LIST: usize = 4096;
+
+/// The longest workspace-relative path (directory or file) accepted in a file-transfer message. A
+/// generous cap that still bounds what an untrusted peer can make the other side allocate or walk.
+pub const MAX_FILE_PATH: usize = 1024;
+
 /// What role a peer plays. Sent in [`Control::Hello`] so each side knows who it is talking to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
@@ -286,6 +294,17 @@ pub struct StoredRecording {
     /// File name, which begins with a time-ordered [`crate::RecordId`] so the list sorts by age.
     pub file: String,
     /// Size on disk, so a teacher can see what collecting it would cost.
+    pub bytes: u64,
+}
+
+/// One entry in a student PC's shared **workspace** folder, for file transfer and browsing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEntry {
+    /// Name relative to the listed directory (never contains a path separator).
+    pub name: String,
+    /// True for a sub-directory.
+    pub is_dir: bool,
+    /// Size in bytes (0 for a directory).
     pub bytes: u64,
 }
 
@@ -679,6 +698,55 @@ pub enum Control {
         /// Non-empty when the file cannot be sent (unknown name, gone).
         problem: String,
     },
+    /// Console → Agent: list a directory inside the student's shared **workspace** folder.
+    ///
+    /// `dir` is workspace-relative (empty = the workspace root). The Agent confines every file-transfer
+    /// operation to that one folder (AGENTS.md §5): a path that escapes it (absolute, `..`, a drive
+    /// prefix) is refused, so a Console can neither read nor write anywhere else on the PC.
+    ListFiles {
+        /// Workspace-relative directory to list (empty = root).
+        dir: String,
+    },
+    /// Agent → Console: the directory listing (capped at [`MAX_FILE_LIST`]), or why it failed.
+    Files {
+        /// The entries found, sorted directories-first then by name.
+        entries: Vec<FileEntry>,
+        /// Non-empty when the directory could not be listed (outside the workspace, missing).
+        problem: String,
+    },
+    /// Console → Agent: send me this workspace file. The bytes arrive on their own uni-stream, exactly
+    /// like [`Control::FetchRecording`].
+    FetchFile {
+        /// Workspace-relative path of the file to download.
+        path: String,
+    },
+    /// Agent → Console: the file is coming on a uni-stream (or `problem` says why not).
+    FileTransfer {
+        /// Total bytes to expect on the uni-stream.
+        size: u64,
+        /// Non-empty when the file cannot be sent (outside the workspace, missing).
+        problem: String,
+    },
+    /// Console → Agent: I want to write `name` into workspace directory `dir`, `size` bytes, which I
+    /// will push on a uni-stream once you accept.
+    SendFile {
+        /// Workspace-relative destination directory (empty = root); created if absent.
+        dir: String,
+        /// The bare file name to write (no path separators).
+        name: String,
+        /// How many bytes the uni-stream will carry.
+        size: u64,
+    },
+    /// Agent → Console: ready to receive (empty `problem`) — open the uni-stream now — or why not.
+    FileSendReady {
+        /// Non-empty when the write was refused (outside the workspace, bad name).
+        problem: String,
+    },
+    /// Agent → Console: the upload finished (empty `problem`) or failed part way.
+    FileSent {
+        /// Non-empty when the bytes could not be written.
+        problem: String,
+    },
     /// Console → Agent: what programs can this PC start?
     ListApps,
     /// Agent → Console: the programs it offers, as `(id, name)` pairs.
@@ -891,6 +959,33 @@ mod tests {
             },
             Control::Perform(Action::Shutdown { delay_seconds: 60 }),
             Control::Perform(Action::ResetWallpaper),
+            Control::ListFiles { dir: "sub".into() },
+            Control::Files {
+                entries: vec![FileEntry {
+                    name: "hw.py".into(),
+                    is_dir: false,
+                    bytes: 42,
+                }],
+                problem: String::new(),
+            },
+            Control::FetchFile {
+                path: "sub/hw.py".into(),
+            },
+            Control::FileTransfer {
+                size: 42,
+                problem: String::new(),
+            },
+            Control::SendFile {
+                dir: "sub".into(),
+                name: "notes.txt".into(),
+                size: 10,
+            },
+            Control::FileSendReady {
+                problem: String::new(),
+            },
+            Control::FileSent {
+                problem: String::new(),
+            },
             Control::SetExam {
                 on: true,
                 message: "Exam in progress".into(),

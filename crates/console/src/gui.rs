@@ -529,6 +529,38 @@ async fn download_recording(
     state.manager.download_recording(&device_id, &file).await
 }
 
+/// Lists a directory in one PC's shared workspace folder (empty `dir` = the workspace root).
+#[tauri::command]
+async fn list_files(
+    state: State<'_, AppState>,
+    device_id: String,
+    dir: String,
+) -> Result<Vec<proto::FileEntry>, String> {
+    state.manager.list_files(&device_id, &dir).await
+}
+
+/// Downloads a workspace file to this teacher's PC, returning where it was saved.
+#[tauri::command]
+async fn download_file(
+    state: State<'_, AppState>,
+    device_id: String,
+    path: String,
+) -> Result<String, String> {
+    state.manager.download_file(&device_id, &path).await
+}
+
+/// Uploads a file to one PC's workspace directory `dir` as `name`.
+#[tauri::command]
+async fn send_file(
+    state: State<'_, AppState>,
+    device_id: String,
+    dir: String,
+    name: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    state.manager.send_file(&device_id, &dir, &name, data).await
+}
+
 /// Stops the recording on one PC.
 #[tauri::command]
 async fn stop_recording(
@@ -1369,6 +1401,9 @@ pub fn run(
             recording_status,
             list_recordings,
             download_recording,
+            list_files,
+            download_file,
+            send_file,
             recording_overview,
             record_all,
             stop_all_recording,

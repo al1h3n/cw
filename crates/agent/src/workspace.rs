@@ -1,0 +1,208 @@
+//! The shared **class workspace** folder that file transfer is confined to.
+//!
+//! A teacher can send files to a student PC and download files the student made (e.g. a script to
+//! assess). Letting a Console read or write *anywhere* on a student PC — the Agent may run as SYSTEM —
+//! is exactly the kind of power AGENTS.md §5 forbids ("file wipe code may only touch paths inside the
+//! configured workspace scope, and tests prove it"). So every transfer is confined to one directory,
+//! the *workspace*, and any path that could escape it (absolute, a drive prefix, or a `..` component)
+//! is refused. The guard [`safe_join`] is pure and unit-tested; the I/O helpers build on it.
+
+use std::path::{Component, Path, PathBuf};
+
+use proto::{FileEntry, MAX_FILE_LIST, MAX_FILE_PATH};
+
+/// The workspace root for this Agent: `COWATCHER_WORKSPACE` if set, else `Co-watcher` in the user's
+/// profile, else a temp fallback. The helper runs in the logged-in student's session, so the profile
+/// is the student's.
+#[must_use]
+pub fn default_root() -> PathBuf {
+    if let Some(dir) = std::env::var_os("COWATCHER_WORKSPACE") {
+        return PathBuf::from(dir);
+    }
+    let base = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map_or_else(std::env::temp_dir, PathBuf::from);
+    base.join("Co-watcher")
+}
+
+/// Resolves a workspace-relative path to an absolute one **inside** `root`, or `None` if it escapes.
+///
+/// Only ordinary path segments (and `.`) are allowed: a leading `/`, a drive letter, or any `..`
+/// component is rejected outright, so a Console can never step out of the workspace. Pure, so it is
+/// tested without touching the disk; the I/O helpers add a canonicalised re-check for symlinks.
+#[must_use]
+pub fn safe_join(root: &Path, rel: &str) -> Option<PathBuf> {
+    if rel.len() > MAX_FILE_PATH {
+        return None;
+    }
+    let mut out = root.to_path_buf();
+    for component in Path::new(rel).components() {
+        match component {
+            Component::Normal(segment) => out.push(segment),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    // Lexically out is always within root after the above, but keep the check as a clear invariant.
+    out.starts_with(root).then_some(out)
+}
+
+/// Whether `name` is a plain file name (no separators, not `.`/`..`, not empty or over-long).
+#[must_use]
+pub fn is_plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_FILE_PATH
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+}
+
+/// Confirms `path` really sits inside `root` after resolving symlinks (defence in depth for existing
+/// paths). If either cannot be canonicalised, falls back to the lexical guarantee `safe_join` gave.
+fn confined(root: &Path, path: &Path) -> bool {
+    match (root.canonicalize(), path.canonicalize()) {
+        (Ok(root), Ok(path)) => path.starts_with(root),
+        _ => true,
+    }
+}
+
+/// Lists the workspace directory `dir` (workspace-relative; empty = root), directories first then by
+/// name, capped at [`MAX_FILE_LIST`].
+///
+/// # Errors
+/// If `dir` escapes the workspace or cannot be read.
+pub fn list(root: &Path, dir: &str) -> Result<Vec<FileEntry>, String> {
+    let target = safe_join(root, dir).ok_or("that path is outside the workspace")?;
+    // Make the root itself on first use so a fresh PC lists an empty folder instead of erroring.
+    if dir.is_empty() {
+        let _ = std::fs::create_dir_all(&target);
+    }
+    if !confined(root, &target) {
+        return Err("that path is outside the workspace".into());
+    }
+    let mut entries: Vec<FileEntry> = Vec::new();
+    for entry in std::fs::read_dir(&target).map_err(|e| e.to_string())? {
+        let Ok(entry) = entry else { continue };
+        let Ok(meta) = entry.metadata() else { continue };
+        entries.push(FileEntry {
+            name: entry.file_name().to_string_lossy().to_string(),
+            is_dir: meta.is_dir(),
+            bytes: if meta.is_dir() { 0 } else { meta.len() },
+        });
+        if entries.len() >= MAX_FILE_LIST {
+            break;
+        }
+    }
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+    Ok(entries)
+}
+
+/// The absolute path of a workspace file to **download**, or `None` if it escapes the workspace or is
+/// not an existing regular file.
+#[must_use]
+pub fn read_path(root: &Path, rel: &str) -> Option<PathBuf> {
+    let path = safe_join(root, rel)?;
+    (path.is_file() && confined(root, &path)).then_some(path)
+}
+
+/// The absolute path to **write** `name` into workspace directory `dir`, creating the directory. Returns
+/// `None` if the destination escapes the workspace or `name` is not a plain file name.
+#[must_use]
+pub fn write_path(root: &Path, dir: &str, name: &str) -> Option<PathBuf> {
+    if !is_plain_name(name) {
+        return None;
+    }
+    let dir_path = safe_join(root, dir)?;
+    std::fs::create_dir_all(&dir_path).ok()?;
+    if !confined(root, &dir_path) {
+        return None;
+    }
+    Some(dir_path.join(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("cw-ws-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn safe_join_keeps_ordinary_paths_inside_the_workspace() {
+        let root = root();
+        assert_eq!(safe_join(&root, "hw.py"), Some(root.join("hw.py")));
+        assert_eq!(
+            safe_join(&root, "sub/dir/f"),
+            Some(root.join("sub").join("dir").join("f"))
+        );
+        assert_eq!(safe_join(&root, ""), Some(root.clone()));
+        assert_eq!(safe_join(&root, "./a"), Some(root.join("a")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn safe_join_refuses_anything_that_escapes() {
+        let root = root();
+        assert_eq!(safe_join(&root, "../secret"), None);
+        assert_eq!(safe_join(&root, "a/../../b"), None);
+        assert_eq!(safe_join(&root, "/etc/passwd"), None);
+        // A Windows drive-absolute path and a UNC prefix both carry a Prefix/RootDir component.
+        assert_eq!(safe_join(&root, "C:\\Windows\\System32\\x"), None);
+        assert_eq!(safe_join(&root, "\\\\server\\share\\x"), None);
+        // Absurdly long paths are refused before any work.
+        assert_eq!(safe_join(&root, &"a/".repeat(MAX_FILE_PATH)), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plain_name_rejects_separators_and_dot_names() {
+        assert!(is_plain_name("notes.txt"));
+        assert!(!is_plain_name(""));
+        assert!(!is_plain_name("."));
+        assert!(!is_plain_name(".."));
+        assert!(!is_plain_name("a/b"));
+        assert!(!is_plain_name("a\\b"));
+    }
+
+    #[test]
+    fn write_path_and_read_path_stay_in_the_workspace() {
+        let root = root();
+        // A traversal name never yields a writable path.
+        assert_eq!(write_path(&root, "..", "x"), None);
+        assert_eq!(write_path(&root, "sub", "../x"), None);
+        // A legitimate write path is inside the workspace and its directory now exists.
+        let dest = write_path(&root, "sub", "notes.txt").expect("write path");
+        assert!(dest.starts_with(&root));
+        assert!(dest.parent().unwrap().is_dir());
+        std::fs::write(&dest, b"hi").unwrap();
+        // read_path finds the file we just wrote, and refuses a directory or a missing file.
+        assert_eq!(read_path(&root, "sub/notes.txt"), Some(dest));
+        assert_eq!(
+            read_path(&root, "sub"),
+            None,
+            "a directory is not downloadable"
+        );
+        assert_eq!(read_path(&root, "missing.txt"), None);
+        assert_eq!(read_path(&root, "../notes.txt"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_returns_entries_directories_first() {
+        let root = root();
+        std::fs::create_dir_all(root.join("zsub")).unwrap();
+        std::fs::write(root.join("a.txt"), b"aa").unwrap();
+        let entries = list(&root, "").expect("list");
+        assert_eq!(entries[0].name, "zsub");
+        assert!(entries[0].is_dir);
+        assert!(entries.iter().any(|e| e.name == "a.txt" && e.bytes == 2));
+        assert!(list(&root, "../..").is_err(), "escaping is refused");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

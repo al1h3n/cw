@@ -172,6 +172,32 @@ pub trait AgentDevice {
         (false, "this device cannot lock for an exam".to_string())
     }
 
+    /// Lists a directory inside the shared workspace folder (workspace-relative; empty = root).
+    /// Returns the entries, or a reason it could not. The default has no workspace.
+    fn list_files(&self, from: &PeerInfo, dir: &str) -> Result<Vec<proto::FileEntry>, String> {
+        let _ = (from, dir);
+        Err("this device has no file workspace".to_string())
+    }
+
+    /// The absolute path of a workspace file to **send** to the Console, or `None` if it may not be
+    /// read (outside the workspace, missing). The default has nothing to send.
+    fn file_read_path(&self, from: &PeerInfo, path: &str) -> Option<std::path::PathBuf> {
+        let _ = (from, path);
+        None
+    }
+
+    /// The absolute path to **write** an uploaded file to (directory created), or `None` if the
+    /// destination is outside the workspace or the name is not a plain file name. Default: no writes.
+    fn file_write_path(
+        &self,
+        from: &PeerInfo,
+        dir: &str,
+        name: &str,
+    ) -> Option<std::path::PathBuf> {
+        let _ = (from, dir, name);
+        None
+    }
+
     /// Sets this PC's desktop wallpaper to `image` (raw PNG/JPEG/BMP bytes), laid out as `fit`.
     /// Returns whether it was applied, and a reason if not. The default cannot change the wallpaper.
     fn set_wallpaper(
@@ -775,6 +801,124 @@ impl ControlSession {
         Ok(dest)
     }
 
+    /// Console side: list a directory in the student's shared workspace (empty = root).
+    ///
+    /// # Errors
+    /// Stream failure, an unexpected reply, or the directory is outside the workspace / unreadable.
+    pub async fn list_files(&mut self, dir: &str) -> Result<Vec<proto::FileEntry>, EndpointError> {
+        write_message(
+            &mut self.send,
+            &Control::ListFiles {
+                dir: dir.to_string(),
+            },
+        )
+        .await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::Files { entries, problem } if problem.is_empty() => Ok(entries),
+            Control::Files { problem, .. } => Err(EndpointError::Capture(problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: download a workspace file (workspace-relative `path`) into `dest_dir`, returning
+    /// the saved path. The bytes ride their own uni-stream, like a recording.
+    ///
+    /// # Errors
+    /// Stream failure, an unexpected reply, or the Agent cannot send that file.
+    pub async fn fetch_file(
+        &mut self,
+        path: &str,
+        dest_dir: &std::path::Path,
+    ) -> Result<std::path::PathBuf, EndpointError> {
+        use tokio::io::AsyncWriteExt;
+        write_message(
+            &mut self.send,
+            &Control::FetchFile {
+                path: path.to_string(),
+            },
+        )
+        .await?;
+        let size = match read_message::<Control>(&mut self.recv).await? {
+            Control::FileTransfer { size, problem } if problem.is_empty() => size,
+            Control::FileTransfer { problem, .. } => return Err(EndpointError::Capture(problem)),
+            Control::Error(err) => return Err(EndpointError::ControlRefused(err)),
+            _ => return Err(EndpointError::Protocol),
+        };
+        let mut recv = tokio::time::timeout(VIDEO_START_TIMEOUT, self.conn.accept_uni())
+            .await
+            .map_err(|_| EndpointError::Connection("the file did not start in time".into()))?
+            .map_err(|e| EndpointError::Connection(e.to_string()))?;
+
+        std::fs::create_dir_all(dest_dir).map_err(|e| EndpointError::Stream(e.to_string()))?;
+        let dest = dest_dir.join(sanitize_file_name(path));
+        let mut out = tokio::fs::File::create(&dest)
+            .await
+            .map_err(|e| EndpointError::Stream(e.to_string()))?;
+        let mut remaining = size;
+        let mut buf = vec![0u8; 64 * 1024];
+        while remaining > 0 {
+            let want = buf
+                .len()
+                .min(usize::try_from(remaining).unwrap_or(buf.len()));
+            recv.read_exact(&mut buf[..want])
+                .await
+                .map_err(|e| EndpointError::Stream(e.to_string()))?;
+            out.write_all(&buf[..want])
+                .await
+                .map_err(|e| EndpointError::Stream(e.to_string()))?;
+            remaining -= want as u64;
+        }
+        out.flush()
+            .await
+            .map_err(|e| EndpointError::Stream(e.to_string()))?;
+        Ok(dest)
+    }
+
+    /// Console side: upload `bytes` to the student's workspace as `name` inside directory `dir`.
+    ///
+    /// # Errors
+    /// Stream failure, the Agent refusing the destination, or the write failing part way.
+    pub async fn send_file(
+        &mut self,
+        dir: &str,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<(), EndpointError> {
+        write_message(
+            &mut self.send,
+            &Control::SendFile {
+                dir: dir.to_string(),
+                name: name.to_string(),
+                size: bytes.len() as u64,
+            },
+        )
+        .await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::FileSendReady { problem } if problem.is_empty() => {}
+            Control::FileSendReady { problem } => return Err(EndpointError::Capture(problem)),
+            Control::Error(err) => return Err(EndpointError::ControlRefused(err)),
+            _ => return Err(EndpointError::Protocol),
+        }
+        // The Agent is now waiting on a uni-stream for the bytes.
+        let mut uni = self
+            .conn
+            .open_uni()
+            .await
+            .map_err(|e| EndpointError::Connection(e.to_string()))?;
+        uni.write_all(bytes)
+            .await
+            .map_err(|e| EndpointError::Stream(e.to_string()))?;
+        uni.finish()
+            .map_err(|e| EndpointError::Stream(e.to_string()))?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::FileSent { problem } if problem.is_empty() => Ok(()),
+            Control::FileSent { problem } => Err(EndpointError::Capture(problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Reads the one reply every recording request produces.
     async fn read_recording_state(&mut self) -> Result<proto::RecordingInfo, EndpointError> {
         match read_message::<Control>(&mut self.recv).await? {
@@ -1171,6 +1315,81 @@ impl ControlSession {
                         .await?;
                     }
                 },
+                Control::ListFiles { dir } => {
+                    let (entries, problem) = match source.list_files(&self.peer, &dir) {
+                        Ok(entries) => (entries, String::new()),
+                        Err(problem) => (Vec::new(), problem),
+                    };
+                    write_message(&mut self.send, &Control::Files { entries, problem }).await?;
+                }
+                Control::FetchFile { path } => match source.file_read_path(&self.peer, &path) {
+                    Some(path) => {
+                        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                        write_message(
+                            &mut self.send,
+                            &Control::FileTransfer {
+                                size,
+                                problem: String::new(),
+                            },
+                        )
+                        .await?;
+                        // The bytes ride their own uni-stream so a big file never stalls control.
+                        let conn = self.conn.clone();
+                        tokio::spawn(async move {
+                            use tokio::io::AsyncReadExt;
+                            let Ok(mut uni) = conn.open_uni().await else {
+                                return;
+                            };
+                            if let Ok(mut file) = tokio::fs::File::open(&path).await {
+                                let mut buf = vec![0u8; 64 * 1024];
+                                loop {
+                                    match file.read(&mut buf).await {
+                                        Ok(0) => break,
+                                        Ok(n) if uni.write_all(&buf[..n]).await.is_ok() => {}
+                                        _ => break,
+                                    }
+                                }
+                            }
+                            let _ = uni.finish();
+                        });
+                    }
+                    None => {
+                        write_message(
+                            &mut self.send,
+                            &Control::FileTransfer {
+                                size: 0,
+                                problem: "no such file in the workspace".into(),
+                            },
+                        )
+                        .await?;
+                    }
+                },
+                Control::SendFile { dir, name, size } => {
+                    match source.file_write_path(&self.peer, &dir, &name) {
+                        Some(dest) => {
+                            write_message(
+                                &mut self.send,
+                                &Control::FileSendReady {
+                                    problem: String::new(),
+                                },
+                            )
+                            .await?;
+                            // Receive the bytes inline (one upload at a time) so the FileSent ack that
+                            // follows is accurate. They arrive on a uni-stream the Console opens.
+                            let problem = receive_file(&self.conn, &dest, size).await;
+                            write_message(&mut self.send, &Control::FileSent { problem }).await?;
+                        }
+                        None => {
+                            write_message(
+                                &mut self.send,
+                                &Control::FileSendReady {
+                                    problem: "that destination is not allowed".into(),
+                                },
+                            )
+                            .await?;
+                        }
+                    }
+                }
                 Control::ListApps => {
                     write_message(&mut self.send, &Control::Apps(source.list_apps())).await?;
                 }
@@ -1265,6 +1484,41 @@ fn sanitize_file_name(name: &str) -> String {
         .map(|n| n.to_string_lossy().to_string())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "recording.bin".to_string())
+}
+
+/// Agent side: receives an uploaded file. Accepts the uni-stream the Console opened and writes exactly
+/// `size` bytes to `dest`. Returns an empty string on success, else a reason; a failed transfer removes
+/// the half-written file so a student is never left a truncated one.
+async fn receive_file(conn: &Connection, dest: &std::path::Path, size: u64) -> String {
+    use tokio::io::AsyncWriteExt;
+    let mut recv = match tokio::time::timeout(VIDEO_START_TIMEOUT, conn.accept_uni()).await {
+        Ok(Ok(recv)) => recv,
+        _ => return "the upload did not start in time".to_string(),
+    };
+    let mut out = match tokio::fs::File::create(dest).await {
+        Ok(file) => file,
+        Err(err) => return format!("could not create the file: {err}"),
+    };
+    let mut remaining = size;
+    let mut buf = vec![0u8; 64 * 1024];
+    while remaining > 0 {
+        let want = buf
+            .len()
+            .min(usize::try_from(remaining).unwrap_or(buf.len()));
+        if recv.read_exact(&mut buf[..want]).await.is_err() {
+            let _ = tokio::fs::remove_file(dest).await;
+            return "the upload was interrupted".to_string();
+        }
+        if out.write_all(&buf[..want]).await.is_err() {
+            let _ = tokio::fs::remove_file(dest).await;
+            return "could not write the file".to_string();
+        }
+        remaining -= want as u64;
+    }
+    if out.flush().await.is_err() {
+        return "could not finish writing the file".to_string();
+    }
+    String::new()
 }
 
 /// Writes one length-prefixed encoded frame to the video uni-stream.

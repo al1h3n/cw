@@ -9,7 +9,10 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 ///
 /// Bump it on every breaking change to message layout or meaning. Peers with different
 /// versions must refuse the session with a clear error instead of guessing.
-/// Version 20 added a `duration_seconds` to `SetExam` (the Agent auto-releases a timed lock, so an
+/// Version 21 added workspace file transfer (`ListFiles`/`Files`, `FetchFile`/`FileTransfer`,
+/// `SendFile`/`FileSendReady`/`FileSent`) — browse, download and upload files inside a student PC's
+/// shared workspace folder;
+/// version 20 added a `duration_seconds` to `SetExam` (the Agent auto-releases a timed lock, so an
 /// AI/MCP "lock for 10 s" no longer locks forever) and a `ResetWallpaper` action (put the wallpaper
 /// back to the student's own, else the Windows default);
 /// version 19 added a `fit` to `SetWallpaper` and `SetScreenLock`/`ScreenLockState` (freeze a
@@ -27,7 +30,7 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 /// added remote mouse/keyboard input; version 2 added remote actions. Each shifted the later
 /// `Control` discriminants, so a peer on an older version would decode them as the wrong message and
 /// the handshake refuses it outright.
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 
 /// Default JPEG quality (`1..=100`) for screen thumbnails when the Console does not specify one, and
 /// what non-preview callers (diagnostics, the MCP screenshot tool) pass. 60 measured ~5–7 KB at
@@ -44,7 +47,8 @@ pub use pairing::{MAX_ROOM_NAME, MAX_ROOM_SECRET, PairMessage, PairRejection, We
 pub use record_id::{RecordId, RecordIdParseError};
 pub use wire::{
     Action, ActionFailure, ActionOutcome, AppEntry, AudioFormat, Capabilities, Codec, Control,
-    DecodeError, Hello, InputEvent, MAX_BLOCKLIST, MAX_INPUT_BATCH, Monitor, PointerButton, Preset,
-    ProtocolError, RecordOptions, RecordingInfo, Role, RunningApp, Scaler, StoredRecording,
-    VideoSettings, WallpaperFit, decode, encode, version_compatible,
+    DecodeError, FileEntry, Hello, InputEvent, MAX_BLOCKLIST, MAX_FILE_LIST, MAX_FILE_PATH,
+    MAX_INPUT_BATCH, Monitor, PointerButton, Preset, ProtocolError, RecordOptions, RecordingInfo,
+    Role, RunningApp, Scaler, StoredRecording, VideoSettings, WallpaperFit, decode, encode,
+    version_compatible,
 };

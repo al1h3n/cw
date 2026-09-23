@@ -58,6 +58,9 @@ pub struct ScreenCapture {
     /// File holding the student's real wallpaper path while black is shown, so it can be restored
     /// even after a crash.
     wallpaper_save: std::path::PathBuf,
+    /// The shared workspace folder file transfer is confined to (AGENTS §5). Every send/download/list
+    /// is resolved against this and refused if it escapes.
+    workspace: std::path::PathBuf,
 }
 
 impl Drop for ScreenCapture {
@@ -90,6 +93,7 @@ impl ScreenCapture {
         blocklist_path: &Path,
         recordings_dir: &Path,
         wallpaper_save: &Path,
+        workspace: &Path,
     ) -> Result<Self, CaptureError> {
         let capturer = media::ThumbnailCapturer::new().map_err(|e| CaptureError(e.to_string()))?;
         // In case a previous run was killed mid-watch, put any saved wallpaper back on start-up, then
@@ -113,6 +117,7 @@ impl ScreenCapture {
             watch_locked_wp: Mutex::new(false),
             stream: Mutex::new(None),
             wallpaper_save: wallpaper_save.to_path_buf(),
+            workspace: workspace.to_path_buf(),
         })
     }
 
@@ -544,6 +549,35 @@ impl AgentDevice for ScreenCapture {
             }
             (false, String::new())
         }
+    }
+
+    fn list_files(&self, _from: &PeerInfo, dir: &str) -> Result<Vec<proto::FileEntry>, String> {
+        crate::workspace::list(&self.workspace, dir)
+    }
+
+    fn file_read_path(&self, from: &PeerInfo, path: &str) -> Option<std::path::PathBuf> {
+        let resolved = crate::workspace::read_path(&self.workspace, path)?;
+        let _ = self.audit.note(
+            net::endpoint::now_ms(),
+            from.device_id,
+            &format!("file-send:{path}"),
+        );
+        Some(resolved)
+    }
+
+    fn file_write_path(
+        &self,
+        from: &PeerInfo,
+        dir: &str,
+        name: &str,
+    ) -> Option<std::path::PathBuf> {
+        let dest = crate::workspace::write_path(&self.workspace, dir, name)?;
+        let _ = self.audit.note(
+            net::endpoint::now_ms(),
+            from.device_id,
+            &format!("file-recv:{name}"),
+        );
+        Some(dest)
     }
 
     fn set_wallpaper(

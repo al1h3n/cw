@@ -463,6 +463,20 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
         "download_recording" => ok(m
             .download_recording(&arg::<String>(a, "deviceId")?, &arg::<String>(a, "file")?)
             .await?),
+        "list_files" => ok(m
+            .list_files(&arg::<String>(a, "deviceId")?, &arg::<String>(a, "dir")?)
+            .await?),
+        "download_file" => ok(m
+            .download_file(&arg::<String>(a, "deviceId")?, &arg::<String>(a, "path")?)
+            .await?),
+        "send_file" => ok(m
+            .send_file(
+                &arg::<String>(a, "deviceId")?,
+                &arg::<String>(a, "dir")?,
+                &arg::<String>(a, "name")?,
+                arg::<Vec<u8>>(a, "data")?,
+            )
+            .await?),
         "recording_overview" => ok(recording_overview(state).await),
         "record_all" => record_all(state, record_options(a)?).await,
         "stop_all_recording" => ok(stop_all_recording(state).await),

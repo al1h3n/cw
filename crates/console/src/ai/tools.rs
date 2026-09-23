@@ -100,6 +100,38 @@ pub fn specs() -> Vec<ToolSpec> {
             parameters: json!({ "type": "object", "properties": { "device_id": device_id }, "required": ["device_id"] }),
         },
         ToolSpec {
+            name: "list_files".into(),
+            description: "List a directory in one PC's shared workspace folder (where files are exchanged). dir is workspace-relative; empty = root. Transfer is confined to this folder.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "device_id": device_id, "dir": { "type": "string" } },
+                "required": ["device_id"]
+            }),
+        },
+        ToolSpec {
+            name: "send_file".into(),
+            description: "Send a file to one PC's workspace: write base64 bytes as name inside workspace directory dir (created if needed).".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "device_id": device_id,
+                    "dir": { "type": "string" },
+                    "name": { "type": "string" },
+                    "data_base64": { "type": "string" }
+                },
+                "required": ["device_id", "name", "data_base64"]
+            }),
+        },
+        ToolSpec {
+            name: "fetch_file".into(),
+            description: "Download a file from one PC's workspace to the teacher's PC (e.g. a student's script); returns where it was saved. path is workspace-relative.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "device_id": device_id, "path": { "type": "string" } },
+                "required": ["device_id", "path"]
+            }),
+        },
+        ToolSpec {
             name: "ask_user".into(),
             description: "Ask the teacher to pick one option (or type their own). Use this to confirm a destructive action or to choose between alternatives before acting. Returns the chosen text.".into(),
             parameters: json!({
@@ -222,6 +254,30 @@ pub async fn execute(manager: &DeviceManager, name: &str, args: &Value) -> Resul
                 .recording_status(arg_str(args, "device_id")?)
                 .await?;
             serde_json::to_value(info).map_err(|e| e.to_string())
+        }
+        "list_files" => {
+            let dir = args.get("dir").and_then(Value::as_str).unwrap_or("");
+            let entries = manager.list_files(arg_str(args, "device_id")?, dir).await?;
+            serde_json::to_value(json!({ "entries": entries })).map_err(|e| e.to_string())
+        }
+        "send_file" => {
+            use base64::Engine;
+            let dir = args.get("dir").and_then(Value::as_str).unwrap_or("");
+            let name = arg_str(args, "name")?;
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(arg_str(args, "data_base64")?)
+                .map_err(|e| format!("data_base64 is not valid base64: {e}"))?;
+            let bytes = data.len();
+            manager
+                .send_file(arg_str(args, "device_id")?, dir, name, data)
+                .await?;
+            Ok(json!({ "ok": true, "bytes": bytes }))
+        }
+        "fetch_file" => {
+            let saved = manager
+                .download_file(arg_str(args, "device_id")?, arg_str(args, "path")?)
+                .await?;
+            Ok(json!({ "ok": true, "saved_to": saved }))
         }
         ASK_USER => Err("ask_user is handled by the orchestrator".into()),
         other => Err(format!("unknown tool '{other}'")),
