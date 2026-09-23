@@ -6,6 +6,20 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-23, later — feature 7: student file workspace collect + wipe; `PROTOCOL_VERSION` 22):**
+- **Feature 7 (keep student files temporarily, browse, delete specific, wipe with one button).** Built
+  on the workspace from the file-transfer batch. New wire: `ListWorkspace`/`WorkspaceManifest`
+  (recursive file list), `DeleteFile`/`FileDeleted`, `ClearWorkspace`/`WorkspaceCleared`.
+  `agent::workspace` gains `manifest`, `delete`, `clear` — all confined to the workspace and
+  **unit-tested for scope safety** (AGENTS §5): delete/clear refuse escaping paths, and the wipe removes
+  a symlink as a link instead of following it out of the folder. Console **Files** dialog: per-file
+  **Delete**, **Delete all**, **Collect all**, and **Mark baseline** with New/Changed badges — the diff
+  is **size-based, never wall-clock**, so a student changing the timezone cannot fool it (the Feature-5
+  "time must not matter" rule). On the MCP (`list_workspace`, `delete_file`, `clear_workspace`) and
+  Surey, destructive ones flagged. Not built: restoring *modified* files (copy-on-write backups —
+  deferred, PLAN 2.8).
+- Gates green: fmt, clippy `-D warnings`, **231 tests**, vite build, `cargo deny`.
+
 **Status (2026-09-23, later — file transfer + full MCP parity goal; `PROTOCOL_VERSION` 21):**
 - **File transfer to/from student PCs.** New wire messages `ListFiles`/`Files`, `FetchFile`/
   `FileTransfer` (download on a uni-stream), `SendFile`/`FileSendReady`/`FileSent` (upload on a

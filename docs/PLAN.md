@@ -260,12 +260,17 @@ Order = what a teacher needs first in a real lesson.
   `reboot`. The mode is set per Policy: normal desktop / launcher / locked.
   **Done when:** an E2E UI test (tauri-driver/WebDriver) runs each command; unknown commands give a
   friendly error; shortcuts start only allow-listed apps.
-- [ ] **2.8 Student file workspace.** Take a baseline manifest of Desktop, Documents, Downloads,
+- [~] **2.8 Student file workspace.** Take a baseline manifest of Desktop, Documents, Downloads,
   Pictures, Videos and Music at session start. The Console lists new/changed files, **collects** them
   (e.g. exam work) and **wipes** them with one button.
   **Done when:** unit tests cover baseline/diff; a **safety test proves wipe never deletes outside the
   scope** (symlinks, junctions, `..` paths, files open in other apps); the collected archive opens.
   `ponytail:` restoring *modified* files needs copy-on-write backups — later, if pilots ask for it.
+  *Built (feature 7, 2026-09-23) against a single shared **workspace** folder rather than the whole set
+  of profile folders: browse, Collect all, delete a chosen file, one-button wipe, and a size-based
+  (clock-independent) baseline/new-changed diff. Scope safety is unit-tested (`agent::workspace`:
+  delete/clear refuse escaping paths; the wipe never follows a symlink out). Remaining to reach full
+  2.8: baselining the real profile folders (not just the workspace) and restoring modified files.*
 - [~] **2.9 Audio share.** WASAPI loopback (`cpal`) + Opus, with a per-stream on/off toggle. Off = zero
   audio capture.
   **Done when:** the bandwidth test shows 0 audio bytes when off; A/V drift < 80 ms over 10 min.

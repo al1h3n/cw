@@ -27,8 +27,9 @@ student PC (D3).
 `launch_app`, `close_app`, `set_blocklist`, `perform_action` (shutdown/reboot/log-off/lock-screen/
 cancel-shutdown/lock-wallpaper/unlock-wallpaper/reset-wallpaper), `set_exam` (with an optional
 `duration_seconds` auto-release), `set_wallpaper`, **`list_files` / `fetch_file` / `send_file`** (browse,
-download and upload files inside a student PC's shared workspace folder), `recording_status`,
-`start_recording`, `stop_recording`, `list_recordings`.
+download and upload files inside a student PC's shared workspace folder), **`list_workspace` /
+`delete_file` / `clear_workspace`** (collect all, delete a chosen file, or wipe every student file — the
+last two destructive), `recording_status`, `start_recording`, `stop_recording`, `list_recordings`.
 
 ## Design goal: full console parity
 
