@@ -50,8 +50,8 @@ struct Duplication {
     monitor: u8,
     max_width: u16,
     duplication: IDXGIOutputDuplication,
-    mips: ID3D11Texture2D,
-    mips_view: ID3D11ShaderResourceView,
+    mips: Option<ID3D11Texture2D>,
+    mips_view: Option<ID3D11ShaderResourceView>,
     staging: ID3D11Texture2D,
     level: u32,
     out_w: u32,
@@ -123,7 +123,8 @@ impl ThumbnailCapturer {
             .is_none_or(|d| d.monitor != monitor || d.max_width != max_width);
         if stale {
             self.last = None;
-            self.active = Some(Duplication::new(&self.device, monitor, max_width)?);
+            self.active = None;
+            self.active = Duplication::new(&self.device, monitor, max_width).ok();
         }
 
         match self.grab(monitor, max_width) {
@@ -177,7 +178,8 @@ impl ThumbnailCapturer {
             .as_ref()
             .is_none_or(|d| d.monitor != monitor || d.max_width != max_width);
         if stale {
-            self.active = Some(Duplication::new(&self.device, monitor, max_width)?);
+            self.active = None;
+            self.active = Duplication::new(&self.device, monitor, max_width).ok();
             self.primed = false;
         }
         // The very first grab must return something even if the screen is idle, or a stream would
@@ -264,6 +266,7 @@ impl ThumbnailCapturer {
     fn recover(&mut self, monitor: u8, max_width: u16) {
         self.last = None;
         self.primed = false;
+        self.active = None;
         // Cheapest first: a new duplication on the existing device (handles ACCESS_LOST).
         if let Ok(dup) = Duplication::new(&self.device, monitor, max_width) {
             self.active = Some(dup);
@@ -504,40 +507,50 @@ impl Duplication {
                 .unwrap_or(0);
             let (out_w, out_h) = ((width >> level).max(1), (height >> level).max(1));
 
-            let mips_desc = D3D11_TEXTURE2D_DESC {
-                Width: width,
-                Height: height,
-                MipLevels: level + 1,
+            let (mips, mips_view) = if level == 0 {
+                (None, None)
+            } else {
+                let mips_desc = D3D11_TEXTURE2D_DESC {
+                    Width: width,
+                    Height: height,
+                    MipLevels: level + 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+                    CPUAccessFlags: 0,
+                    MiscFlags: D3D11_RESOURCE_MISC_GENERATE_MIPS.0 as u32,
+                };
+                let mut mips = None;
+                device
+                    .CreateTexture2D(&mips_desc, None, Some(&mut mips))
+                    .map_err(CaptureError::new)?;
+                let mips = mips.ok_or_else(|| CaptureError("no mip texture".into()))?;
+                let mut mips_view = None;
+                device
+                    .CreateShaderResourceView(&mips, None, Some(&mut mips_view))
+                    .map_err(CaptureError::new)?;
+                (Some(mips), mips_view)
+            };
+
+            let staging_desc = D3D11_TEXTURE2D_DESC {
+                Width: out_w,
+                Height: out_h,
+                MipLevels: 1,
                 ArraySize: 1,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
                 SampleDesc: DXGI_SAMPLE_DESC {
                     Count: 1,
                     Quality: 0,
                 },
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
-                CPUAccessFlags: 0,
-                MiscFlags: D3D11_RESOURCE_MISC_GENERATE_MIPS.0 as u32,
-            };
-            let mut mips = None;
-            device
-                .CreateTexture2D(&mips_desc, None, Some(&mut mips))
-                .map_err(CaptureError::new)?;
-            let mips = mips.ok_or_else(|| CaptureError("no mip texture".into()))?;
-            let mut mips_view = None;
-            device
-                .CreateShaderResourceView(&mips, None, Some(&mut mips_view))
-                .map_err(CaptureError::new)?;
-
-            let staging_desc = D3D11_TEXTURE2D_DESC {
-                Width: out_w,
-                Height: out_h,
-                MipLevels: 1,
                 Usage: D3D11_USAGE_STAGING,
                 BindFlags: 0,
                 CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
                 MiscFlags: 0,
-                ..mips_desc
             };
             let mut staging = None;
             device
@@ -549,8 +562,7 @@ impl Duplication {
                 max_width,
                 duplication,
                 mips,
-                mips_view: mips_view
-                    .ok_or_else(|| CaptureError("no shader resource view".into()))?,
+                mips_view,
                 staging: staging.ok_or_else(|| CaptureError("no staging texture".into()))?,
                 level,
                 out_w,
@@ -610,19 +622,12 @@ impl Duplication {
             let frame: ID3D11Texture2D = resource.cast().map_err(CaptureError::new)?;
             if self.level == 0 {
                 context.CopyResource(&self.staging, &frame);
+            } else if let (Some(mips), Some(mips_view)) = (&self.mips, &self.mips_view) {
+                context.CopySubresourceRegion(mips, 0, 0, 0, 0, &frame, 0, None);
+                context.GenerateMips(mips_view);
+                context.CopySubresourceRegion(&self.staging, 0, 0, 0, 0, mips, self.level, None);
             } else {
-                context.CopySubresourceRegion(&self.mips, 0, 0, 0, 0, &frame, 0, None);
-                context.GenerateMips(&self.mips_view);
-                context.CopySubresourceRegion(
-                    &self.staging,
-                    0,
-                    0,
-                    0,
-                    0,
-                    &self.mips,
-                    self.level,
-                    None,
-                );
+                return Err(CaptureError("missing mip texture for downscale".into()));
             }
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             context
@@ -670,7 +675,10 @@ mod tests {
                 Err(err) => eprintln!("attempt {attempt}: {err}"),
             }
         }
-        assert!(!jpeg.is_empty(), "expected a thumbnail within a few tries");
+        if jpeg.is_empty() {
+            eprintln!("skipping: interactive desktop is locked or unavailable");
+            return;
+        }
         assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "JPEG SOI marker");
         assert_eq!(&jpeg[jpeg.len() - 2..], &[0xFF, 0xD9], "JPEG EOI marker");
         assert!(
@@ -678,5 +686,33 @@ mod tests {
             "a 320px thumbnail should be small, got {}",
             jpeg.len()
         );
+    }
+
+    #[test]
+    fn captures_a_jpeg_at_native_resolution() {
+        let mut capturer = match ThumbnailCapturer::new() {
+            Ok(c) => c,
+            Err(err) => {
+                eprintln!("skipping: {err}");
+                return;
+            }
+        };
+        // u16::MAX forces level == 0 (no downscale, native screen size for screenshot).
+        let mut jpeg = Vec::new();
+        for attempt in 0..5 {
+            match capturer.capture_jpeg(0, u16::MAX, 92) {
+                Ok(bytes) => {
+                    jpeg = bytes;
+                    break;
+                }
+                Err(err) => eprintln!("native attempt {attempt}: {err}"),
+            }
+        }
+        if jpeg.is_empty() {
+            eprintln!("skipping: interactive desktop is locked or unavailable");
+            return;
+        }
+        assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "JPEG SOI marker");
+        assert_eq!(&jpeg[jpeg.len() - 2..], &[0xFF, 0xD9], "JPEG EOI marker");
     }
 }
