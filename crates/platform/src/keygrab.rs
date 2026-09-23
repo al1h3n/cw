@@ -12,12 +12,20 @@
 //!
 //! **Honest limits (same as `keyguard`):** **Ctrl+Alt+Del** and **Win+L** are handled by the kernel
 //! and cannot be intercepted from user space, so they always act on the teacher's own PC. Everything
-//! else is captured while the grab is active.
+//! else — including the Windows key, Alt+Tab and Ctrl+Esc — is captured and forwarded while the grab
+//! is active.
 //!
-//! The grab has an explicit release chord, **Ctrl+Alt+Esc**: while active, that combination is *not*
-//! forwarded but reported as [`GrabEvent::Release`], so the teacher can always hand their keyboard
-//! back. The hook must be installed on a thread that pumps messages (the viewer's event-loop thread);
-//! [`KeyGrab`] is an RAII handle that removes it on drop and can never outlive the process.
+//! **Host key = Right Ctrl** (the VirtualBox convention). It toggles control on and off: while the
+//! viewer window is focused (armed) *or* already capturing, a Right-Ctrl press is swallowed and
+//! reported as [`GrabEvent::Toggle`] instead of reaching either PC. A single key is used, not a chord,
+//! because `Ctrl+Alt+Esc` failed in practice: `Alt+Esc` is a shell shortcut the OS consumes before any
+//! window or hook sees it, so control could never be taken (and the Windows key therefore never
+//! forwarded). Right Ctrl is not a shell shortcut, so both the hook and the window reliably see it.
+//!
+//! Two states drive the hook: **armed** ([`set_focused`], the viewer has focus, so the host key is
+//! live) and **active** ([`set_active`], control is on, so every key is swallowed + forwarded). The
+//! hook must be installed on a thread that pumps messages (the viewer's event-loop thread); [`KeyGrab`]
+//! is an RAII handle that removes it on drop and can never outlive the process.
 
 /// What the grabbed keyboard produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,8 +37,8 @@ pub enum GrabEvent {
         /// True on press, false on release.
         down: bool,
     },
-    /// The release chord (Ctrl+Alt+Esc) was pressed: hand the keyboard back.
-    Release,
+    /// The host key (Right Ctrl) was pressed: toggle control on/off.
+    Toggle,
 }
 
 /// While alive, a low-level keyboard hook is installed. It only *acts* while [`set_active`] is true;
@@ -63,6 +71,13 @@ pub fn set_active(active: bool) {
     imp::set_active(active);
 }
 
+/// Arms or disarms the host key (Right Ctrl). Armed while the viewer window has focus, so the teacher
+/// can *take* control with the host key even before capturing starts — and so the host key is never
+/// swallowed while the viewer is in the background (it belongs to whatever they alt-tabbed to).
+pub fn set_focused(focused: bool) {
+    imp::set_focused(focused);
+}
+
 #[cfg(windows)]
 mod imp {
     use std::sync::{
@@ -75,7 +90,7 @@ mod imp {
             Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM},
             System::LibraryLoader::GetModuleHandleW,
             UI::{
-                Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_ESCAPE, VK_MENU},
+                Input::KeyboardAndMouse::VK_RCONTROL,
                 WindowsAndMessaging::{
                     CallNextHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, SetWindowsHookExW,
                     UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
@@ -88,14 +103,20 @@ mod imp {
 
     use super::GrabEvent;
 
-    /// Whether the grab is currently swallowing + forwarding keys.
+    /// Whether the grab is currently swallowing + forwarding every key (control is on).
     static ACTIVE: AtomicBool = AtomicBool::new(false);
+    /// Whether the viewer window has focus, so the host key (Right Ctrl) is live.
+    static FOCUSED: AtomicBool = AtomicBool::new(false);
     /// The sink for captured events. Set on install, cleared on drop.
     #[allow(clippy::type_complexity)]
     static SINK: Mutex<Option<Box<dyn Fn(GrabEvent) + Send + Sync>>> = Mutex::new(None);
 
     pub fn set_active(active: bool) {
         ACTIVE.store(active, Ordering::SeqCst);
+    }
+
+    pub fn set_focused(focused: bool) {
+        FOCUSED.store(focused, Ordering::SeqCst);
     }
 
     fn fire(event: GrabEvent) {
@@ -144,7 +165,9 @@ mod imp {
     }
 
     extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code == HC_ACTION as i32 && ACTIVE.load(Ordering::SeqCst) {
+        let active = ACTIVE.load(Ordering::SeqCst);
+        let focused = FOCUSED.load(Ordering::SeqCst);
+        if code == HC_ACTION as i32 && (active || focused) {
             // SAFETY: for HC_ACTION, lparam points to a KBDLLHOOKSTRUCT owned by the OS.
             let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
             let msg = wparam.0 as u32;
@@ -152,17 +175,20 @@ mod imp {
             let up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
             if down || up {
                 let vk = event.vkCode as u16;
-                // The release chord (Ctrl+Alt+Esc) is never forwarded — it hands the keyboard back.
-                // SAFETY: documented, side-effect-free key-state queries.
-                let ctrl =
-                    unsafe { GetAsyncKeyState(i32::from(VK_CONTROL.0)) } as u16 & 0x8000 != 0;
-                let alt = unsafe { GetAsyncKeyState(i32::from(VK_MENU.0)) } as u16 & 0x8000 != 0;
-                if down && vk == VK_ESCAPE.0 && ctrl && alt {
-                    fire(GrabEvent::Release);
+                // Right Ctrl is the host key: swallow it (both edges, so neither PC sees a stray Ctrl)
+                // and, on press, toggle control. Live whenever the viewer is focused or capturing.
+                if vk == VK_RCONTROL.0 {
+                    if down {
+                        fire(GrabEvent::Toggle);
+                    }
                     return LRESULT(1);
                 }
-                fire(GrabEvent::Key { vk, down });
-                return LRESULT(1); // swallow locally: the key only reaches the remote PC
+                // Every other key is only swallowed + forwarded while actually capturing; when merely
+                // focused (view-only) the teacher's keys reach their own PC normally.
+                if active {
+                    fire(GrabEvent::Key { vk, down });
+                    return LRESULT(1); // swallow locally: the key only reaches the remote PC
+                }
             }
         }
         // SAFETY: the documented pass-through for everything we do not capture.
@@ -181,4 +207,6 @@ mod imp {
     }
 
     pub fn set_active(_active: bool) {}
+
+    pub fn set_focused(_focused: bool) {}
 }

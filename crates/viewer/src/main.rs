@@ -13,9 +13,9 @@
 //! It dials as the **same paired console** whose keys live in `%LOCALAPPDATA%\co-watcher\console`
 //! (or `COWATCHER_DIR`), so an Agent trusts it exactly as it trusts the grid.
 //!
-//! In the window: **Ctrl+Alt+Esc toggles control** (matching the release chord the Agent's key gate
-//! uses on the student side). While controlling, every key and click goes to that PC; releasing, or
-//! the window losing focus, sends "release everything" so no key is ever left stuck down.
+//! In the window: **Right Ctrl (the host key) toggles control**, the VirtualBox convention. While
+//! controlling, every key and click goes to that PC; releasing, or the window losing focus, sends
+//! "release everything" so no key is ever left stuck down.
 
 // Release builds are a GUI app, so launching the viewer never flashes a console window next to the
 // teacher's screen. Debug builds keep the console for the connection log and decode diagnostics.
@@ -64,7 +64,7 @@ enum UserEvent {
     NewFrame,
     /// The stream ended (teacher stopped watching) — switch to the bouncing "disabled" screen.
     StreamEnded,
-    /// The keyboard grab captured the release chord (Ctrl+Alt+Esc): toggle control off.
+    /// The keyboard grab captured the host key (Right Ctrl): toggle control on/off.
     ToggleControl,
     /// The keyboard grab captured a key while controlling; forward it to the student PC.
     GrabbedKey {
@@ -448,8 +448,6 @@ struct App {
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
     image: Option<ImageRect>,
     controlling: bool,
-    ctrl_down: bool,
-    alt_down: bool,
     /// A proxy the low-level keyboard grab uses to hand captured keys back to the window thread.
     grab_proxy: EventLoopProxy<UserEvent>,
     /// The installed keyboard grab (RAII: removed on exit). `None` if it could not be installed, in
@@ -484,8 +482,6 @@ impl App {
             surface: None,
             image: None,
             controlling,
-            ctrl_down: false,
-            alt_down: false,
             grab_proxy,
             grab: None,
             bounce: None,
@@ -528,7 +524,7 @@ impl App {
         // a normal window sees (RustDesk-style). Only meaningful while the window has focus.
         self.set_capture(on);
         self.retitle();
-        // Toggling with Ctrl+Alt+Esc must show up at once — the green "you are driving" frame and the
+        // Toggling with the host key must show up at once — the green "you are driving" frame and the
         // bottom hint are only redrawn on a present, and a still student screen sends no new frame. So
         // ask the window to repaint now; otherwise taking control over a frozen picture looked like it
         // did nothing (bug report: "no green colours, no information that control started").
@@ -540,9 +536,9 @@ impl App {
     fn retitle(&self) {
         if let Some(window) = &self.window {
             let mode = if self.controlling {
-                "controlling — Ctrl+Alt+Esc to release"
+                "controlling — Right Ctrl to release"
             } else {
-                "view only — Ctrl+Alt+Esc to take control"
+                "view only — Right Ctrl to take control"
             };
             window.set_title(&format!("Co-watcher viewer ({mode})"));
         }
@@ -677,14 +673,10 @@ impl App {
     }
 
     fn on_key(&mut self, code: KeyCode, pressed: bool) {
-        // Track modifiers for the release chord and so shortcuts compose on the student side.
-        match code {
-            KeyCode::ControlLeft | KeyCode::ControlRight => self.ctrl_down = pressed,
-            KeyCode::AltLeft | KeyCode::AltRight => self.alt_down = pressed,
-            _ => {}
-        }
-        // Ctrl+Alt+Esc toggles control locally; it is never forwarded.
-        if pressed && code == KeyCode::Escape && self.ctrl_down && self.alt_down {
+        // Right Ctrl is the host key: it toggles control and is never forwarded. This window-level
+        // handler is the fallback for when the low-level grab could not be installed; when the grab is
+        // installed and armed it swallows Right Ctrl before winit sees it, so there is no double toggle.
+        if pressed && code == KeyCode::ControlRight {
             self.set_control(!self.controlling);
             return;
         }
@@ -735,7 +727,7 @@ impl ApplicationHandler<UserEvent> for App {
         if self.grab.is_none() {
             let proxy = self.grab_proxy.clone();
             self.grab = platform::keygrab::KeyGrab::install(move |event| match event {
-                platform::keygrab::GrabEvent::Release => {
+                platform::keygrab::GrabEvent::Toggle => {
                     let _ = proxy.send_event(UserEvent::ToggleControl);
                 }
                 platform::keygrab::GrabEvent::Key { vk, down } => {
@@ -743,6 +735,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             });
         }
+        // The window opens focused, so arm the host key (Right Ctrl) straight away — that is what lets
+        // the teacher take control with it before any capture has started.
+        platform::keygrab::set_focused(true);
         // If we launched straight into control, start capturing now that the window exists.
         if self.controlling {
             self.set_capture(true);
@@ -815,9 +810,9 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Focused(focused) => {
                 // Alt-tabbing away must not leave a key held on the student's PC, and an unfocused
                 // viewer must not keep the teacher's keyboard/mouse grabbed — pause capture while it
-                // is in the background, and resume it (still controlling) when focus returns.
-                self.ctrl_down = false;
-                self.alt_down = false;
+                // is in the background, and resume it (still controlling) when focus returns. The host
+                // key is armed only while focused, so it never steals Right Ctrl from another app.
+                platform::keygrab::set_focused(focused);
                 if self.controlling {
                     if focused {
                         self.set_capture(true);
@@ -975,14 +970,14 @@ fn draw_sign(buf: &mut [u32], w: u32, h: u32, b: &Bounce) {
     draw_text(buf, w, h, (x0 + PAD, y0 + PAD), SIGN, DOT, b.color);
 }
 
-/// Draws a one-line control hint along the bottom, on a dark strip, so the Ctrl+Alt+Esc chord is
+/// Draws a one-line control hint along the bottom, on a dark strip, so the host key is
 /// discoverable even with the window maximized and its title bar out of view.
 fn draw_hint(buf: &mut [u32], w: u32, h: u32, controlling: bool) {
     const DOT: u32 = 2;
     let text = if controlling {
-        "CONTROL ON - CTRL-ALT-ESC TO RELEASE"
+        "CONTROL ON - RIGHT CTRL TO RELEASE"
     } else {
-        "VIEW ONLY - CTRL-ALT-ESC TO CONTROL"
+        "VIEW ONLY - RIGHT CTRL TO CONTROL"
     };
     let strip = GLYPH_ROWS * DOT + 12;
     let y = h.saturating_sub(strip);
