@@ -6,6 +6,20 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-24 — feature 14: synchronised play-once media exam; `PROTOCOL_VERSION` 23):**
+- **Feature 14 (audio listening exam).** Preload an audio file to the chosen PCs (stored **privately**,
+  not the shared workspace) and start it on all of them **together**, no controls, deleted after it plays
+  once. New wire: `PreloadMedia`/`MediaReady`/`MediaPreloaded` (bytes on a uni-stream),
+  `PlayMedia`/`StopMedia`/`MediaState`. `agent::exam_media` schedules playback a **relative** delay after
+  the play command is *received* — never the student's wall clock, which they can change (the Feature-5
+  rule) — plays once through Windows **MCI** (`platform::audio`, wav/mp3/wma), reuses the exam-lock
+  overlay as the notice + no-controls when `lock`, then deletes the file. Console **Media exam** dialog
+  in the Content menu; on the MCP (`preload_media`/`play_media`/`stop_media`) and Surey.
+- **Why MCI, not an audio crate:** `rodio` pulls `cpal 0.15`, which collides with the capture path's
+  `cpal 0.18` on the `alsa` native `links` value (resolution fails). MCI is native, needs no crate,
+  plays common formats and stops cleanly. Video play-once is deferred (needs a fullscreen player).
+- Gates green: fmt, clippy `-D warnings`, **231 tests**, vite build, `cargo deny`.
+
 **Status (2026-09-23, later — feature 7: student file workspace collect + wipe; `PROTOCOL_VERSION` 22):**
 - **Feature 7 (keep student files temporarily, browse, delete specific, wipe with one button).** Built
   on the workspace from the file-transfer batch. New wire: `ListWorkspace`/`WorkspaceManifest`

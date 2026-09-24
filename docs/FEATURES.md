@@ -38,7 +38,7 @@ see [Impossible, and deliberately refused](#impossible-and-deliberately-refused)
 | 11 | Black background while the host watches | **done** | The Agent swaps the wallpaper for black when a teacher opens the PC's screen and restores it on close/disconnect (unelevated SPI). Restore is guarded four ways (on close, on disconnect, on start-up, on Drop) so a student is never left with a black desktop. Verified live via `wallpaper-selftest`. |
 | 12 | Screen recordings, all or one, scheduled | **done** (manual) / planned (scheduled, two-pass) | Records on the student PC at a chosen size and frame rate, e.g. a 1440p screen saved as 1080p, area-averaged so text stays readable. When an `ffmpeg.exe` is present next to the Agent (or on PATH) it encodes real video — **H.264/H.265/AV1** with a chosen preset, CRF quality, B-frames and the lanczos scaler — to an `.mp4`; without it, the built-in **MJPEG-in-AVI** writer is used (every frame independent, index rewritten every 30 frames, so a power cut still leaves a playable file, and the **measured** fps is written so it plays at normal speed). The teacher can **download** any recording to their own PC (streamed over a QUIC uni-stream, path-traversal guarded). Still planned: **two-pass** encode (needs a post-record re-encode, not a live pipe) and scheduling from a Policy. |
 | 13 | Broadcast the host screen to all/some, input blocked | **partial** (locked mode built, unverified live) | The teacher's screen appears full-screen and on top on the student PC, scaled to whatever resolution that PC has, and disappears on command. Several broadcasts can run at once to different PC groups, each with its own Stop, and they survive closing the picker. The teacher can tick **Lock students onto it**: a locked broadcast shows on a **separate Win32 desktop** (`platform::present::open_locked`, plus `platform::keyguard` dropping Alt+Tab/Alt+Esc/Ctrl+Esc/Win/Alt+F4) so an ordinary user cannot Alt+Tab or Win-key away — built, but the on-student lockdown itself is best confirmed on a second machine. Unlocked mode is still "everyone look at my screen". A busy-cursor spinner over the broadcast was fixed (the present window now sets a normal arrow cursor). |
-| 14 | Send audio/video in real time, notification, play once | planned | The media file is **preloaded** to each Agent, then all start **in sync** at a chosen time, with a notification, no controls, and it is **deleted after playing once** (a listening/viewing exam). Preload + synchronised start beats live streaming for this. Live mic reuses the broadcast path (#13). Needs the file-transfer channel below. Its own batch. |
+| 14 | Send audio/video in real time, notification, play once | **done** (audio) / planned (video) | **Listening exam:** the teacher preloads an **audio** file to the chosen PCs (stored privately, not the shared workspace) and starts it on all of them **together**, with an optional on-screen notice + lock, **no controls**, and it is **deleted after it plays once**. Sync never trusts the student's clock — each PC starts a fixed delay after it *receives* the play command, so a changed timezone cannot desync it (the Feature-5 rule). Playback is Windows MCI (`platform::audio`, wav/mp3/wma), the lock overlay reuses the exam lock. On the MCP (`preload_media`/`play_media`/`stop_media`) and Surey. **Video** play-once is not built (needs a real fullscreen player); live teacher mic/screen reuses the broadcast path (#13). |
 | 15 | Update centre from the deploy branch | planned | Signed manifests, channels, rollback. |
 | 16 | Tutorial on first start, skippable | **done** | A five-step tour on first run — add PCs, watch, open one screen, take control, room password — skippable from every step and re-openable from the Help button. |
 | 17 | One binary, choose client or server, ID added later | **partial** | Still three binaries (Console, Agent, Viewer), but a single **installer** (`installer/cowatcher.iss`, Inno Setup) now bundles all three and picks the role at first run (D8) — Console = GUI + shortcut, Agent = the auto-start Windows service. The agent can install itself as an auto-start service (`install`/`uninstall`/`status`/`run`): starts at boot, copies itself to `%ProgramData%\co-watcher\agent` first so deleting the source folder cannot break it, absent from Task Manager's Startup tab (as every service is), removable only by an admin — not hidden (still in services.msc, Details, tray, login notice). A true single fat binary with a role flag is still the longer-term plan. |
@@ -177,9 +177,23 @@ and ffmpeg-based recording with download-to-teacher (#12). Elevation paths still
   window handle for its classroom; `switch_classroom` focuses that window instead of spawning a second
   process when one is already open (`platform::window::focus`, stale handles validated with `IsWindow`).
 
+### Done 2026-09-24 (feature 14 — synchronised play-once media exam)
+
+`PROTOCOL_VERSION` is now **23**.
+
+- **Feature 14 (audio).** New wire: `PreloadMedia`/`MediaReady`/`MediaPreloaded` (bytes on a uni-stream,
+  stored privately), `PlayMedia`/`StopMedia`/`MediaState`. `agent::exam_media` schedules playback a
+  **relative** delay after the play command is *received* (never the wall clock), plays it once via
+  Windows MCI (`platform::audio`), shows the exam-lock overlay as the notice + no-controls when `lock`,
+  and **deletes the file after it plays**. Console **Media exam** dialog (Content menu): pick an audio
+  file, targets, "start in N seconds", notice, lock; Play preloads to all then starts them together,
+  Stop ends it. On the MCP (`preload_media`, `play_media`, `stop_media`) and Surey. Video play-once is
+  deferred (needs a fullscreen player). Chose MCI over an audio crate to avoid a second `cpal`/`alsa`
+  stack conflicting with the capture path's `cpal` on the `alsa` native `links`.
+
 ### Done 2026-09-23 (feature 7 — student file workspace: collect + wipe)
 
-`PROTOCOL_VERSION` is now **22**.
+`PROTOCOL_VERSION` was **22**.
 
 - **Feature 7 built** on the workspace from the file-transfer batch. New wire: `ListWorkspace`/
   `WorkspaceManifest` (recursive file list), `DeleteFile`/`FileDeleted` (remove a chosen file),

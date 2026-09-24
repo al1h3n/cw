@@ -295,11 +295,15 @@ Order = what a teacher needs first in a real lesson.
   ~1–2 s), with a dead-audience timeout so a rebooted client can't leave it "stuck on". Still to do: the
   30-Agent bandwidth run and the real-PC escape check for the locked mode; capture still uses
   PrintWindow/BitBlt, not yet Windows.Graphics.Capture.*
-- [ ] **2.11 Media broadcast** (listening exams). The file is **preloaded** to the Agents, then they
+- [~] **2.11 Media broadcast** (listening exams). The file is **preloaded** to the Agents, then they
   start **in sync** at time T. No controls, plays once, and is deleted afterwards. Live mode (teacher's
   microphone) reuses 2.10.
   **Done when:** start offset between Agents < 100 ms (measured); an Agent that reconnects mid-play
   does not restart the file.
+  *Built for **audio** (feature 14, 2026-09-24): preload privately, start each PC a fixed delay after it
+  *receives* the play command (clock-independent, not a wall-clock "time T"), play once via MCI
+  (`platform::audio`), optional lock-overlay notice, delete after. Remaining: measure the cross-PC start
+  offset on two machines, video play-once (a fullscreen player), and reconnect-mid-play resumption.*
 - [ ] **2.12 Scheduled recordings.** Agent-side, low fps (e.g. 5 fps, 720p) with the hardware encoder
   → fragmented MP4 segments. The schedule lives in the Policy (works offline), and the file uploads later.
   **Done when:** cutting power mid-recording still leaves a playable file; the schedule fires with the
