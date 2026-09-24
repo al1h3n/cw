@@ -924,6 +924,22 @@ impl AgentDevice for ScreenCapture {
         self.blocker.set_rules(programs)
     }
 
+    fn set_url_blocklist(&self, from: &PeerInfo, patterns: Vec<String>) -> (u16, String) {
+        let mut patterns = patterns;
+        patterns.truncate(proto::MAX_URL_BLOCKLIST);
+        match platform::weblock::set_url_blocklist(&patterns) {
+            Ok(count) => {
+                let _ = self.audit.note(
+                    net::endpoint::now_ms(),
+                    from.device_id,
+                    &format!("url-block:{count}"),
+                );
+                (count, String::new())
+            }
+            Err(err) => (0, err.to_string()),
+        }
+    }
+
     fn take_blocked(&self) -> Vec<String> {
         self.blocker.take_closed()
     }

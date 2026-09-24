@@ -986,6 +986,18 @@ fn set_blocklist(state: State<'_, AppState>, programs: Vec<String>) -> Result<()
     state.manager.set_blocklist(programs)
 }
 
+/// The room-wide website blocklist (browser policy), one pattern per entry.
+#[tauri::command]
+fn web_blocklist(state: State<'_, AppState>) -> Vec<String> {
+    state.manager.web_blocklist()
+}
+
+/// Replaces the room-wide website blocklist; connected PCs apply it via browser policy.
+#[tauri::command]
+fn set_web_blocklist(state: State<'_, AppState>, patterns: Vec<String>) -> Result<(), String> {
+    state.manager.set_web_blocklist(patterns)
+}
+
 /// Sends one action to one PC, or to every connected PC when `device_id` is absent.
 /// Returns how many PCs it was sent to; answers appear on each device's `last_action`.
 #[tauri::command]
@@ -1443,6 +1455,8 @@ pub fn run(
             perform,
             blocklist,
             set_blocklist,
+            web_blocklist,
+            set_web_blocklist,
             room_info,
             rename_room,
             new_room_password,

@@ -19,6 +19,7 @@
   import Focused from './lib/Focused.svelte'
   import ActionMenu from './lib/ActionMenu.svelte'
   import BlocklistDialog from './lib/BlocklistDialog.svelte'
+  import WebBlocklistDialog from './lib/WebBlocklistDialog.svelte'
   import Tutorial from './lib/Tutorial.svelte'
   import RoomCard from './lib/RoomCard.svelte'
   import LanguagePicker from './lib/LanguagePicker.svelte'
@@ -44,6 +45,7 @@
   // Whether Surey is still working (reply in flight / tool loop), so the closed launcher can pulse.
   let sureyBusy = $state(false)
   let editingBlocklist = $state(false)
+  let editingWebBlocklist = $state(false)
   let showTutorial = $state(false)
   let showSettings = $state(false)
   // Right-click-anywhere menu of class-wide actions.
@@ -520,6 +522,9 @@
         <button class="mi" onclick={() => (editingBlocklist = true)}>
           <Icon name="ban" />{t('blockButton')}…
         </button>
+        <button class="mi" onclick={() => (editingWebBlocklist = true)}>
+          <Icon name="ban" />{t('webBlockButton')}…
+        </button>
         <span class="sep"></span>
         <button class="mi" onclick={() => screenLockAll(true)} disabled={!watching}>
           <Icon name="freeze" />{t('screenLockAll')}
@@ -811,6 +816,10 @@
 
 {#if editingBlocklist}
   <BlocklistDialog onclose={() => (editingBlocklist = false)} />
+{/if}
+
+{#if editingWebBlocklist}
+  <WebBlocklistDialog onclose={() => (editingWebBlocklist = false)} />
 {/if}
 
 {#if creatingClassroom}

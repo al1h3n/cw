@@ -14,6 +14,9 @@ use crate::{DeviceId, PROTOCOL_VERSION};
 /// bound this size keeps the watch loop cheap and stops a malformed message asking for millions.
 pub const MAX_BLOCKLIST: usize = 256;
 
+/// The most website-blocklist patterns an Agent keeps, for the same reason as [`MAX_BLOCKLIST`].
+pub const MAX_URL_BLOCKLIST: usize = 256;
+
 /// The most entries a single workspace directory listing returns. A shared class folder holds tens to
 /// hundreds of files; this bound keeps a listing cheap and stops a malformed reply asking for millions.
 pub const MAX_FILE_LIST: usize = 4096;
@@ -819,6 +822,20 @@ pub enum Control {
         /// Non-empty when playback could not start (nothing preloaded, unsupported).
         problem: String,
     },
+    /// Console → Agent: block these website patterns via the browser's own policy (Chrome/Edge
+    /// `URLBlocklist`, Firefox `WebsiteFilter`). An empty list clears it. Applied through browser
+    /// policy, so no extension or proxy is needed and it survives a reboot on its own.
+    SetUrlBlocklist {
+        /// Domains or match patterns to block (e.g. `youtube.com`), capped at [`MAX_URL_BLOCKLIST`].
+        patterns: Vec<String>,
+    },
+    /// Agent → Console: how many patterns are now in force, and why not if it failed.
+    UrlBlocklistState {
+        /// Number of patterns written to the browser policy.
+        count: u16,
+        /// Non-empty when the policy could not be written (e.g. needs admin/the SYSTEM service).
+        problem: String,
+    },
     /// Console → Agent: what programs can this PC start?
     ListApps,
     /// Agent → Console: the programs it offers, as `(id, name)` pairs.
@@ -1096,6 +1113,13 @@ mod tests {
             Control::StopMedia,
             Control::MediaState {
                 playing: true,
+                problem: String::new(),
+            },
+            Control::SetUrlBlocklist {
+                patterns: vec!["youtube.com".into(), "tiktok.com".into()],
+            },
+            Control::UrlBlocklistState {
+                count: 2,
                 problem: String::new(),
             },
             Control::SetExam {

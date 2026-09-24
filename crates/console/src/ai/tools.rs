@@ -85,6 +85,15 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "set_url_blocklist".into(),
+            description: "Replace the class-wide website blocklist (browser policy). Give domains like youtube.com; empty clears it.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "patterns": { "type": "array", "items": { "type": "string" } } },
+                "required": ["patterns"]
+            }),
+        },
+        ToolSpec {
             name: "start_recording".into(),
             description: "Start recording one PC's screen (must be connected/watched).".into(),
             parameters: json!({ "type": "object", "properties": { "device_id": device_id }, "required": ["device_id"] }),
@@ -288,6 +297,18 @@ pub async fn execute(manager: &DeviceManager, name: &str, args: &Value) -> Resul
                 .collect::<Vec<_>>();
             let count = programs.len();
             manager.set_blocklist(programs)?;
+            Ok(json!({ "ok": true, "count": count }))
+        }
+        "set_url_blocklist" => {
+            let patterns = args
+                .get("patterns")
+                .and_then(Value::as_array)
+                .ok_or("missing array 'patterns'")?
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect::<Vec<_>>();
+            let count = patterns.len();
+            manager.set_web_blocklist(patterns)?;
             Ok(json!({ "ok": true, "count": count }))
         }
         "start_recording" => {

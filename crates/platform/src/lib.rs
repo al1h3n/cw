@@ -20,5 +20,6 @@ pub mod secret;
 pub mod service;
 pub mod session;
 pub mod wallpaper;
+pub mod weblock;
 pub mod window;
 pub mod wol;

@@ -103,6 +103,20 @@ pub fn catalogue() -> Value {
             &["device_id", "programs"],
         ),
         tool(
+            "set_url_blocklist",
+            "Block websites on a PC via the browser's own policy (Chrome/Edge/Firefox). Give domains \
+             (e.g. youtube.com); an empty list clears it. Needs the Agent running as the SYSTEM service.",
+            json!({
+                "device_id": device_id_prop(),
+                "patterns": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Domains or match patterns to block, e.g. [\"youtube.com\", \"tiktok.com\"]."
+                }
+            }),
+            &["device_id", "patterns"],
+        ),
+        tool(
             "perform_action",
             "Perform one power/lock action on a PC. DESTRUCTIVE actions (shutdown, reboot, log-off) \
              interrupt the student — confirm with the teacher first. Allowed actions: shutdown, \
@@ -364,6 +378,23 @@ pub async fn call(fleet: &Fleet, name: &str, args: &Value) -> Result<Vec<Value>,
                 .map_err(|e| e.to_string())?;
             Ok(vec![json_text(
                 &json!({ "rules": rules, "closed": closed }),
+            )])
+        }
+        "set_url_blocklist" => {
+            let patterns = args
+                .get("patterns")
+                .and_then(Value::as_array)
+                .ok_or("missing required array argument 'patterns'")?
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect::<Vec<_>>();
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            let (count, problem) = session
+                .set_url_blocklist(patterns)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(vec![json_text(
+                &json!({ "count": count, "problem": problem }),
             )])
         }
         "perform_action" => {

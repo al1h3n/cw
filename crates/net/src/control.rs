@@ -103,6 +103,13 @@ pub trait AgentDevice {
         Vec::new()
     }
 
+    /// Blocks these website patterns via the browser's own policy. Returns `(count, problem)`. The
+    /// default cannot, so a device without browser policy support simply reports that.
+    fn set_url_blocklist(&self, from: &PeerInfo, patterns: Vec<String>) -> (u16, String) {
+        let _ = (from, patterns);
+        (0, "this device cannot block websites".to_string())
+    }
+
     /// Starts encoding this screen as H.264, returning the settings actually used and a channel of
     /// encoded packets. The Agent opens a uni-stream and pumps the channel down it.
     ///
@@ -540,6 +547,22 @@ impl ControlSession {
         write_message(&mut self.send, &Control::SetBlocklist { programs }).await?;
         match read_message::<Control>(&mut self.recv).await? {
             Control::BlocklistState { rules, closed } => Ok((rules, closed)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: set the website blocklist (browser policy). Returns `(count, problem)`.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn set_url_blocklist(
+        &mut self,
+        patterns: Vec<String>,
+    ) -> Result<(u16, String), EndpointError> {
+        write_message(&mut self.send, &Control::SetUrlBlocklist { patterns }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::UrlBlocklistState { count, problem } => Ok((count, problem)),
             Control::Error(err) => Err(EndpointError::ControlRefused(err)),
             _ => Err(EndpointError::Protocol),
         }
@@ -1687,6 +1710,14 @@ impl ControlSession {
                     let closed = source.take_blocked();
                     write_message(&mut self.send, &Control::BlocklistState { rules, closed })
                         .await?;
+                }
+                Control::SetUrlBlocklist { patterns } => {
+                    let (count, problem) = source.set_url_blocklist(&self.peer, patterns);
+                    write_message(
+                        &mut self.send,
+                        &Control::UrlBlocklistState { count, problem },
+                    )
+                    .await?;
                 }
                 Control::Perform(action) => {
                     let outcome = source.perform(&self.peer, action);

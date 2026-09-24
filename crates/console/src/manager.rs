@@ -380,6 +380,9 @@ pub struct DeviceManager {
     /// to re-send it. Kept here (not per device) because "no games" applies to the whole class.
     blocklist: Arc<Mutex<Blocklist>>,
     blocklist_path: std::path::PathBuf,
+    /// The room-wide **website** blocklist (browser policy), pushed like the app blocklist.
+    web_blocklist: Arc<Mutex<Blocklist>>,
+    web_blocklist_path: std::path::PathBuf,
     /// The room every invited device joins, and whose password they need to leave.
     room: Arc<Mutex<crate::room::Room>>,
     /// Where the room file lives, for renames and password changes.
@@ -406,14 +409,9 @@ impl DeviceManager {
         let trust = TrustStore::load(&trust_path).map_err(|e| e.to_string())?;
         let room = crate::room::load_or_create(dir)?;
         let blocklist_path = dir.join("blocklist.txt");
-        let programs = std::fs::read_to_string(&blocklist_path)
-            .map(|t| {
-                t.lines()
-                    .map(str::to_string)
-                    .filter(|l| !l.trim().is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let programs = load_lines(&blocklist_path);
+        let web_blocklist_path = dir.join("web-blocklist.txt");
+        let web_patterns = load_lines(&web_blocklist_path);
 
         let names = load_names(&dir.join("names.txt"));
         let devices = trust
@@ -440,6 +438,11 @@ impl DeviceManager {
                 version: 1,
             })),
             blocklist_path,
+            web_blocklist: Arc::new(Mutex::new(Blocklist {
+                programs: web_patterns,
+                version: 1,
+            })),
+            web_blocklist_path,
             room: Arc::new(Mutex::new(room)),
             data_dir: dir.to_path_buf(),
         })
@@ -1247,6 +1250,33 @@ impl DeviceManager {
         Ok(())
     }
 
+    /// The room-wide website blocklist as the teacher sees it.
+    #[must_use]
+    pub fn web_blocklist(&self) -> Vec<String> {
+        self.web_blocklist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .programs
+            .clone()
+    }
+
+    /// Replaces the room-wide website blocklist and saves it; connected PCs apply it via browser policy.
+    ///
+    /// # Errors
+    /// Returns a message if the list cannot be saved to disk.
+    pub fn set_web_blocklist(&self, patterns: Vec<String>) -> Result<(), String> {
+        let patterns: Vec<String> = patterns
+            .into_iter()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        std::fs::write(&self.web_blocklist_path, patterns.join("\n")).map_err(|e| e.to_string())?;
+        let mut list = self.web_blocklist.lock().unwrap_or_else(|e| e.into_inner());
+        list.programs = patterns;
+        list.version += 1;
+        Ok(())
+    }
+
     /// Wakes a paired PC that is switched off, by broadcasting a magic packet for every MAC we
     /// learned while it was last connected.
     ///
@@ -1386,6 +1416,7 @@ impl DeviceManager {
         let mut audio_on: Option<proto::AudioFormat> = None;
         // Send the blocklist whenever its version moves; 0 forces a send on the first pass.
         let mut sent_blocklist: u64 = 0;
+        let mut sent_web_blocklist: u64 = 0;
         // Whether this connection has been granted control of the PC.
         let mut controlling = false;
         // The direct IP appears only once hole-punching promotes the connection off the relay, so
@@ -1412,6 +1443,19 @@ impl DeviceManager {
                     .await
                     .map_err(|e| e.to_string())?;
                 sent_blocklist = version;
+            }
+
+            let (url_patterns, url_version) = {
+                let list = self.web_blocklist.lock().unwrap_or_else(|e| e.into_inner());
+                (list.programs.clone(), list.version)
+            };
+            if url_version != sent_web_blocklist {
+                // Best-effort: a PC that cannot write the policy (unelevated) reports a problem we log
+                // rather than tearing the session down.
+                if let Err(err) = session.set_url_blocklist(url_patterns).await {
+                    eprintln!("url blocklist push failed: {err}");
+                }
+                sent_web_blocklist = url_version;
             }
 
             // Control and input come first: a click must not wait behind a screen refresh.
@@ -1848,6 +1892,18 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Loads the teacher's custom PC names from `names.txt` (`id = name` per line). Missing file is fine.
+/// Loads a plain list file (one non-blank entry per line), for the app and website blocklists.
+fn load_lines(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .map(|t| {
+            t.lines()
+                .map(str::to_string)
+                .filter(|l| !l.trim().is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn load_names(path: &std::path::Path) -> std::collections::HashMap<String, String> {
     let mut names = std::collections::HashMap::new();
     if let Ok(text) = std::fs::read_to_string(path) {

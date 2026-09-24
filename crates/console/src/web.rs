@@ -417,6 +417,8 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
         // ---- blocklist + room ----
         "blocklist" => ok(m.blocklist()),
         "set_blocklist" => ok(m.set_blocklist(arg(a, "programs")?)?),
+        "web_blocklist" => ok(m.web_blocklist()),
+        "set_web_blocklist" => ok(m.set_web_blocklist(arg(a, "patterns")?)?),
         "room_info" => {
             let (name, password) = m.room();
             ok(json!({ "name": name, "password": password }))
