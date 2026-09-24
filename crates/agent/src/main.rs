@@ -26,6 +26,7 @@
 mod audit;
 mod blocker;
 mod capture_source;
+mod exam_media;
 mod membership;
 mod record_id;
 mod recording;
@@ -225,6 +226,7 @@ fn cmd_capture(args: &[String]) -> Result<(), String> {
         &recording::directory(&data_dir()),
         &data_dir().join("wallpaper-prev.txt"),
         &workspace::default_root(),
+        &data_dir().join("exam-media"),
     )
     .map_err(|e| e.to_string())?;
     println!("monitors: {}", capture.monitor_count());
@@ -309,6 +311,7 @@ async fn run_agent(banner: bool) -> Result<(), String> {
             &recording::directory(&data_dir()),
             &data_dir().join("wallpaper-prev.txt"),
             &workspace::default_root(),
+            &data_dir().join("exam-media"),
         )
         .map_err(|e| e.to_string())?,
     );

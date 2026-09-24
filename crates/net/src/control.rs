@@ -204,6 +204,32 @@ pub trait AgentDevice {
         Err("this device has no file workspace".to_string())
     }
 
+    /// The **private** path (not the shared workspace) to store a preloaded exam-media file at, or
+    /// `None` if the name is unacceptable. The default cannot store media.
+    fn preload_media_path(&self, from: &PeerInfo, name: &str) -> Option<std::path::PathBuf> {
+        let _ = (from, name);
+        None
+    }
+
+    /// Plays the preloaded media once, `start_in_ms` after now (a relative delay, never the wall clock),
+    /// optionally behind a lock overlay showing `message`. Returns `(playing, problem)`. Default: cannot.
+    fn play_media(
+        &self,
+        from: &PeerInfo,
+        start_in_ms: u32,
+        message: &str,
+        lock: bool,
+    ) -> (bool, String) {
+        let _ = (from, start_in_ms, message, lock);
+        (false, "this device cannot play media".to_string())
+    }
+
+    /// Stops any media playback and releases the lock. Returns `(playing, problem)`.
+    fn stop_media(&self, from: &PeerInfo) -> (bool, String) {
+        let _ = from;
+        (false, String::new())
+    }
+
     /// The absolute path to **write** an uploaded file to (directory created), or `None` if the
     /// destination is outside the workspace or the name is not a plain file name. Default: no writes.
     fn file_write_path(
@@ -986,6 +1012,85 @@ impl ControlSession {
         }
     }
 
+    /// Console side: preload `bytes` as an exam-media file named `name` (stored privately on the PC).
+    ///
+    /// # Errors
+    /// Stream failure, the Agent refusing, or the write failing part way.
+    pub async fn preload_media(&mut self, name: &str, bytes: &[u8]) -> Result<(), EndpointError> {
+        write_message(
+            &mut self.send,
+            &Control::PreloadMedia {
+                name: name.to_string(),
+                size: bytes.len() as u64,
+            },
+        )
+        .await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::MediaReady { problem } if problem.is_empty() => {}
+            Control::MediaReady { problem } => return Err(EndpointError::Capture(problem)),
+            Control::Error(err) => return Err(EndpointError::ControlRefused(err)),
+            _ => return Err(EndpointError::Protocol),
+        }
+        let mut uni = self
+            .conn
+            .open_uni()
+            .await
+            .map_err(|e| EndpointError::Connection(e.to_string()))?;
+        uni.write_all(bytes)
+            .await
+            .map_err(|e| EndpointError::Stream(e.to_string()))?;
+        uni.finish()
+            .map_err(|e| EndpointError::Stream(e.to_string()))?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::MediaPreloaded { problem } if problem.is_empty() => Ok(()),
+            Control::MediaPreloaded { problem } => Err(EndpointError::Capture(problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: start the preloaded media, `start_in_ms` after the Agent receives this. Returns
+    /// whether it is now playing.
+    ///
+    /// # Errors
+    /// Stream failure, an unexpected reply, or the Agent refusing.
+    pub async fn play_media(
+        &mut self,
+        start_in_ms: u32,
+        message: &str,
+        lock: bool,
+    ) -> Result<bool, EndpointError> {
+        write_message(
+            &mut self.send,
+            &Control::PlayMedia {
+                start_in_ms,
+                message: message.to_string(),
+                lock,
+            },
+        )
+        .await?;
+        self.read_media_state().await
+    }
+
+    /// Console side: stop any media playback. Returns whether media is still playing (false on success).
+    ///
+    /// # Errors
+    /// Stream failure or an unexpected reply.
+    pub async fn stop_media(&mut self) -> Result<bool, EndpointError> {
+        write_message(&mut self.send, &Control::StopMedia).await?;
+        self.read_media_state().await
+    }
+
+    /// Reads the `MediaState` reply a play/stop produces.
+    async fn read_media_state(&mut self) -> Result<bool, EndpointError> {
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::MediaState { playing, problem } if problem.is_empty() => Ok(playing),
+            Control::MediaState { problem, .. } => Err(EndpointError::Capture(problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
     /// Reads the one reply every recording request produces.
     async fn read_recording_state(&mut self) -> Result<proto::RecordingInfo, EndpointError> {
         match read_message::<Control>(&mut self.recv).await? {
@@ -1482,6 +1587,45 @@ impl ControlSession {
                         &Control::WorkspaceCleared { removed, problem },
                     )
                     .await?;
+                }
+                Control::PreloadMedia { name, size } => match source
+                    .preload_media_path(&self.peer, &name)
+                {
+                    Some(dest) => {
+                        write_message(
+                            &mut self.send,
+                            &Control::MediaReady {
+                                problem: String::new(),
+                            },
+                        )
+                        .await?;
+                        let problem = receive_file(&self.conn, &dest, size).await;
+                        write_message(&mut self.send, &Control::MediaPreloaded { problem }).await?;
+                    }
+                    None => {
+                        write_message(
+                            &mut self.send,
+                            &Control::MediaReady {
+                                problem: "that media cannot be stored".into(),
+                            },
+                        )
+                        .await?;
+                    }
+                },
+                Control::PlayMedia {
+                    start_in_ms,
+                    message,
+                    lock,
+                } => {
+                    let (playing, problem) =
+                        source.play_media(&self.peer, start_in_ms, &message, lock);
+                    write_message(&mut self.send, &Control::MediaState { playing, problem })
+                        .await?;
+                }
+                Control::StopMedia => {
+                    let (playing, problem) = source.stop_media(&self.peer);
+                    write_message(&mut self.send, &Control::MediaState { playing, problem })
+                        .await?;
                 }
                 Control::ListApps => {
                     write_message(&mut self.send, &Control::Apps(source.list_apps())).await?;

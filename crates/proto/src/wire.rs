@@ -780,6 +780,45 @@ pub enum Control {
         /// Non-empty when the wipe could not complete.
         problem: String,
     },
+    /// Console → Agent: preload a media file for a synchronised play-once exam (feature 14). The bytes
+    /// arrive on a uni-stream after [`Control::MediaReady`], and are stored **privately** (not in the
+    /// shared workspace), so a student cannot copy the exam material before it plays.
+    PreloadMedia {
+        /// A bare file name (used only for its extension); stored privately on the Agent.
+        name: String,
+        /// How many bytes the uni-stream will carry.
+        size: u64,
+    },
+    /// Agent → Console: ready to receive the media (empty `problem`) — open the uni-stream now.
+    MediaReady {
+        /// Non-empty when the preload was refused.
+        problem: String,
+    },
+    /// Agent → Console: the media was stored (empty `problem`) or the transfer failed.
+    MediaPreloaded {
+        /// Non-empty when the bytes could not be written.
+        problem: String,
+    },
+    /// Console → Agent: start playing the preloaded media once, `start_in_ms` after this message is
+    /// received (a **relative** delay, so it never depends on the student's clock — which they can
+    /// change). Plays with no controls; deleted after it finishes.
+    PlayMedia {
+        /// Delay from receipt before playback begins, so many PCs start together (0 = immediately).
+        start_in_ms: u32,
+        /// A notice shown to the student (empty = none). Shown via the lock overlay when `lock`.
+        message: String,
+        /// Lock the screen (exam overlay) for the duration, so the student cannot do anything else.
+        lock: bool,
+    },
+    /// Console → Agent: stop any media playback and release the lock.
+    StopMedia,
+    /// Agent → Console: whether media is now playing, and why not if a request failed.
+    MediaState {
+        /// True while the preloaded media is (about to be) playing.
+        playing: bool,
+        /// Non-empty when playback could not start (nothing preloaded, unsupported).
+        problem: String,
+    },
     /// Console → Agent: what programs can this PC start?
     ListApps,
     /// Agent → Console: the programs it offers, as `(id, name)` pairs.
@@ -1037,6 +1076,26 @@ mod tests {
             Control::ClearWorkspace,
             Control::WorkspaceCleared {
                 removed: 3,
+                problem: String::new(),
+            },
+            Control::PreloadMedia {
+                name: "listening.mp3".into(),
+                size: 4096,
+            },
+            Control::MediaReady {
+                problem: String::new(),
+            },
+            Control::MediaPreloaded {
+                problem: String::new(),
+            },
+            Control::PlayMedia {
+                start_in_ms: 1000,
+                message: "Listening exam".into(),
+                lock: true,
+            },
+            Control::StopMedia,
+            Control::MediaState {
+                playing: true,
                 problem: String::new(),
             },
             Control::SetExam {

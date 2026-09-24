@@ -200,6 +200,37 @@ pub fn catalogue() -> Value {
             &["device_id"],
         ),
         tool(
+            "preload_media",
+            "Preload an audio file (base64) onto a PC for a synchronised listening exam. Stored \
+             privately (not the shared workspace) so a student cannot copy it before it plays. Call \
+             play_media afterwards to start it.",
+            json!({
+                "device_id": device_id_prop(),
+                "name": { "type": "string", "description": "File name (used for its extension), e.g. listening.mp3." },
+                "data_base64": { "type": "string", "description": "The audio file's bytes, base64-encoded." }
+            }),
+            &["device_id", "name", "data_base64"],
+        ),
+        tool(
+            "play_media",
+            "Play the preloaded media once on a PC, start_in_ms after it receives this (a relative \
+             delay — send it to several PCs to start them together). No controls; deleted after it \
+             plays. Set lock to also lock the screen with the message for the duration.",
+            json!({
+                "device_id": device_id_prop(),
+                "start_in_ms": { "type": "integer", "minimum": 0, "maximum": 60000, "description": "Delay before playback (default 0)." },
+                "message": { "type": "string", "description": "Notice shown when lock is true." },
+                "lock": { "type": "boolean", "description": "Lock the screen for the duration (default false)." }
+            }),
+            &["device_id"],
+        ),
+        tool(
+            "stop_media",
+            "Stop any media playback on a PC and release the lock.",
+            json!({ "device_id": device_id_prop() }),
+            &["device_id"],
+        ),
+        tool(
             "recording_status",
             "Report whether a PC is currently recording its screen, and the running frame count.",
             json!({ "device_id": device_id_prop() }),
@@ -441,6 +472,40 @@ pub async fn call(fleet: &Fleet, name: &str, args: &Value) -> Result<Vec<Value>,
             let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
             let removed = session.clear_workspace().await.map_err(|e| e.to_string())?;
             Ok(vec![json_text(&json!({ "removed": removed }))])
+        }
+        "preload_media" => {
+            let name = arg_str(args, "name")?.to_string();
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(arg_str(args, "data_base64")?)
+                .map_err(|e| format!("data_base64 is not valid base64: {e}"))?;
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            session
+                .preload_media(&name, &data)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(vec![json_text(
+                &json!({ "preloaded": true, "bytes": data.len() }),
+            )])
+        }
+        "play_media" => {
+            let start_in_ms = args
+                .get("start_in_ms")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(0);
+            let message = args.get("message").and_then(Value::as_str).unwrap_or("");
+            let lock = args.get("lock").and_then(Value::as_bool).unwrap_or(false);
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            let playing = session
+                .play_media(start_in_ms, message, lock)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(vec![json_text(&json!({ "playing": playing }))])
+        }
+        "stop_media" => {
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            session.stop_media().await.map_err(|e| e.to_string())?;
+            Ok(vec![json_text(&json!({ "playing": false }))])
         }
         "recording_status" => {
             let mut session = fleet.connect(arg_str(args, "device_id")?).await?;

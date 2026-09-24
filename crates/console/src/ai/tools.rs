@@ -151,6 +151,38 @@ pub fn specs() -> Vec<ToolSpec> {
             parameters: json!({ "type": "object", "properties": { "device_id": device_id }, "required": ["device_id"] }),
         },
         ToolSpec {
+            name: "preload_media".into(),
+            description: "Preload an audio file (base64) onto one PC for a synchronised listening exam. Stored privately (not the shared workspace). Call play_media afterwards.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "device_id": device_id,
+                    "name": { "type": "string" },
+                    "data_base64": { "type": "string" }
+                },
+                "required": ["device_id", "name", "data_base64"]
+            }),
+        },
+        ToolSpec {
+            name: "play_media".into(),
+            description: "Play the preloaded media once on one PC, start_in_ms after it receives this (relative delay — call on several PCs to start together). No controls; deleted after. lock also locks the screen with the message.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "device_id": device_id,
+                    "start_in_ms": { "type": "integer", "minimum": 0, "maximum": 60000 },
+                    "message": { "type": "string" },
+                    "lock": { "type": "boolean" }
+                },
+                "required": ["device_id"]
+            }),
+        },
+        ToolSpec {
+            name: "stop_media".into(),
+            description: "Stop media playback on one PC and release the lock.".into(),
+            parameters: json!({ "type": "object", "properties": { "device_id": device_id }, "required": ["device_id"] }),
+        },
+        ToolSpec {
             name: "ask_user".into(),
             description: "Ask the teacher to pick one option (or type their own). Use this to confirm a destructive action or to choose between alternatives before acting. Returns the chosen text.".into(),
             parameters: json!({
@@ -313,6 +345,35 @@ pub async fn execute(manager: &DeviceManager, name: &str, args: &Value) -> Resul
         "clear_workspace" => {
             let removed = manager.clear_workspace(arg_str(args, "device_id")?).await?;
             Ok(json!({ "ok": true, "removed": removed }))
+        }
+        "preload_media" => {
+            use base64::Engine;
+            let name = arg_str(args, "name")?;
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(arg_str(args, "data_base64")?)
+                .map_err(|e| format!("data_base64 is not valid base64: {e}"))?;
+            let bytes = data.len();
+            manager
+                .preload_media(arg_str(args, "device_id")?, name, data)
+                .await?;
+            Ok(json!({ "ok": true, "bytes": bytes }))
+        }
+        "play_media" => {
+            let start_in_ms = args
+                .get("start_in_ms")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(0);
+            let message = args.get("message").and_then(Value::as_str).unwrap_or("");
+            let lock = args.get("lock").and_then(Value::as_bool).unwrap_or(false);
+            let playing = manager
+                .play_media(arg_str(args, "device_id")?, start_in_ms, message, lock)
+                .await?;
+            Ok(json!({ "playing": playing }))
+        }
+        "stop_media" => {
+            manager.stop_media(arg_str(args, "device_id")?).await?;
+            Ok(json!({ "playing": false }))
         }
         ASK_USER => Err("ask_user is handled by the orchestrator".into()),
         other => Err(format!("unknown tool '{other}'")),

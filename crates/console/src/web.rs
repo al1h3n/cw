@@ -482,6 +482,22 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
             .delete_file(&arg::<String>(a, "deviceId")?, &arg::<String>(a, "path")?)
             .await?),
         "clear_workspace" => ok(m.clear_workspace(&arg::<String>(a, "deviceId")?).await?),
+        "preload_media" => ok(m
+            .preload_media(
+                &arg::<String>(a, "deviceId")?,
+                &arg::<String>(a, "name")?,
+                arg::<Vec<u8>>(a, "data")?,
+            )
+            .await?),
+        "play_media" => ok(m
+            .play_media(
+                &arg::<String>(a, "deviceId")?,
+                arg::<u32>(a, "startInMs")?,
+                &arg::<String>(a, "message")?,
+                arg::<bool>(a, "lock")?,
+            )
+            .await?),
+        "stop_media" => ok(m.stop_media(&arg::<String>(a, "deviceId")?).await?),
         "recording_overview" => ok(recording_overview(state).await),
         "record_all" => record_all(state, record_options(a)?).await,
         "stop_all_recording" => ok(stop_all_recording(state).await),

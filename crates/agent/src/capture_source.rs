@@ -61,6 +61,13 @@ pub struct ScreenCapture {
     /// The shared workspace folder file transfer is confined to (AGENTS §5). Every send/download/list
     /// is resolved against this and refused if it escapes.
     workspace: std::path::PathBuf,
+    /// Where a preloaded exam-media file is stored — **private**, not the shared workspace, so a student
+    /// cannot copy the material before it plays.
+    media_dir: std::path::PathBuf,
+    /// The path of the currently preloaded media file, if any.
+    preloaded_media: Mutex<Option<std::path::PathBuf>>,
+    /// The running (or scheduled) media playback; dropping it stops playback and deletes the file.
+    media_exam: Mutex<Option<crate::exam_media::MediaExam>>,
 }
 
 impl Drop for ScreenCapture {
@@ -94,6 +101,7 @@ impl ScreenCapture {
         recordings_dir: &Path,
         wallpaper_save: &Path,
         workspace: &Path,
+        media_dir: &Path,
     ) -> Result<Self, CaptureError> {
         let capturer = media::ThumbnailCapturer::new().map_err(|e| CaptureError(e.to_string()))?;
         // In case a previous run was killed mid-watch, put any saved wallpaper back on start-up, then
@@ -118,6 +126,9 @@ impl ScreenCapture {
             stream: Mutex::new(None),
             wallpaper_save: wallpaper_save.to_path_buf(),
             workspace: workspace.to_path_buf(),
+            media_dir: media_dir.to_path_buf(),
+            preloaded_media: Mutex::new(None),
+            media_exam: Mutex::new(None),
         })
     }
 
@@ -606,6 +617,70 @@ impl AgentDevice for ScreenCapture {
             &format!("workspace-clear:{removed}"),
         );
         Ok(removed)
+    }
+
+    fn preload_media_path(&self, from: &PeerInfo, name: &str) -> Option<std::path::PathBuf> {
+        if !crate::workspace::is_plain_name(name) {
+            return None;
+        }
+        std::fs::create_dir_all(&self.media_dir).ok()?;
+        let dest = self.media_dir.join(name);
+        *self
+            .preloaded_media
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(dest.clone());
+        let _ = self.audit.note(
+            net::endpoint::now_ms(),
+            from.device_id,
+            &format!("media-preload:{name}"),
+        );
+        Some(dest)
+    }
+
+    fn play_media(
+        &self,
+        from: &PeerInfo,
+        start_in_ms: u32,
+        message: &str,
+        lock: bool,
+    ) -> (bool, String) {
+        let path = self
+            .preloaded_media
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(path) = path.filter(|p| p.is_file()) else {
+            return (false, "no media preloaded".to_string());
+        };
+        let message = (!message.is_empty()).then(|| message.to_string());
+        let exam = crate::exam_media::MediaExam::start(
+            path,
+            Duration::from_millis(u64::from(start_in_ms)),
+            message,
+            lock,
+        );
+        // Replacing any current playback stops it first (Drop of the old handle).
+        *self.media_exam.lock().unwrap_or_else(|e| e.into_inner()) = Some(exam);
+        let _ = self
+            .audit
+            .note(net::endpoint::now_ms(), from.device_id, "media-play");
+        (true, String::new())
+    }
+
+    fn stop_media(&self, from: &PeerInfo) -> (bool, String) {
+        // Dropping the handle stops playback, releases the lock and deletes the media file.
+        if self
+            .media_exam
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .is_some()
+        {
+            let _ = self
+                .audit
+                .note(net::endpoint::now_ms(), from.device_id, "media-stop");
+        }
+        (false, String::new())
     }
 
     fn set_wallpaper(

@@ -176,6 +176,23 @@ enum DeviceRequest {
     ClearWorkspace {
         reply: tokio::sync::oneshot::Sender<Result<u32, String>>,
     },
+    /// Preload exam media on this PC; the reply is `Ok(())` or an error.
+    PreloadMedia {
+        name: String,
+        data: Vec<u8>,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    /// Start the preloaded media on this PC; the reply is whether it is playing, or an error.
+    PlayMedia {
+        start_in_ms: u32,
+        message: String,
+        lock: bool,
+        reply: tokio::sync::oneshot::Sender<Result<bool, String>>,
+    },
+    /// Stop media playback on this PC; the reply is whether it is still playing, or an error.
+    StopMedia {
+        reply: tokio::sync::oneshot::Sender<Result<bool, String>>,
+    },
     /// What this PC can start.
     ListApps {
         reply: tokio::sync::oneshot::Sender<Vec<proto::AppEntry>>,
@@ -1003,6 +1020,55 @@ impl DeviceManager {
             .await?
     }
 
+    /// Preloads exam media (`data`, named `name`) on one PC.
+    ///
+    /// # Errors
+    /// The PC is unknown, not connected, or the transfer failed.
+    pub async fn preload_media(
+        &self,
+        device_id: &str,
+        name: &str,
+        data: Vec<u8>,
+    ) -> Result<(), String> {
+        let name = name.to_string();
+        self.ask(device_id, move |reply| DeviceRequest::PreloadMedia {
+            name,
+            data,
+            reply,
+        })
+        .await?
+    }
+
+    /// Starts the preloaded media on one PC, `start_in_ms` after it receives the command.
+    ///
+    /// # Errors
+    /// The PC is unknown, not connected, or playback could not start.
+    pub async fn play_media(
+        &self,
+        device_id: &str,
+        start_in_ms: u32,
+        message: &str,
+        lock: bool,
+    ) -> Result<bool, String> {
+        let message = message.to_string();
+        self.ask(device_id, move |reply| DeviceRequest::PlayMedia {
+            start_in_ms,
+            message,
+            lock,
+            reply,
+        })
+        .await?
+    }
+
+    /// Stops media playback on one PC.
+    ///
+    /// # Errors
+    /// The PC is unknown or not connected.
+    pub async fn stop_media(&self, device_id: &str) -> Result<bool, String> {
+        self.ask(device_id, |reply| DeviceRequest::StopMedia { reply })
+            .await?
+    }
+
     /// The programs one PC offers to start.
     ///
     /// # Errors
@@ -1445,6 +1511,29 @@ impl DeviceManager {
                     }
                     DeviceRequest::ClearWorkspace { reply } => {
                         let result = session.clear_workspace().await.map_err(|e| e.to_string());
+                        let _ = reply.send(result);
+                    }
+                    DeviceRequest::PreloadMedia { name, data, reply } => {
+                        let result = session
+                            .preload_media(&name, &data)
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = reply.send(result);
+                    }
+                    DeviceRequest::PlayMedia {
+                        start_in_ms,
+                        message,
+                        lock,
+                        reply,
+                    } => {
+                        let result = session
+                            .play_media(start_in_ms, &message, lock)
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = reply.send(result);
+                    }
+                    DeviceRequest::StopMedia { reply } => {
+                        let result = session.stop_media().await.map_err(|e| e.to_string());
                         let _ = reply.send(result);
                     }
                     DeviceRequest::ListApps { reply } => {

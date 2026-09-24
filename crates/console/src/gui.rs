@@ -586,6 +586,38 @@ async fn clear_workspace(state: State<'_, AppState>, device_id: String) -> Resul
     state.manager.clear_workspace(&device_id).await
 }
 
+/// Preloads an exam-media file on one PC (stored privately, not in the shared workspace).
+#[tauri::command]
+async fn preload_media(
+    state: State<'_, AppState>,
+    device_id: String,
+    name: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    state.manager.preload_media(&device_id, &name, data).await
+}
+
+/// Starts the preloaded media on one PC, `start_in_ms` after it receives the command.
+#[tauri::command]
+async fn play_media(
+    state: State<'_, AppState>,
+    device_id: String,
+    start_in_ms: u32,
+    message: String,
+    lock: bool,
+) -> Result<bool, String> {
+    state
+        .manager
+        .play_media(&device_id, start_in_ms, &message, lock)
+        .await
+}
+
+/// Stops media playback on one PC.
+#[tauri::command]
+async fn stop_media(state: State<'_, AppState>, device_id: String) -> Result<bool, String> {
+    state.manager.stop_media(&device_id).await
+}
+
 /// Stops the recording on one PC.
 #[tauri::command]
 async fn stop_recording(
@@ -1432,6 +1464,9 @@ pub fn run(
             workspace_manifest,
             delete_file,
             clear_workspace,
+            preload_media,
+            play_media,
+            stop_media,
             recording_overview,
             record_all,
             stop_all_recording,

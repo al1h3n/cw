@@ -13,6 +13,7 @@
   import RecordingsDialog from './lib/RecordingsDialog.svelte'
   import WallpaperDialog from './lib/WallpaperDialog.svelte'
   import FilesDialog from './lib/FilesDialog.svelte'
+  import MediaExamDialog from './lib/MediaExamDialog.svelte'
   import SureyPanel from './lib/SureyPanel.svelte'
   import SureyLauncher from './lib/SureyLauncher.svelte'
   import Focused from './lib/Focused.svelte'
@@ -37,6 +38,7 @@
   let broadcasting = $state(false)
   let showRecordings = $state(false)
   let showFiles = $state(false)
+  let showMediaExam = $state(false)
   let settingWallpaper = $state(false)
   let sureyOpen = $state(false)
   // Whether Surey is still working (reply in flight / tool loop), so the closed launcher can pulse.
@@ -495,6 +497,9 @@
         <button class="mi" onclick={() => (showFiles = true)}>
           <Icon name="image" />{t('filesButton')}
         </button>
+        <button class="mi" onclick={() => (showMediaExam = true)} disabled={devices.length === 0}>
+          <Icon name="cast" />{t('mediaButton')}
+        </button>
       </Menu>
 
       <Menu label={t('groupRestrictions')}>
@@ -844,6 +849,10 @@
 
 {#if showFiles}
   <FilesDialog {devices} onclose={() => (showFiles = false)} onerror={(m) => (error = m)} />
+{/if}
+
+{#if showMediaExam}
+  <MediaExamDialog {devices} onclose={() => (showMediaExam = false)} onerror={(m) => (error = m)} />
 {/if}
 
 {#if settingWallpaper}
