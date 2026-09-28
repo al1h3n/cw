@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 axum = { version = "0.8", features = ["json", "tokio"] } # `cowatcher-console web`: serve the dashboard UI + command/event bridge
 base64 = "0.23" # image attachments (data URLs) and audio for voice transcription
-getrandom = "0.3" # a random per-run access token for the web dashboard
+getrandom = "0.4" # a random per-run access token for the web dashboard
 iroh = "1.2"
 rust-embed = "8" # bake the built Svelte UI (ui/dist) into the binary so `web` is self-contained
 media = { version = "0.1.0", path = "../media" }
