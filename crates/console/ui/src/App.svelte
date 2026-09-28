@@ -94,9 +94,9 @@
 
   function loadKeepPreviews(): boolean {
     try {
-      return localStorage.getItem('cowatcher.keepPreviews') !== 'no'
+      return localStorage.getItem('cowatcher.keepPreviews') === 'yes'
     } catch {
-      return true
+      return false
     }
   }
   function setKeepPreviews(value: boolean) {
@@ -311,7 +311,14 @@
 
   async function refresh() {
     try {
-      devices = await invoke<Device[]>('devices')
+      const before = new Map(devices.map((d) => [d.device_id, d.exam_interrupted]))
+      const next = await invoke<Device[]>('devices')
+      for (const device of next) {
+        if (device.exam_interrupted && !before.get(device.device_id)) {
+          toasts.push(t('examInterrupted', device.name || device.device_id), 'error')
+        }
+      }
+      devices = next
       loaded = true
     } catch (e) {
       error = String(e)
@@ -883,6 +890,7 @@
 {#if focusedDevice}
   <Focused
     device={focusedDevice}
+    {keepPreviews}
     onclose={() => open(null)}
     onmonitor={(index) => chooseMonitor(focusedDevice.device_id, index)}
     listening={listeningTo === focusedDevice.device_id}

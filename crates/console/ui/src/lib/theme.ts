@@ -13,7 +13,7 @@ export const DEFAULT_CUSTOM: CustomTheme = {
 
 export const DEFAULT_SETTINGS: Settings = {
   ai_enabled: true,
-  keep_previews: true,
+  keep_previews: false,
   theme: 'dark',
   custom: { ...DEFAULT_CUSTOM },
 }

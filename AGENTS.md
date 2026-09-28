@@ -6,6 +6,30 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-28 — installer, exam recovery, external files; wire remains v26):**
+- Agent install now stops and reconfigures an existing Windows service, supports a signed HTTPS
+  update manifest with a configurable mirror/key and a daily SYSTEM update task. The installed
+  binary lives in a protected `bin` directory with student read/execute only; mutable Agent data
+  stays separate. The mirror setup
+  and publisher signer are under `deploy/updates/`. Deployment needs the publisher's HTTPS URL and
+  public key, plus an elevated two-PC/VM check. Uninstall removes the service and update task.
+- Exam intent is saved on the Agent and restored when the student session helper restarts after
+  sign-out. The SYSTEM supervisor compares the logon token ID as well as the console session ID, so
+  a fresh login using the same session ID still gets a fresh helper. Timed exams use OS uptime, not
+  the wall clock; a detected uptime reset restarts an active timed exam for its full original period.
+  A reboot whose new uptime exceeds the saved start tick is not distinguishable yet. The Console
+  shows lock/interruption state, has an explicit Unlock control,
+  and re-applies the lock on reconnection. This does not capture or control the Winlogon secure
+  desktop; Ctrl+Alt+Del and Win+L remain OS-reserved.
+- The Files dialog includes an External files view for saved screenshots, recordings, sent files, and workspace
+  downloads, with PC/type filters, screenshot preview, and Show in folder. Student uploads show a
+  received-file notice. Transfers remain confined to the student workspace over authenticated QUIC;
+  partial uploads are staged and completed uploads can replace existing files with rollback. MCP
+  and Surey can list the saved teacher files.
+- Offline previews now default to blank; power delay chips wrap translated text. Live multi-PC
+  deployment and secure-desktop behavior still need manual verification. Exam notices accept multiline
+  teacher text; media play commands fan out concurrently to reduce start skew.
+
 **Status (2026-09-28 — website blocking, recording retention, break-glass; `PROTOCOL_VERSION` 26):**
 - **Website blocking (v24).** Room-wide URL blocklist pushed like the app blocklist; `platform::weblock`
   writes Chrome/Edge `URLBlocklist` (HKLM) and Firefox `WebsiteFilter` (`policies.json`) — no extension,
@@ -211,9 +235,8 @@
   the path).
 - **Pushed wallpaper survives reboot (5):** `set_image` writes a sticky marker; the agent
   `reapply_pushed` on every start re-applies the teacher's wallpaper, so a PC rebooted to finish
-  installing gets it back. *Exam mode does **not** survive a reboot* — it is an in-memory lock; making
-  it persist safely needs the policy engine (auto-re-locking a student on boot is risky), so that half
-  is deferred, not silently done.
+  installing gets it back. At this point exam mode did not survive a reboot; the 2026-09-28 exam
+  recovery change above supersedes that earlier behavior.
 - **No wallpaper change while watched (8) + restore on close (6):** during the live stream the agent
   now also locks wallpaper changes (`wallpaper::lock`, tracked so it never clobbers an explicit lock)
   and restores the student's own/custom wallpaper when the stream ends (existing save-file path).

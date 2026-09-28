@@ -1,3 +1,5 @@
+THIS WAS AN INITIAL PROMPT, DON'T CHANGE A SINGLE WORD IN IT.
+
 Coding:
 Skills to use: /caveman, /ponytail, /rust-best-practices, /anti-ui-slop, /best-practices, /tauri, /i-have-adhd
 

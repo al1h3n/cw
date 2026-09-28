@@ -177,6 +177,24 @@ pub fn catalogue() -> Value {
             &["device_id"],
         ),
         tool(
+            "external_files",
+            "List screenshots, recordings, downloads, and sent files already saved on the teacher's PC.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "external_preview",
+            "View a saved teacher screenshot as a JPEG image. Use a screenshot name from external_files.",
+            json!({ "name": { "type": "string" } }),
+            &["name"],
+        ),
+        tool(
+            "external_show",
+            "Reveal one saved file in the teacher's file manager. Use a path returned by external_files.",
+            json!({ "path": { "type": "string" } }),
+            &["path"],
+        ),
+        tool(
             "fetch_file",
             "Download a file from a student PC's workspace and return its bytes as base64 (e.g. to \
              collect a script a student wrote). path is workspace-relative.",
@@ -479,6 +497,18 @@ pub async fn call(fleet: &Fleet, name: &str, args: &Value) -> Result<Vec<Value>,
             let entries = session.list_files(dir).await.map_err(|e| e.to_string())?;
             Ok(vec![json_text(&json!({ "entries": entries }))])
         }
+        "external_files" => Ok(vec![json_text(&json!({ "files": fleet.external_files() }))]),
+        "external_preview" => {
+            let jpeg = fleet.external_preview(arg_str(args, "name")?)?;
+            let data = base64::engine::general_purpose::STANDARD.encode(jpeg);
+            Ok(vec![
+                json!({ "type": "image", "data": data, "mimeType": "image/jpeg" }),
+            ])
+        }
+        "external_show" => {
+            fleet.external_show(arg_str(args, "path")?)?;
+            Ok(vec![json_text(&json!({ "ok": true }))])
+        }
         "fetch_file" => {
             let path = arg_str(args, "path")?.to_string();
             let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
@@ -638,6 +668,7 @@ mod tests {
             "perform_action",
             "set_wallpaper",
             "set_exam",
+            "external_files",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }

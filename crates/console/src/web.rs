@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
     response::{
@@ -107,6 +108,8 @@ pub async fn run(
         .route("/events", get(sse))
         .route("/", get(index))
         .route("/{*path}", get(asset))
+        // JSON encodes each byte as a number; the default 2 MiB limit broke ordinary uploads.
+        .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
         .with_state(Arc::clone(&state));
 
     let addr = SocketAddr::new(host, port);
@@ -488,6 +491,9 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
         "download_file" => ok(m
             .download_file(&arg::<String>(a, "deviceId")?, &arg::<String>(a, "path")?)
             .await?),
+        "external_files" => ok(m.external_files()),
+        "external_preview" => ok(m.external_preview(&arg::<String>(a, "name")?)?),
+        "external_show" => ok(m.external_show(&arg::<String>(a, "path")?)?),
         "send_file" => ok(m
             .send_file(
                 &arg::<String>(a, "deviceId")?,

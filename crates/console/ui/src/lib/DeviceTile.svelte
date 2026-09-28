@@ -6,7 +6,7 @@
   let {
     device,
     watching,
-    keepPreviews = true,
+    keepPreviews = false,
     onopen,
     onmonitor,
     onwake,
@@ -23,7 +23,9 @@
   } = $props()
 
   // Show the picture only while watching, or when the teacher asked to keep the last preview around.
-  const showPreview = $derived(!!device.screen && (watching || keepPreviews))
+  const showPreview = $derived(
+    !!device.screen && (device.status === 'live' ? watching || keepPreviews : keepPreviews),
+  )
 
   let editing = $state(false)
   let draft = $state('')
@@ -60,6 +62,11 @@
       <img src={device.screen} alt={t('screenOf', device.device_id)} />
     {:else}
       <p class="hint">{watching ? t('waitingFirst') : t('notWatching')}</p>
+    {/if}
+    {#if device.exam_interrupted}
+      <span class="exam-badge interrupted">{t('examInterrupted', device.name || device.device_id)}</span>
+    {:else if device.exam_locked}
+      <span class="exam-badge">{t('examMessage')}</span>
     {/if}
   </button>
 
@@ -127,6 +134,7 @@
   }
 
   .screen {
+    position: relative;
     display: grid;
     place-items: center;
     width: 100%;
@@ -138,6 +146,21 @@
     border-radius: 0;
     cursor: pointer;
   }
+
+  .exam-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    padding: 4px 7px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--text);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+  .exam-badge.interrupted { border-color: var(--danger); }
 
   .screen:hover {
     background: #0a0d11;

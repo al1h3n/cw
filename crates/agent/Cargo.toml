@@ -18,6 +18,12 @@ net = { path = "../net" }
 platform = { path = "../platform" }
 proto = { path = "../proto" }
 rand = "0.10" # UUIDv7 random half; already in the tree via iroh
+ed25519-dalek = "3" # verify publisher-signed updates before replacing the Agent binary
+reqwest = { version = "0.13", features = ["blocking"] } # HTTPS mirror fetch; already used by Console
+semver = "1" # refuse stale or downgraded update manifests
+serde = { version = "1", features = ["derive"] } # small signed update manifest/config
+serde_json = "1"
+sha2 = "0.11" # verify the signed executable digest
 thiserror = "2" # typed leave/membership errors, as the workspace does elsewhere
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 

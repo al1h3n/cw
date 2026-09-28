@@ -7,7 +7,7 @@
 //! [`net::ControlSession`] the teacher's UI uses, and therefore through the same closed action enum.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use net::{ControlSession, Identity, LocalHello, TrustStore};
 use proto::{Capabilities, DeviceId, Role};
@@ -23,6 +23,7 @@ pub struct DeviceInfo {
 
 /// Owns the console identity and trust store, and lends out connections to paired devices.
 pub struct Fleet {
+    data_dir: PathBuf,
     identity: Identity,
     trust: TrustStore,
     names: BTreeMap<String, String>,
@@ -43,6 +44,7 @@ impl Fleet {
             .map_err(|e| anyhow::anyhow!("read paired devices: {e}"))?;
         let names = load_names(&dir.join("names.txt"));
         Ok(Self {
+            data_dir: dir.to_path_buf(),
             identity,
             trust,
             names,
@@ -73,6 +75,51 @@ impl Fleet {
             .collect();
         out.sort_by(|a, b| a.device_id.cmp(&b.device_id));
         out
+    }
+
+    /// Files already saved by the teacher's Console, confined to its known output folders.
+    pub fn external_files(&self) -> Vec<serde_json::Value> {
+        let mut files = Vec::new();
+        for kind in ["screenshots", "recordings", "downloads", "sent"] {
+            scan_saved_files(&self.data_dir.join(kind), kind, None, &mut files);
+        }
+        files
+    }
+
+    /// Reads a saved screenshot by its plain name for an MCP image response.
+    pub fn external_preview(&self, name: &str) -> Result<Vec<u8>, String> {
+        if Path::new(name).file_name().and_then(|n| n.to_str()) != Some(name)
+            || !name.to_ascii_lowercase().ends_with(".jpg")
+        {
+            return Err("invalid screenshot name".into());
+        }
+        let path = self.data_dir.join("screenshots").join(name);
+        let meta = path.symlink_metadata().map_err(|e| e.to_string())?;
+        if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 16 * 1024 * 1024 {
+            return Err("screenshot cannot be previewed".into());
+        }
+        std::fs::read(path).map_err(|e| e.to_string())
+    }
+
+    /// Reveals a saved file after resolving it from the Console's own output folders.
+    pub fn external_show(&self, path: &str) -> Result<(), String> {
+        if !self
+            .external_files()
+            .iter()
+            .any(|file| file["path"] == path)
+        {
+            return Err("saved file was not found".into());
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            std::process::Command::new("explorer.exe")
+                .arg(format!("/select,\"{path}\""))
+                .creation_flags(0x0800_0000)
+                .spawn()
+                .map_err(|e| format!("open file location: {e}"))?;
+        }
+        Ok(())
     }
 
     /// The stored public key for a device id, if it is paired. Ids are compared case-insensitively so
@@ -122,6 +169,48 @@ impl Fleet {
         )
         .await
         .map_err(|e| format!("could not reach {device_id}: {e} (is the PC on and online?)"))
+    }
+}
+
+fn scan_saved_files(
+    folder: &Path,
+    kind: &str,
+    device_id: Option<&str>,
+    files: &mut Vec<serde_json::Value>,
+) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if files.len() >= 2000 {
+            return;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if file_type.is_dir() && device_id.is_none() {
+            scan_saved_files(&path, kind, Some(&name), files);
+        } else if file_type.is_file()
+            && let Ok(meta) = entry.metadata()
+        {
+            let id = device_id.map(str::to_owned).or_else(|| {
+                (kind == "screenshots")
+                    .then(|| name.split_once('-').map(|(id, _)| id.to_owned()))
+                    .flatten()
+            });
+            files.push(serde_json::json!({
+                "kind": kind,
+                "device_id": id,
+                "name": name,
+                "path": path.display().to_string(),
+                "bytes": meta.len(),
+            }));
+        }
     }
 }
 

@@ -13,6 +13,7 @@
 
   let {
     device,
+    keepPreviews = false,
     onclose,
     onmonitor,
     listening,
@@ -22,6 +23,7 @@
     onerror,
   }: {
     device: Device
+    keepPreviews?: boolean
     onclose: () => void
     onmonitor: (index: number) => void
     listening: boolean
@@ -33,7 +35,6 @@
 
   let showApps = $state(false)
   let showWallpaper = $state(false)
-  let examOn = $state(false)
   let screenLockOn = $state(false)
   let shooting = $state(false)
 
@@ -157,15 +158,31 @@
     }
   }
 
-  async function toggleExam() {
+  let examText = $state('')
+  async function setExam(on: boolean, message: string) {
     try {
       const [locked, problem] = await invoke<[boolean, string]>('set_exam', {
         deviceId: device.device_id,
-        on: !examOn,
-        message: t('examMessage'),
+        on,
+        message,
       })
-      examOn = locked
       if (!locked && problem) onerror(problem)
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
+  async function toggleExam() {
+    await setExam(!device.exam_locked, examText.trim() || device.exam_message || t('examMessage'))
+  }
+
+  async function reapplyExam() {
+    try {
+      const [locked, problem] = await invoke<[boolean, string]>('set_exam', {
+        deviceId: device.device_id,
+        on: true,
+        message: device.exam_message || t('examMessage'),
+      })
+      if (!locked || problem) onerror(problem || t('examInterrupted', device.name || device.device_id))
     } catch (e) {
       onerror(String(e))
     }
@@ -342,6 +359,18 @@
 
       <span class="gspace"></span>
 
+      {#if device.exam_interrupted}
+        <button class="listen" onclick={reapplyExam} disabled={device.status !== 'live'}>
+          {t('examReapply')}
+        </button>
+      {/if}
+
+      {#if device.exam_locked}
+        <button class="listen on" onclick={toggleExam} title={t('examStop')}>
+          <Icon name="lock" />{t('examStop')}
+        </button>
+      {/if}
+
       <!-- Control: take/give control here (JPEG preview) or open the native viewer, and listen. -->
       <button
         class="listen"
@@ -382,9 +411,18 @@
         <button class="mi" class:on={screenLockOn} onclick={toggleScreenLock} title={t('screenLockHint')}>
           <Icon name="freeze" />{screenLockOn ? t('screenLockStop') : t('screenLockStart')}
         </button>
-        <button class="mi" class:on={examOn} onclick={toggleExam} title={t('examHint')}>
-          <Icon name="lock" />{examOn ? t('examStop') : t('examStart')}
+        <button class="mi" class:on={device.exam_locked} onclick={toggleExam} title={t('examHint')}>
+          <Icon name="lock" />{device.exam_locked ? t('examStop') : t('examStart')}
         </button>
+        <label class="exam-text">
+          <span>{t('examCustomText')}</span>
+          <textarea rows="3" bind:value={examText} placeholder={device.exam_message || t('examMessage')}></textarea>
+        </label>
+        {#if device.exam_locked}
+          <button class="mi" onclick={() => setExam(true, examText.trim() || t('examMessage'))}>
+            <Icon name="lock" />{t('examApplyText')}
+          </button>
+        {/if}
         <span class="sep"></span>
         <button class="mi" onclick={() => (showWallpaper = true)} disabled={device.status !== 'live'}>
           <Icon name="image" />{t('wallpaperButton')}…
@@ -442,7 +480,7 @@
       <button onclick={onclose}>{t('close')}</button>
     </header>
     <div class="screen">
-      {#if device.screen}
+      {#if device.screen && (device.status === 'live' || keepPreviews)}
         <img
           bind:this={imgEl}
           class:driving={controlling}
@@ -456,6 +494,11 @@
         />
       {:else}
         <p class="hint">{t('waitingFirst')}</p>
+      {/if}
+      {#if device.exam_interrupted}
+        <span class="exam-badge interrupted">{t('examInterrupted', device.name || device.device_id)}</span>
+      {:else if device.exam_locked}
+        <span class="exam-badge">{t('examMessage')}</span>
       {/if}
     </div>
     <!-- Drag to resize the opened view; double-click to reset to the default size. -->
@@ -678,6 +721,7 @@
   }
 
   .screen {
+    position: relative;
     display: grid;
     place-items: center;
     background: #05070a;
@@ -687,6 +731,22 @@
     overflow: hidden;
     border-radius: 0 0 14px 14px;
   }
+
+  .exam-badge {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    max-width: calc(100% - 40px);
+    padding: 8px 12px;
+    border: 1px solid var(--accent);
+    border-radius: 9px;
+    background: var(--panel);
+    color: var(--text);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+  }
+  .exam-badge.interrupted { border-color: var(--danger); }
 
   img {
     max-width: 100%;
@@ -737,4 +797,6 @@
     cursor: pointer;
     font-size: 12px;
   }
+  .exam-text { display: grid; gap: 5px; padding: 6px 8px; color: var(--muted); font-size: 12px; }
+  .exam-text textarea { width: min(300px, 70vw); min-height: 64px; resize: vertical; padding: 7px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; font: inherit; }
 </style>

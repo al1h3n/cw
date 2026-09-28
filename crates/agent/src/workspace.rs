@@ -62,6 +62,12 @@ pub fn is_plain_name(name: &str) -> bool {
 /// Confirms `path` really sits inside `root` after resolving symlinks (defence in depth for existing
 /// paths). If either cannot be canonicalised, falls back to the lexical guarantee `safe_join` gave.
 fn confined(root: &Path, path: &Path) -> bool {
+    if root
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return false;
+    }
     match (root.canonicalize(), path.canonicalize()) {
         (Ok(root), Ok(path)) => path.starts_with(root),
         _ => true,
@@ -114,12 +120,24 @@ pub fn write_path(root: &Path, dir: &str, name: &str) -> Option<PathBuf> {
     if !is_plain_name(name) {
         return None;
     }
+    std::fs::create_dir_all(root).ok()?;
+    if root.symlink_metadata().ok()?.file_type().is_symlink() {
+        return None;
+    }
     let dir_path = safe_join(root, dir)?;
     std::fs::create_dir_all(&dir_path).ok()?;
     if !confined(root, &dir_path) {
         return None;
     }
-    Some(dir_path.join(name))
+    let dest = dir_path.join(name);
+    // File::create follows an existing symlink; refuse one even when its parent is safe.
+    if dest
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return None;
+    }
+    Some(dest)
 }
 
 /// Recursively lists **every file** in the workspace (directories excluded), each entry's `name`
@@ -130,6 +148,12 @@ pub fn write_path(root: &Path, dir: &str, name: &str) -> Option<PathBuf> {
 /// If the workspace root cannot be read.
 pub fn manifest(root: &Path) -> Result<Vec<FileEntry>, String> {
     let _ = std::fs::create_dir_all(root);
+    if root
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err("the workspace root is a symlink".into());
+    }
     let mut out = Vec::new();
     walk_files(root, root, &mut out);
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -186,6 +210,12 @@ pub fn delete(root: &Path, rel: &str) -> Result<(), String> {
 /// # Errors
 /// If the workspace cannot be read.
 pub fn clear(root: &Path) -> Result<u32, String> {
+    if root
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err("the workspace root is a symlink".into());
+    }
     if !root.is_dir() {
         return Ok(0);
     }
@@ -222,7 +252,12 @@ mod tests {
     use super::*;
 
     fn root() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("cw-ws-{}", std::process::id()));
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "cw-ws-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -286,6 +321,37 @@ mod tests {
         assert_eq!(read_path(&root, "missing.txt"), None);
         assert_eq!(read_path(&root, "../notes.txt"), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_path_rejects_an_existing_file_symlink() {
+        let root = root();
+        let outside = root.with_extension("outside");
+        std::fs::write(&outside, b"keep").unwrap();
+        if std::os::windows::fs::symlink_file(&outside, root.join("link.txt")).is_ok() {
+            assert_eq!(write_path(&root, "", "link.txt"), None);
+            assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_symlink_workspace_root_cannot_redirect_transfers() {
+        let parent = root();
+        let outside = parent.join("outside");
+        let link = parent.join("workspace-link");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), b"keep").unwrap();
+        if std::os::windows::fs::symlink_dir(&outside, &link).is_ok() {
+            assert_eq!(write_path(&link, "sub", "new.txt"), None);
+            assert_eq!(read_path(&link, "secret.txt"), None);
+            assert!(manifest(&link).is_err());
+            assert!(!outside.join("sub").exists());
+        }
+        let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]

@@ -219,7 +219,9 @@ mod tests {
     fn server() -> Server {
         // A fleet is only touched by tool calls, which these tests avoid; load from a temp dir so no
         // network or real console state is needed.
-        let dir = std::env::temp_dir().join(format!("cw-mcp-srv-{}", std::process::id()));
+        static NEXT_DIR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = NEXT_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("cw-mcp-srv-{}-{seq}", std::process::id()));
         let fleet = Fleet::load(&dir).expect("load fleet from empty dir");
         let _ = std::fs::remove_dir_all(&dir);
         Server::new(Arc::new(fleet))

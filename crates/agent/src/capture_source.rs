@@ -46,6 +46,7 @@ pub struct ScreenCapture {
     /// Bumped on every exam change. A timed auto-release only fires if this still matches the value it
     /// captured when it was armed, so a manual release (or a fresh lock) cancels an earlier timer.
     exam_gen: Arc<AtomicU64>,
+    exam_state_path: std::path::PathBuf,
     /// Where recordings are written.
     recordings_dir: std::path::PathBuf,
     /// How many recordings to keep (0 = all); older ones are pruned by creation order. Persisted so it
@@ -137,6 +138,7 @@ impl ScreenCapture {
             broadcast: Mutex::new(None),
             exam: Arc::new(Mutex::new(None)),
             exam_gen: Arc::new(AtomicU64::new(0)),
+            exam_state_path: audit_path.with_file_name("exam-state.json"),
             recordings_dir: recordings_dir.to_path_buf(),
             retention_keep: Mutex::new(load_retention(recordings_dir)),
             watched: Mutex::new(false),
@@ -154,6 +156,45 @@ impl ScreenCapture {
     /// connection never leaves the desktop black.
     pub fn end_session(&self) {
         net::AgentDevice::set_watched(self, false);
+    }
+
+    /// A sign-out kills the session helper. Recreate the teacher's active exam when the new
+    /// helper starts in the next interactive session.
+    pub fn restore_exam(&self) {
+        match crate::exam_state::load(&self.exam_state_path) {
+            Ok(Some((message, seconds))) => {
+                if let Err(err) = self.start_exam(&message, seconds) {
+                    eprintln!("could not restore exam lock: {err}");
+                }
+            }
+            Ok(None) => {}
+            Err(err) => eprintln!("could not read saved exam intent: {err}"),
+        }
+    }
+
+    fn start_exam(&self, message: &str, duration_seconds: u32) -> Result<(), String> {
+        crate::exam_state::save(&self.exam_state_path, message, duration_seconds)?;
+        let generation = self.exam_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut slot = self.exam.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = None;
+        let lock = platform::examlock::ExamLock::start(message).map_err(|e| e.to_string())?;
+        *slot = Some(lock);
+        if duration_seconds > 0 {
+            let exam = Arc::clone(&self.exam);
+            let exam_gen = Arc::clone(&self.exam_gen);
+            let state_path = self.exam_state_path.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(u64::from(duration_seconds)));
+                if exam_gen.load(Ordering::SeqCst) == generation {
+                    let mut slot = exam.lock().unwrap_or_else(|e| e.into_inner());
+                    if slot.take().is_some() {
+                        crate::exam_state::clear(&state_path);
+                        println!("exam lock auto-released after {duration_seconds}s");
+                    }
+                }
+            });
+        }
+        Ok(())
     }
 
     /// Blocks the student's physical input whenever a Console holds control OR a screen lock is up, and
@@ -527,15 +568,9 @@ impl AgentDevice for ScreenCapture {
         message: &str,
         duration_seconds: u32,
     ) -> (bool, String) {
-        // Any exam change (start, restart or release) invalidates a pending auto-release timer.
-        let generation = self.exam_gen.fetch_add(1, Ordering::SeqCst) + 1;
-        let mut slot = self.exam.lock().unwrap_or_else(|e| e.into_inner());
         if on {
-            // Replacing any current lock with a fresh one keeps a single lock desktop at a time.
-            *slot = None;
-            match platform::examlock::ExamLock::start(message) {
-                Ok(lock) => {
-                    *slot = Some(lock);
+            match self.start_exam(message, duration_seconds) {
+                Ok(()) => {
                     println!(
                         "console {} started exam lock ({})",
                         from.device_id,
@@ -548,27 +583,16 @@ impl AgentDevice for ScreenCapture {
                     let _ = self
                         .audit
                         .note(net::endpoint::now_ms(), from.device_id, "exam-start");
-                    // A timed lock releases itself after the requested duration, so an AI/MCP "lock for
-                    // 10 s" ends even if the Console (or the MCP process) has gone away by then. The
-                    // generation check makes a manual release or a fresh lock cancel this timer.
-                    if duration_seconds > 0 {
-                        let exam = Arc::clone(&self.exam);
-                        let exam_gen = Arc::clone(&self.exam_gen);
-                        std::thread::spawn(move || {
-                            std::thread::sleep(Duration::from_secs(u64::from(duration_seconds)));
-                            if exam_gen.load(Ordering::SeqCst) == generation {
-                                let mut slot = exam.lock().unwrap_or_else(|e| e.into_inner());
-                                if slot.take().is_some() {
-                                    println!("exam lock auto-released after {duration_seconds}s");
-                                }
-                            }
-                        });
-                    }
                     (true, String::new())
                 }
-                Err(err) => (false, err.to_string()),
+                Err(err) => {
+                    crate::exam_state::clear(&self.exam_state_path);
+                    (false, err)
+                }
             }
         } else {
+            self.exam_gen.fetch_add(1, Ordering::SeqCst);
+            let mut slot = self.exam.lock().unwrap_or_else(|e| e.into_inner());
             // Dropping the lock switches the desktop back and closes the lock desktop.
             if slot.take().is_some() {
                 println!("console {} ended exam lock", from.device_id);
@@ -576,6 +600,7 @@ impl AgentDevice for ScreenCapture {
                     .audit
                     .note(net::endpoint::now_ms(), from.device_id, "exam-stop");
             }
+            crate::exam_state::clear(&self.exam_state_path);
             (false, String::new())
         }
     }
@@ -607,6 +632,10 @@ impl AgentDevice for ScreenCapture {
             &format!("file-recv:{name}"),
         );
         Some(dest)
+    }
+
+    fn file_received(&self, name: &str) {
+        platform::notification::file_received(name);
     }
 
     fn workspace_manifest(&self, _from: &PeerInfo) -> Result<Vec<proto::FileEntry>, String> {

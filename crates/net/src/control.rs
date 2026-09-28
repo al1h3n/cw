@@ -262,6 +262,9 @@ pub trait AgentDevice {
         None
     }
 
+    /// Called only after the entire uploaded file was saved successfully.
+    fn file_received(&self, _name: &str) {}
+
     /// Sets this PC's desktop wallpaper to `image` (raw PNG/JPEG/BMP bytes), laid out as `fit`.
     /// Returns whether it was applied, and a reason if not. The default cannot change the wallpaper.
     fn set_wallpaper(
@@ -1611,6 +1614,9 @@ impl ControlSession {
                             // Receive the bytes inline (one upload at a time) so the FileSent ack that
                             // follows is accurate. They arrive on a uni-stream the Console opens.
                             let problem = receive_file(&self.conn, &dest, size).await;
+                            if problem.is_empty() {
+                                source.file_received(&name);
+                            }
                             write_message(&mut self.send, &Control::FileSent { problem }).await?;
                         }
                         None => {
@@ -1810,7 +1816,13 @@ async fn receive_file(conn: &Connection, dest: &std::path::Path, size: u64) -> S
         Ok(Ok(recv)) => recv,
         _ => return "the upload did not start in time".to_string(),
     };
-    let mut out = match tokio::fs::File::create(dest).await {
+    let staging = dest.with_extension(format!("cowatcher-{}.part", rand::random::<u64>()));
+    let mut out = match tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staging)
+        .await
+    {
         Ok(file) => file,
         Err(err) => return format!("could not create the file: {err}"),
     };
@@ -1821,19 +1833,79 @@ async fn receive_file(conn: &Connection, dest: &std::path::Path, size: u64) -> S
             .len()
             .min(usize::try_from(remaining).unwrap_or(buf.len()));
         if recv.read_exact(&mut buf[..want]).await.is_err() {
-            let _ = tokio::fs::remove_file(dest).await;
+            drop(out);
+            let _ = tokio::fs::remove_file(&staging).await;
             return "the upload was interrupted".to_string();
         }
         if out.write_all(&buf[..want]).await.is_err() {
-            let _ = tokio::fs::remove_file(dest).await;
+            drop(out);
+            let _ = tokio::fs::remove_file(&staging).await;
             return "could not write the file".to_string();
         }
         remaining -= want as u64;
     }
     if out.flush().await.is_err() {
+        drop(out);
+        let _ = tokio::fs::remove_file(&staging).await;
         return "could not finish writing the file".to_string();
     }
-    String::new()
+    drop(out);
+    commit_received_file(&staging, dest).await
+}
+
+async fn commit_received_file(staging: &std::path::Path, dest: &std::path::Path) -> String {
+    // Windows does not replace an existing destination with rename. Keep the previous file until
+    // the complete upload is ready, then move it aside and restore it if committing fails.
+    let backup = dest.with_extension(format!("cowatcher-{}.bak", rand::random::<u64>()));
+    let had_old = match tokio::fs::symlink_metadata(dest).await {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+            let _ = tokio::fs::remove_file(&staging).await;
+            return "destination is not a regular file".to_string();
+        }
+        Ok(_) => true,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+        Err(err) => {
+            let _ = tokio::fs::remove_file(&staging).await;
+            return format!("could not inspect destination: {err}");
+        }
+    };
+    if had_old && let Err(err) = tokio::fs::rename(dest, &backup).await {
+        let _ = tokio::fs::remove_file(&staging).await;
+        return format!("could not replace existing file: {err}");
+    }
+    match tokio::fs::rename(&staging, dest).await {
+        Ok(()) => {
+            if had_old {
+                let _ = tokio::fs::remove_file(&backup).await;
+            }
+            String::new()
+        }
+        Err(err) => {
+            if had_old {
+                let _ = tokio::fs::rename(&backup, dest).await;
+            }
+            let _ = tokio::fs::remove_file(&staging).await;
+            format!("could not save the file: {err}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod received_file_tests {
+    use super::commit_received_file;
+
+    #[tokio::test]
+    async fn completed_upload_replaces_existing_file_without_leaving_a_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("assignment.txt");
+        let staging = dir.path().join("assignment.part");
+        tokio::fs::write(&dest, b"old").await.unwrap();
+        tokio::fs::write(&staging, b"new").await.unwrap();
+        assert!(commit_received_file(&staging, &dest).await.is_empty());
+        assert_eq!(tokio::fs::read(&dest).await.unwrap(), b"new");
+        assert!(!staging.exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 }
 
 /// Writes one length-prefixed encoded frame to the video uni-stream.

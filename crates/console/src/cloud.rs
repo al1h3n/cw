@@ -203,6 +203,9 @@ mod tests {
             macs: vec![],
             ip: None,
             wallpaper_locked: None,
+            exam_locked: false,
+            exam_message: String::new(),
+            exam_interrupted: false,
             retention_override: None,
             last_action: None,
         }];

@@ -56,8 +56,7 @@ pub enum ServiceError {
 
 /// Installs the Agent as an auto-start service that runs `cowatcher-agent run`.
 ///
-/// Idempotent-ish: installing when already installed returns an [`ServiceError::Scm`] the caller can
-/// treat as "already there". Requires administrator rights.
+/// Reconfigures an existing service and starts it immediately. Requires administrator rights.
 ///
 /// `exe` is the executable path to register as the service binary — this should be a **stable,
 /// permanent** location (not a temp download folder), because the SCM stores the path and runs it at
@@ -67,6 +66,14 @@ pub enum ServiceError {
 /// [`ServiceError`] if not elevated or the SCM refuses.
 pub fn install(exe: &std::path::Path) -> Result<(), ServiceError> {
     imp::install(exe)
+}
+
+/// Stops an installed service before replacing its executable; does nothing if absent.
+///
+/// # Errors
+/// [`ServiceError`] if the service cannot stop within five seconds.
+pub fn stop_if_running() -> Result<(), ServiceError> {
+    imp::stop_if_running()
 }
 
 /// Removes the service. Requires administrator rights.
@@ -128,7 +135,44 @@ mod imp {
         {
             return ServiceError::NeedsAdmin;
         }
-        ServiceError::Scm(e.to_string())
+        match &e {
+            windows_service::Error::Winapi(io) if io.raw_os_error() == Some(1072) => {
+                ServiceError::Scm(
+                    "service is pending deletion; close services.msc or reboot, then retry".into(),
+                )
+            }
+            windows_service::Error::Winapi(io) => ServiceError::Scm(format!("Windows error {io}")),
+            _ => ServiceError::Scm(e.to_string()),
+        }
+    }
+
+    fn stop_service(service: &windows_service::service::Service) -> Result<(), ServiceError> {
+        if service.query_status().map_err(scm)?.current_state != ServiceState::Stopped {
+            service.stop().map_err(scm)?;
+            for _ in 0..50 {
+                if service.query_status().map_err(scm)?.current_state == ServiceState::Stopped {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            return Err(ServiceError::Scm(
+                "service did not stop within 5 seconds".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn stop_if_running() -> Result<(), ServiceError> {
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+            .map_err(scm)?;
+        match manager.open_service(
+            SERVICE_NAME,
+            ServiceAccess::QUERY_STATUS | ServiceAccess::STOP,
+        ) {
+            Ok(service) => stop_service(&service),
+            Err(windows_service::Error::Winapi(io)) if io.raw_os_error() == Some(1060) => Ok(()),
+            Err(err) => Err(scm(err)),
+        }
     }
 
     pub fn install(exe: &std::path::Path) -> Result<(), ServiceError> {
@@ -149,12 +193,37 @@ mod imp {
             account_name: None, // None = LocalSystem, which the wallpaper policy needs
             account_password: None,
         };
-        let service = manager
-            .create_service(&info, ServiceAccess::CHANGE_CONFIG)
-            .map_err(scm)?;
+        let access =
+            ServiceAccess::CHANGE_CONFIG | ServiceAccess::START | ServiceAccess::QUERY_STATUS;
+        let service = match manager.open_service(SERVICE_NAME, access) {
+            Ok(service) => {
+                service.change_config(&info).map_err(scm)?;
+                service
+            }
+            Err(windows_service::Error::Winapi(io)) if io.raw_os_error() == Some(1060) => {
+                manager.create_service(&info, access).map_err(scm)?
+            }
+            Err(err) => return Err(scm(err)),
+        };
         // A description means an administrator sees what it is, never a mystery service.
         let _ = service.set_description(DESCRIPTION);
-        Ok(())
+        if service.query_status().map_err(scm)?.current_state == ServiceState::Stopped {
+            service.start::<&str>(&[]).map_err(scm)?;
+        }
+        for _ in 0..50 {
+            match service.query_status().map_err(scm)?.current_state {
+                ServiceState::Running => return Ok(()),
+                ServiceState::Stopped => {
+                    return Err(ServiceError::Scm(
+                        "agent service stopped during startup".into(),
+                    ));
+                }
+                _ => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+        Err(ServiceError::Scm(
+            "agent service did not start within 5 seconds".into(),
+        ))
     }
 
     pub fn uninstall() -> Result<(), ServiceError> {
@@ -163,10 +232,29 @@ mod imp {
         let service = manager
             .open_service(
                 SERVICE_NAME,
-                ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS,
+                ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS | ServiceAccess::STOP,
             )
-            .map_err(|_| ServiceError::NotInstalled)?;
-        service.delete().map_err(scm)
+            .map_err(|err| match err {
+                windows_service::Error::Winapi(io) if io.raw_os_error() == Some(1060) => {
+                    ServiceError::NotInstalled
+                }
+                other => scm(other),
+            })?;
+        stop_service(&service)?;
+        service.delete().map_err(scm)?;
+        drop(service);
+        // Windows keeps a deleted service in the SCM until its last handle closes.
+        for _ in 0..50 {
+            match manager.open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS) {
+                Err(windows_service::Error::Winapi(io)) if io.raw_os_error() == Some(1060) => {
+                    return Ok(());
+                }
+                _ => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+        Err(ServiceError::Scm(
+            "service is still pending deletion; close services.msc and retry".into(),
+        ))
     }
 
     pub fn is_installed() -> bool {
@@ -252,6 +340,9 @@ mod imp {
     use super::ServiceError;
 
     pub fn install(_exe: &std::path::Path) -> Result<(), ServiceError> {
+        Err(ServiceError::NotSupported)
+    }
+    pub fn stop_if_running() -> Result<(), ServiceError> {
         Err(ServiceError::NotSupported)
     }
     pub fn uninstall() -> Result<(), ServiceError> {

@@ -127,6 +127,11 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "external_files".into(),
+            description: "List screenshots, collected files and recordings already saved on the teacher's PC, with their local paths and device IDs.".into(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
             name: "send_file".into(),
             description: "Send a file to one PC's workspace: write base64 bytes as name inside workspace directory dir (created if needed).".into(),
             parameters: json!({
@@ -349,6 +354,9 @@ pub async fn execute(manager: &DeviceManager, name: &str, args: &Value) -> Resul
             let dir = args.get("dir").and_then(Value::as_str).unwrap_or("");
             let entries = manager.list_files(arg_str(args, "device_id")?, dir).await?;
             serde_json::to_value(json!({ "entries": entries })).map_err(|e| e.to_string())
+        }
+        "external_files" => {
+            serde_json::to_value(manager.external_files()).map_err(|e| e.to_string())
         }
         "send_file" => {
             use base64::Engine;

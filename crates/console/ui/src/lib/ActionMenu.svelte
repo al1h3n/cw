@@ -125,7 +125,9 @@
     z-index: 20;
     display: grid;
     gap: 4px;
-    width: 250px;
+    width: max-content;
+    min-width: 250px;
+    max-width: min(360px, calc(100vw - 24px));
     padding: 8px;
     background: var(--panel);
     border: 1px solid var(--line);
@@ -145,12 +147,14 @@
 
   .delays {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     padding-bottom: 4px;
   }
 
   .custom {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
     padding: 0 2px 6px;
@@ -170,7 +174,11 @@
   }
 
   .chip {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
     padding: 4px 6px;
     font-size: 11.5px;
     border-radius: 999px;
@@ -204,6 +212,7 @@
 
   .row {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
   }
 

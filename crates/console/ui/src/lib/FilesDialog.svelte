@@ -9,6 +9,7 @@
    * uploads to, and downloads from one directory tree — not the whole PC. Only connected PCs answer.
    */
   type FileEntry = { name: string; is_dir: boolean; bytes: number }
+  type SavedFile = { kind: string; device_id: string | null; name: string; path: string; bytes: number }
 
   let {
     devices,
@@ -25,6 +26,55 @@
   let loading = $state(false)
   let busy = $state(false)
   let status = $state('')
+  let tab = $state<'saved' | 'student'>('saved')
+  let savedFiles = $state<SavedFile[]>([])
+  let savedLoading = $state(false)
+  let kindFilter = $state('all')
+  let selectedPcs = $state<string[]>([])
+  let preview = $state('')
+  let previewName = $state('')
+  const visibleSaved = $derived(
+    savedFiles.filter(
+      (file) =>
+        (kindFilter === 'all' || file.kind === kindFilter) &&
+        (selectedPcs.length === 0 || (file.device_id !== null && selectedPcs.includes(file.device_id))),
+    ),
+  )
+  const savedPcIds = $derived([...new Set(savedFiles.map((file) => file.device_id).filter(Boolean))])
+  function toggleSavedPc(id: string) {
+    selectedPcs = selectedPcs.includes(id)
+      ? selectedPcs.filter((item) => item !== id)
+      : [...selectedPcs, id]
+  }
+
+  async function loadSaved() {
+    savedLoading = true
+    try {
+      savedFiles = await invoke<SavedFile[]>('external_files')
+    } catch (e) {
+      onerror(String(e))
+    } finally {
+      savedLoading = false
+    }
+  }
+  loadSaved()
+
+  async function showPreview(file: SavedFile) {
+    if (file.kind !== 'screenshots') return
+    try {
+      preview = await invoke<string>('external_preview', { name: file.name })
+      previewName = file.name
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
+  async function showInFolder(file: SavedFile) {
+    try {
+      await invoke('external_show', { path: file.path })
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
   // A baseline snapshot (workspace path -> size) taken at lesson start, so the teacher can see which
   // files a student added or changed. Size-based, never time-based (a student can change the clock).
   let baseline = $state<Record<string, number> | null>(null)
@@ -103,6 +153,7 @@
       const path = [...segments, entry.name].join('/')
       const saved = await invoke<string>('download_file', { deviceId, path })
       status = t('filesSaved', saved)
+      await loadSaved()
     } catch (e) {
       onerror(String(e))
     } finally {
@@ -122,6 +173,7 @@
       status = t('filesSent', file.name)
       input.value = ''
       await refresh()
+      await loadSaved()
     } catch (e) {
       onerror(String(e))
     } finally {
@@ -201,6 +253,7 @@
         saved = await invoke<string>('download_file', { deviceId, path: f.name })
       }
       status = files.length > 0 ? t('filesCollected', files.length, saved) : t('filesEmpty')
+      await loadSaved()
     } catch (e) {
       onerror(String(e))
     } finally {
@@ -224,6 +277,62 @@
 <div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose()}>
   <div class="dialog" role="dialog" aria-modal="true" aria-label={t('filesTitle')}>
     <h2>{t('filesTitle')}</h2>
+    <div class="tabs" role="tablist" aria-label={t('filesTitle')}>
+      <button role="tab" aria-selected={tab === 'saved'} class:active={tab === 'saved'} onclick={() => (tab = 'saved')}>
+        {t('externalSaved')}
+      </button>
+      <button role="tab" aria-selected={tab === 'student'} class:active={tab === 'student'} onclick={() => (tab = 'student')}>
+        {t('externalStudent')}
+      </button>
+    </div>
+
+    {#if tab === 'saved'}
+      <p class="lead">{t('externalLead')}</p>
+      <div class="saved-controls">
+        <select bind:value={kindFilter} aria-label={t('externalKind')}>
+          <option value="all">{t('externalAllKinds')}</option>
+          <option value="screenshots">{t('externalScreenshots')}</option>
+          <option value="recordings">{t('externalRecordings')}</option>
+          <option value="downloads">{t('externalDownloads')}</option>
+          <option value="sent">{t('externalSent')}</option>
+        </select>
+        <div class="pc-filters" aria-label={t('filesPickPc')}>
+          <button class:active={selectedPcs.length === 0} onclick={() => (selectedPcs = [])}>{t('externalAllPcs')}</button>
+          {#each savedPcIds as id}
+            {#if id}<button class:active={selectedPcs.includes(id)} onclick={() => toggleSavedPc(id)}>{devices.find((d) => d.device_id === id)?.name || id}</button>{/if}
+          {/each}
+        </div>
+        <button onclick={loadSaved} disabled={savedLoading}>{t('externalRefresh')}</button>
+      </div>
+      <div class="list saved-list">
+        {#if savedLoading}
+          <p class="hint">{t('loading')}</p>
+        {:else if visibleSaved.length === 0}
+          <p class="hint">{t('externalEmpty')}</p>
+        {:else}
+          {#each visibleSaved as file (file.path)}
+            <div class="saved-item">
+              <div class="saved-head">
+                <strong>{file.name}</strong>
+                <span>{file.device_id || '—'} · {fmtSize(file.bytes)}</span>
+                {#if file.kind === 'screenshots'}
+                  <button onclick={() => showPreview(file)}>{t('externalPreview')}</button>
+                {/if}
+                <button onclick={() => showInFolder(file)}>{t('externalShow')}</button>
+              </div>
+              <code title={file.path}>{file.path}</code>
+            </div>
+          {/each}
+        {/if}
+      </div>
+      {#if preview}
+        <div class="preview">
+          <span>{previewName}</span>
+          <button onclick={() => (preview = '')} aria-label={t('close')}>×</button>
+          <img src={preview} alt={previewName} />
+        </div>
+      {/if}
+    {:else}
     <p class="lead">{t('filesLead')}</p>
 
     <div class="row">
@@ -278,6 +387,7 @@
         {/each}
       {/if}
     </div>
+    {/if}
 
     <footer>
       <span class="status">{status}</span>
@@ -317,6 +427,37 @@
     color: var(--muted);
     font-size: 13px;
   }
+  .tabs,
+  .saved-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 10px 0;
+  }
+  .tabs button.active {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .saved-controls select,
+  .saved-controls button {
+    min-width: 0;
+    max-width: 100%;
+    padding: 6px 9px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .pc-filters { display: flex; flex-wrap: wrap; gap: 5px; }
+  .pc-filters button.active { border-color: var(--accent); color: var(--accent); }
+  .saved-list { min-height: 220px; }
+  .saved-item { padding: 8px; border-bottom: 1px solid var(--line); }
+  .saved-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+  .saved-head strong { flex: 1; min-width: 120px; overflow-wrap: anywhere; }
+  .saved-head span { color: var(--muted); }
+  .saved-item code { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; user-select: text; }
+  .preview { max-height: 40vh; overflow: auto; margin-top: 10px; }
+  .preview img { display: block; max-width: 100%; max-height: 35vh; object-fit: contain; }
   .row {
     display: flex;
     gap: 12px;

@@ -26,6 +26,11 @@ export interface Device {
   ip: string | null
   /** Whether the wallpaper is locked this session (true/false), or null when unknown. */
   wallpaper_locked: boolean | null
+  /** Last exam lock acknowledged by this Console. */
+  exam_locked: boolean
+  exam_message: string
+  /** The lock became unverified after a lost connection. */
+  exam_interrupted: boolean
   /** Recordings-kept override for this PC, or null when it uses the class-wide default. */
   retention_override: number | null
   /** The answer to the last lock/power action sent to this PC. */

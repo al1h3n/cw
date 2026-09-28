@@ -549,6 +549,21 @@ async fn download_file(
     state.manager.download_file(&device_id, &path).await
 }
 
+#[tauri::command]
+fn external_files(state: State<'_, AppState>) -> Vec<crate::manager::ExternalFile> {
+    state.manager.external_files()
+}
+
+#[tauri::command]
+fn external_preview(state: State<'_, AppState>, name: String) -> Result<String, String> {
+    state.manager.external_preview(&name)
+}
+
+#[tauri::command]
+fn external_show(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    state.manager.external_show(&path)
+}
+
 /// Uploads a file to one PC's workspace directory `dir` as `name`.
 #[tauri::command]
 async fn send_file(
@@ -1536,6 +1551,9 @@ pub fn run(
             download_recording,
             list_files,
             download_file,
+            external_files,
+            external_preview,
+            external_show,
             send_file,
             workspace_manifest,
             delete_file,

@@ -60,8 +60,8 @@ mod imp {
             Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
             Graphics::Gdi::{
                 BeginPaint, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
-                DEFAULT_QUALITY, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW,
-                EndPaint, FF_SWISS, FW_SEMIBOLD, FillRect, HBRUSH, HFONT, OUT_TT_PRECIS,
+                DEFAULT_QUALITY, DT_CALCRECT, DT_CENTER, DT_NOPREFIX, DT_WORDBREAK, DeleteObject,
+                DrawTextW, EndPaint, FF_SWISS, FW_SEMIBOLD, FillRect, HBRUSH, HFONT, OUT_TT_PRECIS,
                 PAINTSTRUCT, RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, SelectObject,
                 SetBkMode, SetTextColor, TRANSPARENT,
             },
@@ -336,8 +336,15 @@ mod imp {
                     FillRect(dc, &rect, brush);
                     let _ = DeleteObject(brush.into());
 
-                    // Big centred message.
-                    let height = ((rect.bottom - rect.top) / 14).max(24);
+                    // Centre a multi-paragraph teacher message, wrapping long translations.
+                    let text = MESSAGE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let text = if text.is_empty() {
+                        "Exam in progress".to_string()
+                    } else {
+                        text
+                    };
+                    let lines = text.lines().count().clamp(1, 10) as i32;
+                    let height = ((rect.bottom - rect.top) / (12 + lines * 2)).max(18);
                     let font: HFONT = CreateFontW(
                         height,
                         0,
@@ -358,16 +365,28 @@ mod imp {
                     SetBkMode(dc, TRANSPARENT);
                     SetTextColor(dc, COLORREF(0x00F0_F5FA));
 
-                    let text = MESSAGE.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     let mut wide: Vec<u16> = text.encode_utf16().collect();
-                    if wide.is_empty() {
-                        wide = "Exam in progress".encode_utf16().collect();
-                    }
+                    let margin = ((rect.right - rect.left) / 12).max(24);
+                    let mut text_rect = RECT {
+                        left: rect.left + margin,
+                        right: rect.right - margin,
+                        top: 0,
+                        bottom: 0,
+                    };
                     DrawTextW(
                         dc,
                         &mut wide,
-                        &mut rect,
-                        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+                        &mut text_rect,
+                        DT_CENTER | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT,
+                    );
+                    let text_height = text_rect.bottom - text_rect.top;
+                    text_rect.top = (rect.bottom - text_height) / 2;
+                    text_rect.bottom = text_rect.top + text_height;
+                    DrawTextW(
+                        dc,
+                        &mut wide,
+                        &mut text_rect,
+                        DT_CENTER | DT_WORDBREAK | DT_NOPREFIX,
                     );
 
                     SelectObject(dc, old);

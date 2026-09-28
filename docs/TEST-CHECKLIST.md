@@ -1,7 +1,7 @@
 # Manual test checklist (two real PCs)
 
 Everything in here is a check that **cannot** be automated from a single developer machine. The
-222 automated tests already cover the pure logic, the file formats, the protocol round-trips and
+Automated tests cover the pure logic, the file formats, the protocol round-trips and
 the trust boundaries; `cargo test -- --ignored` additionally runs the two network end-to-end tests.
 What is left needs a second machine, administrator rights, real hardware, or a human's eyes.
 
@@ -154,6 +154,13 @@ Automated tests pair two endpoints **inside one process**. This proves it across
       original wallpaper returns (not a black or blank one). The opened-PC menu shows locked/unlocked.
 - [ ] **Exam lock**: from the opened view start exam lock → STUDENT sees the fullscreen message on a
       separate desktop; Alt+Tab/Win do nothing; End exam → the student's desktop returns intact.
+- [ ] Start an untimed exam, use Ctrl+Alt+Del to sign out, then sign back into the same account.
+      The lock should return without another command. TEACHER should see an interruption notice,
+      and **Reapply exam** should work. Then use **Unlock exam** and confirm the desktop returns.
+- [ ] During exam, use Win+L and unlock Windows. Confirm the exam message reappears; check the
+      teacher's grid and opened view for the exam badge. The Winlogon screen itself is OS-controlled.
+- [ ] Turn STUDENT off. Its grid preview should be blank by default. Enable the last-preview
+      setting and confirm the last image is shown instead.
 
 ---
 
@@ -184,6 +191,13 @@ Automated tests pair two endpoints **inside one process**. This proves it across
 None of this could be verified on the dev machine — it is the elevation gate from PLAN 1.4b.
 
 - [ ] STUDENT, **elevated** prompt: `cowatcher-agent.exe install` → reports the service installed.
+- [ ] Run `install` twice from Downloads. Both invocations succeed; after the command exits, the
+      Downloads executable can be deleted. Check the service points to
+      `%ProgramData%\co-watcher\bin\cowatcher-agent.exe`.
+- [ ] Install with a signed HTTPS update manifest and public key. Confirm the `CowatcherAgentUpdate`
+      scheduled task exists. Publish a higher version and run the task manually; confirm the service
+      restarts on the new version. Try an altered signature and a hash mismatch; neither may stop the
+      working service. Change to another HTTPS mirror with the same key and repeat.
 - [ ] `services.msc` → **Co-watcher Agent** is listed, Automatic, with a description.
 - [ ] Task Manager → **Startup** tab → it is **not** listed (expected: services never are).
 - [ ] Task Manager → **Details/Services** → the process **is** visible (it must not be hidden).
@@ -191,6 +205,8 @@ None of this could be verified on the dev machine — it is the elevation gate f
 - [ ] A **standard (non-admin) student account** cannot stop it: try `sc stop CowatcherAgent` →
       access denied.
 - [ ] An **administrator** can: elevated `sc stop CowatcherAgent`, then `cowatcher-agent.exe uninstall`.
+- [ ] After `uninstall`, the service and scheduled update task are gone. Reinstall immediately; if
+      Windows reports pending deletion, close `services.msc`, wait briefly, and retry.
 
 **Capture through the service (the per-session helper — the whole point of 1.4b)**
 

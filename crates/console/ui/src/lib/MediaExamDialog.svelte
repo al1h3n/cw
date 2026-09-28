@@ -64,9 +64,7 @@
       // spread of sending N commands is absorbed rather than desyncing playback.
       const startInMs = Math.max(0, Math.round(startSeconds * 1000))
       status = t('mediaStarting')
-      for (const id of ids) {
-        await invoke('play_media', { deviceId: id, startInMs, message, lock })
-      }
+      await Promise.all(ids.map((id) => invoke('play_media', { deviceId: id, startInMs, message, lock })))
       status = t('mediaPlaying', ids.length)
     } catch (e) {
       onerror(String(e))
@@ -122,7 +120,7 @@
 
     <label class="msg">
       <span>{t('mediaMessage')}</span>
-      <input type="text" bind:value={message} placeholder={t('mediaMessagePlaceholder')} />
+      <textarea rows="3" bind:value={message} placeholder={t('mediaMessagePlaceholder')}></textarea>
     </label>
 
     <h3>{t('mediaPickTargets')}</h3>
@@ -239,7 +237,9 @@
     font-size: 12px;
     color: var(--muted);
   }
-  .msg input {
+  .msg textarea {
+    min-height: 70px;
+    resize: vertical;
     padding: 7px 9px;
     background: var(--bg);
     border: 1px solid var(--line);

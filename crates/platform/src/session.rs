@@ -83,6 +83,13 @@ pub fn launch_in_session(
     imp::launch_in_session(session_id, exe, args).map(SessionProcess)
 }
 
+/// Active interactive user and their Windows logon ID. A console session ID can be reused after
+/// sign-out, while the token's authentication ID changes on each login.
+#[must_use]
+pub fn active_user_logon() -> Option<(u32, u64)> {
+    imp::active_user_logon()
+}
+
 #[cfg(windows)]
 mod imp {
     use std::ffi::c_void;
@@ -90,7 +97,10 @@ mod imp {
     use windows::{
         Win32::{
             Foundation::{CloseHandle, HANDLE, WAIT_TIMEOUT},
-            Security::{DuplicateTokenEx, SecurityImpersonation, TOKEN_ALL_ACCESS, TokenPrimary},
+            Security::{
+                DuplicateTokenEx, GetTokenInformation, SecurityImpersonation, TOKEN_ALL_ACCESS,
+                TOKEN_STATISTICS, TokenPrimary, TokenStatistics,
+            },
             System::{
                 Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock},
                 JobObjects::{
@@ -120,6 +130,30 @@ mod imp {
         // SAFETY: no arguments; returns the console session id or 0xFFFFFFFF when none is attached.
         let id = unsafe { WTSGetActiveConsoleSessionId() };
         if id == u32::MAX { None } else { Some(id) }
+    }
+
+    pub fn active_user_logon() -> Option<(u32, u64)> {
+        let session = active_console_session()?;
+        let mut token = HANDLE::default();
+        // SAFETY: the service runs as SYSTEM; the token handle is closed below.
+        unsafe { WTSQueryUserToken(session, &mut token).ok()? };
+        let token = OwnedHandle(token);
+        let mut stats = TOKEN_STATISTICS::default();
+        let mut returned = 0;
+        // SAFETY: stats is a correctly sized writable TOKEN_STATISTICS for this synchronous call.
+        unsafe {
+            GetTokenInformation(
+                token.0,
+                TokenStatistics,
+                Some(std::ptr::from_mut(&mut stats).cast()),
+                size_of::<TOKEN_STATISTICS>() as u32,
+                &mut returned,
+            )
+            .ok()?;
+        }
+        let id = u64::from(stats.AuthenticationId.LowPart)
+            | (u64::from(stats.AuthenticationId.HighPart as u32) << 32);
+        Some((session, id))
     }
 
     /// Closes a Windows HANDLE on drop, so early returns never leak tokens.
@@ -344,6 +378,10 @@ mod imp {
         Err(SessionError(
             "launching a session helper is only supported on Windows".into(),
         ))
+    }
+
+    pub fn active_user_logon() -> Option<(u32, u64)> {
+        None
     }
 }
 

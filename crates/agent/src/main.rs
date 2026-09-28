@@ -28,11 +28,13 @@ mod blocker;
 mod breakglass;
 mod capture_source;
 mod exam_media;
+mod exam_state;
 mod membership;
 mod record_id;
 mod recording;
 mod streaming;
 mod supervisor;
+mod update;
 mod workspace;
 
 use std::{
@@ -68,7 +70,8 @@ fn main() -> ExitCode {
         Some("leave") => report(cmd_leave(rest)),
         Some("unlock") => report(cmd_unlock(rest)),
         Some("supervise") => report(cmd_supervise(rest)),
-        Some("install") => report(cmd_install()),
+        Some("install") => report(cmd_install(rest)),
+        Some("update") => report(cmd_update()),
         Some("uninstall") => report(cmd_uninstall()),
         Some("run") => report(cmd_run()),
         Some("status") => report(cmd_status()),
@@ -157,6 +160,14 @@ fn program_data_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
     base.join("co-watcher").join("agent")
+}
+
+fn update_config_dir() -> PathBuf {
+    program_data_dir().with_file_name("updates")
+}
+
+fn installed_binary_dir() -> PathBuf {
+    program_data_dir().with_file_name("bin")
 }
 
 fn user_local_dir() -> Option<PathBuf> {
@@ -317,6 +328,7 @@ async fn run_agent(banner: bool) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?,
     );
+    capture.restore_exam();
     // Fail loudly at start-up rather than on the teacher's first click.
     if let Err(err) = platform::power::enable_shutdown_privilege() {
         eprintln!("warning: power actions will be refused: {err}");
@@ -423,15 +435,68 @@ async fn accept_and_serve(
 
 /// Installs the Agent as an auto-start Windows service (needs an elevated/admin prompt).
 ///
-/// The binary is **copied into a permanent location** (`%ProgramData%\co-watcher\agent\`) and the
+/// The binary is **copied into a protected location** (`%ProgramData%\co-watcher\bin\`) and the
 /// service registered from there, so the teacher can run `install` from a temporary download folder
 /// and then delete it — the service keeps working across reboots because it no longer points at the
 /// original file.
-fn cmd_install() -> Result<(), String> {
-    let installed_exe = install_agent_binary()?;
-    platform::service::install(&installed_exe).map_err(|e| e.to_string())?;
+fn cmd_install(args: &[String]) -> Result<(), String> {
+    let dir = installed_binary_dir();
+    let config_dir = update_config_dir();
+    let config = match args {
+        [] => update::UpdateConfig::load(&config_dir)?,
+        [url, key] => Some(update::UpdateConfig::new(url.clone(), key.clone())?),
+        _ => {
+            return Err(
+                "usage: cowatcher-agent install [https://mirror/manifest.json public-key-hex]"
+                    .into(),
+            );
+        }
+    };
+    // Authenticate the complete update before interrupting the currently working service.
+    let downloaded = config
+        .as_ref()
+        .map(|config| config.download_newer(env!("CARGO_PKG_VERSION")))
+        .transpose()?
+        .flatten();
+    let installed_exe = dir.join("cowatcher-agent.exe");
+    let src = std::env::current_exe().map_err(|e| format!("locate this executable: {e}"))?;
+    if downloaded.is_none()
+        && src
+            .file_name()
+            .is_some_and(|name| name == "cowatcher-update-runner.exe")
+    {
+        return Ok(());
+    }
+    if downloaded.is_some() && src == installed_exe {
+        // Windows may keep a running image locked. Replace it from a separate executable.
+        if let Some(config) = &config {
+            config.save(&config_dir)?;
+        }
+        return cmd_update();
+    }
+    if downloaded.is_none() && src == installed_exe && platform::service::is_installed() {
+        if let Some(config) = &config {
+            config.save(&config_dir)?;
+            update::schedule(&installed_exe)?;
+        }
+        return Ok(());
+    }
+    platform::service::stop_if_running().map_err(|e| e.to_string())?;
+    let had_previous = installed_exe.exists() && (downloaded.is_some() || src != installed_exe);
+    let installed_exe = install_agent_binary(downloaded.as_deref())?;
+    if let Err(err) = platform::service::install(&installed_exe) {
+        if had_previous {
+            restore_agent_binary(&installed_exe, true);
+        }
+        let _ = platform::service::install(&installed_exe);
+        return Err(err.to_string());
+    }
+    if let Some(config) = &config {
+        config.save(&config_dir)?;
+        update::schedule(&installed_exe)?;
+    }
     println!(
-        "installed the \"{}\" service (auto-start) from {}.",
+        "installed and started the \"{}\" service (auto-start) from {}.",
         platform::service::DISPLAY_NAME,
         installed_exe.display()
     );
@@ -442,30 +507,75 @@ fn cmd_install() -> Result<(), String> {
     Ok(())
 }
 
+/// Launches a short-lived copy of the installed Agent so its binary can be replaced safely.
+fn cmd_update() -> Result<(), String> {
+    let src = std::env::current_exe().map_err(|e| e.to_string())?;
+    let runner = installed_binary_dir().join("cowatcher-update-runner.exe");
+    if runner.exists() {
+        std::fs::remove_file(&runner)
+            .map_err(|e| format!("previous update is still running: {e}"))?;
+    }
+    std::fs::copy(src, &runner).map_err(|e| format!("prepare update runner: {e}"))?;
+    let mut command = Command::new(runner);
+    command.arg("install");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    command
+        .spawn()
+        .map_err(|e| format!("launch update runner: {e}"))?;
+    Ok(())
+}
+
 /// Copies this running executable into the permanent agent directory and returns the copy's path. If
 /// we are already running from that location, no copy is made.
-fn install_agent_binary() -> Result<PathBuf, String> {
+fn install_agent_binary(downloaded: Option<&[u8]>) -> Result<PathBuf, String> {
     let src = std::env::current_exe().map_err(|e| format!("locate this executable: {e}"))?;
-    let dir = program_data_dir();
+    let dir = installed_binary_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    update::secure_binary_dir(&dir)?;
     let dest = dir.join("cowatcher-agent.exe");
-    if src == dest {
+    if src == dest && downloaded.is_none() {
         return Ok(dest);
     }
     // Replace any previous copy. If the old one is running (a reinstall), it is locked; renaming it
     // aside first lets the copy succeed and the stale file is cleaned up on the next boot.
     if dest.exists() {
         let old = dir.join("cowatcher-agent.old.exe");
-        let _ = std::fs::remove_file(&old);
-        let _ = std::fs::rename(&dest, &old);
+        if old.exists() {
+            std::fs::remove_file(&old).map_err(|e| format!("remove prior backup: {e}"))?;
+        }
+        std::fs::rename(&dest, &old).map_err(|e| format!("back up installed agent: {e}"))?;
     }
-    std::fs::copy(&src, &dest).map_err(|e| format!("copy the agent to {}: {e}", dest.display()))?;
+    let result = if let Some(bytes) = downloaded {
+        std::fs::write(&dest, bytes)
+    } else {
+        std::fs::copy(&src, &dest).map(|_| ())
+    };
+    if let Err(err) = result {
+        restore_agent_binary(
+            &dest,
+            dest.with_file_name("cowatcher-agent.old.exe").exists(),
+        );
+        return Err(format!("copy the agent to {}: {err}", dest.display()));
+    }
     Ok(dest)
+}
+
+fn restore_agent_binary(dest: &Path, had_previous: bool) {
+    let _ = std::fs::remove_file(dest);
+    if had_previous {
+        let _ = std::fs::rename(dest.with_file_name("cowatcher-agent.old.exe"), dest);
+    }
 }
 
 /// Removes the Agent service (needs an elevated/admin prompt).
 fn cmd_uninstall() -> Result<(), String> {
+    update::unschedule()?;
     platform::service::uninstall().map_err(|e| e.to_string())?;
+    exam_state::clear(&program_data_dir().join("exam-state.json"));
     println!(
         "removed the \"{}\" service.",
         platform::service::DISPLAY_NAME
@@ -528,11 +638,11 @@ fn service_body(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     // a per-session *helper* alive in whichever session the student is using — relaunching it when the
     // student signs in or out or switches user, and killing it (via a job object) on stop.
     let mut policy = supervisor::RestartPolicy::default();
-    let mut helper: Option<(u32, platform::session::SessionProcess)> = None;
+    let mut helper: Option<(u32, u64, platform::session::SessionProcess)> = None;
     let mut started_at: Option<Instant> = None;
 
     while !stop.load(Ordering::SeqCst) {
-        match platform::session::active_console_session() {
+        match platform::session::active_user_logon() {
             None => {
                 // Login screen, nobody signed in: nothing to capture. Drop any helper and wait.
                 if helper.take().is_some() {
@@ -541,9 +651,16 @@ fn service_body(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
                 started_at = None;
                 sleep_until_stop(Duration::from_secs(2), &stop);
             }
-            Some(session_id) => {
-                let alive =
-                    matches!(&helper, Some((sid, h)) if *sid == session_id && h.is_running());
+            Some((session_id, logon_id)) => {
+                if helper
+                    .as_ref()
+                    .is_some_and(|(sid, lid, _)| *sid != session_id || *lid != logon_id)
+                {
+                    helper = None; // terminate the old user's helper before starting another
+                    started_at = None;
+                    policy = supervisor::RestartPolicy::default();
+                }
+                let alive = matches!(&helper, Some((sid, lid, h)) if *sid == session_id && *lid == logon_id && h.is_running());
                 if alive {
                     sleep_until_stop(Duration::from_secs(1), &stop);
                     continue;
@@ -567,7 +684,7 @@ fn service_body(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
                             "session helper started in session {session_id} (pid {})",
                             child.pid()
                         );
-                        helper = Some((session_id, child));
+                        helper = Some((session_id, logon_id, child));
                         started_at = Some(Instant::now());
                     }
                     Err(err) => {

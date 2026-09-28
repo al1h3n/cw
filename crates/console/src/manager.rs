@@ -62,11 +62,26 @@ pub struct DeviceView {
     pub ip: Option<String>,
     /// Whether the wallpaper is locked this session (`Some(true)`/`Some(false)`), or unknown (`None`).
     pub wallpaper_locked: Option<bool>,
+    /// Last acknowledged exam lock from this Console; expires locally for timed exams.
+    pub exam_locked: bool,
+    pub exam_message: String,
+    /// Connection dropped while an exam lock was expected; teacher must verify this PC.
+    pub exam_interrupted: bool,
     /// This PC's recordings-kept override, if it differs from the class-wide default (`None` = uses the
     /// global default). Lets the UI flag where a PC overrides the global and offer a reset.
     pub retention_override: Option<u16>,
     /// What happened to the last action sent to this PC, for the UI to show.
     pub last_action: Option<ActionReport>,
+}
+
+/// A file already saved on the teacher's PC. `path` is for opening it in the file manager.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExternalFile {
+    pub kind: &'static str,
+    pub device_id: Option<String>,
+    pub name: String,
+    pub path: String,
+    pub bytes: u64,
 }
 
 /// The answer to one action, in codes the UI translates (D17: Rust sends codes, not text).
@@ -163,7 +178,7 @@ enum DeviceRequest {
     SendFile {
         dir: String,
         name: String,
-        data: Vec<u8>,
+        data: Arc<Vec<u8>>,
         reply: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
     /// Recursively list every file in this PC's workspace; the reply is the manifest or an error.
@@ -299,6 +314,10 @@ struct DeviceState {
     /// `Some(false)` unlocked, `None` unknown (never set, or the PC reconnected). Tracked from the
     /// lock/unlock actions the console sends, so the UI can show a locked/unlocked indicator.
     wallpaper_locked: Option<bool>,
+    exam_locked: bool,
+    exam_until: Option<std::time::Instant>,
+    exam_message: String,
+    exam_interrupted: bool,
     /// Actions the teacher asked for that the device's task has not sent yet.
     pending: Vec<proto::Action>,
     /// Input events waiting to be sent while this PC is being controlled.
@@ -323,6 +342,10 @@ impl DeviceState {
             ip: None,
             broadcast: None,
             wallpaper_locked: None,
+            exam_locked: false,
+            exam_until: None,
+            exam_message: String::new(),
+            exam_interrupted: false,
             pending: Vec::new(),
             pending_input: Vec::new(),
             requests: Vec::new(),
@@ -573,6 +596,12 @@ impl DeviceManager {
                 macs: state.macs.clone(),
                 ip: state.ip.clone(),
                 wallpaper_locked: state.wallpaper_locked,
+                exam_locked: state.exam_locked
+                    && state
+                        .exam_until
+                        .is_none_or(|until| std::time::Instant::now() < until),
+                exam_message: state.exam_message.clone(),
+                exam_interrupted: state.exam_interrupted,
                 retention_override: overrides.get(id).copied(),
                 last_action: state.last_action,
             })
@@ -855,14 +884,28 @@ impl DeviceManager {
         message: &str,
         duration_seconds: u32,
     ) -> Result<(bool, String), String> {
-        let message = message.to_string();
-        self.ask(device_id, move |reply| DeviceRequest::SetExam {
-            on,
-            message,
-            duration_seconds,
-            reply,
-        })
-        .await
+        let requested_message = message.to_string();
+        let message = requested_message.clone();
+        let result = self
+            .ask(device_id, move |reply| DeviceRequest::SetExam {
+                on,
+                message,
+                duration_seconds,
+                reply,
+            })
+            .await?;
+        if result.1.is_empty() {
+            let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(state) = devices.get_mut(device_id) {
+                state.exam_locked = result.0;
+                state.exam_until = (result.0 && duration_seconds > 0).then(|| {
+                    std::time::Instant::now() + Duration::from_secs(u64::from(duration_seconds))
+                });
+                state.exam_message = requested_message;
+                state.exam_interrupted = false;
+            }
+        }
+        Ok(result)
     }
 
     /// Sets one PC's desktop wallpaper to `image` (raw PNG/JPEG/BMP bytes). Returns `(ok, problem)`.
@@ -1018,6 +1061,57 @@ impl DeviceManager {
         .await?
     }
 
+    /// Lists screenshots, recordings and collected files already on this teacher's PC.
+    #[must_use]
+    pub fn external_files(&self) -> Vec<ExternalFile> {
+        let mut out = Vec::new();
+        for kind in ["screenshots", "recordings", "downloads", "sent"] {
+            scan_external_folder(&self.data_dir.join(kind), kind, None, &mut out);
+        }
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        out
+    }
+
+    /// Returns a saved JPEG screenshot for in-dashboard preview.
+    pub fn external_preview(&self, name: &str) -> Result<String, String> {
+        if std::path::Path::new(name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            != Some(name)
+            || !name.to_ascii_lowercase().ends_with(".jpg")
+        {
+            return Err("invalid screenshot name".into());
+        }
+        let path = self.data_dir.join("screenshots").join(name);
+        let meta = path.symlink_metadata().map_err(|e| e.to_string())?;
+        if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 16 * 1024 * 1024 {
+            return Err("screenshot cannot be previewed".into());
+        }
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        Ok(format!("data:image/jpeg;base64,{}", base64(&bytes)))
+    }
+
+    /// Selects a saved file in Explorer. Resolve it from our own scan, never from a caller path.
+    pub fn external_show(&self, path: &str) -> Result<(), String> {
+        let file = self
+            .external_files()
+            .into_iter()
+            .find(|file| file.path == path)
+            .ok_or("saved file was not found")?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            std::process::Command::new("explorer.exe")
+                .arg(format!("/select,\"{}\"", file.path))
+                .creation_flags(0x0800_0000)
+                .spawn()
+                .map_err(|e| format!("open file location: {e}"))?;
+        }
+        #[cfg(not(windows))]
+        let _ = file;
+        Ok(())
+    }
+
     /// Uploads `data` to one PC's workspace as `name` inside workspace directory `dir`.
     ///
     /// # Errors
@@ -1029,14 +1123,34 @@ impl DeviceManager {
         name: &str,
         data: Vec<u8>,
     ) -> Result<(), String> {
+        if std::path::Path::new(name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            != Some(name)
+            || name == "."
+            || name == ".."
+            || !device_id.bytes().all(|b| b.is_ascii_alphanumeric())
+        {
+            return Err("invalid file name or computer id".into());
+        }
         let (dir, name) = (dir.to_string(), name.to_string());
+        let data = Arc::new(data);
+        let transfer = Arc::clone(&data);
+        let transfer_name = name.clone();
         self.ask(device_id, move |reply| DeviceRequest::SendFile {
             dir,
-            name,
-            data,
+            name: transfer_name,
+            data: transfer,
             reply,
         })
-        .await?
+        .await??;
+        let folder = self.data_dir.join("sent").join(device_id);
+        if let Err(err) = std::fs::create_dir_all(&folder)
+            .and_then(|()| std::fs::write(folder.join(name), data.as_slice()))
+        {
+            eprintln!("sent file could not be archived on teacher PC: {err}");
+        }
+        Ok(())
     }
 
     /// Recursively lists every file in one PC's workspace (for collect/diff).
@@ -1519,6 +1633,40 @@ impl DeviceManager {
             .map_err(|e| e.to_string())?;
         self.set_monitors(id, monitors);
 
+        // A sign-out kills the per-session helper and its in-memory lock. Reapply an exam the
+        // Console still expects before resuming thumbnails; never use the student's wall clock.
+        let expected_exam = {
+            let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+            devices.get_mut(id).and_then(|state| {
+                if state.exam_locked {
+                    let remaining = state
+                        .exam_until
+                        .map(|until| until.saturating_duration_since(std::time::Instant::now()));
+                    if remaining == Some(Duration::ZERO) {
+                        state.exam_locked = false;
+                        state.exam_interrupted = false;
+                        return None;
+                    }
+                    Some((state.exam_message.clone(), remaining))
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some((message, remaining)) = expected_exam {
+            let seconds = remaining.map_or(0, |time| {
+                u32::try_from(time.as_secs().saturating_add(1)).unwrap_or(u32::MAX)
+            });
+            let (locked, problem) = session
+                .set_exam(true, message, seconds)
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(state) = devices.get_mut(id) {
+                state.exam_interrupted = !locked || !problem.is_empty();
+            }
+        }
+
         // Learn its MAC addresses too, so it can be woken by Wake-on-LAN once it is switched off.
         if let Ok(macs) = session.request_macs().await {
             let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
@@ -1654,7 +1802,7 @@ impl DeviceManager {
                         let _ = reply.send(list);
                     }
                     DeviceRequest::FetchRecording { file, reply } => {
-                        let dest = self.data_dir.join("recordings");
+                        let dest = self.data_dir.join("recordings").join(id);
                         let result = session
                             .fetch_recording(&file, &dest)
                             .await
@@ -1667,7 +1815,7 @@ impl DeviceManager {
                         let _ = reply.send(result);
                     }
                     DeviceRequest::FetchFile { path, reply } => {
-                        let dest = self.data_dir.join("downloads");
+                        let dest = self.data_dir.join("downloads").join(id);
                         let result = session
                             .fetch_file(&path, &dest)
                             .await
@@ -1939,6 +2087,9 @@ impl DeviceManager {
                 state.ip = None;
                 // The wallpaper-lock state was session-tracked; on a fresh connection it is unknown.
                 state.wallpaper_locked = None;
+                if state.status == DeviceStatus::Live && state.exam_locked {
+                    state.exam_interrupted = true;
+                }
             }
             state.status = status;
             state.detail = detail;
@@ -2024,6 +2175,49 @@ impl DeviceManager {
                     }
                 }
             }
+        }
+    }
+}
+
+/// One level of per-PC folders is enough; file transfer never writes deeper on the Console.
+fn scan_external_folder(
+    folder: &std::path::Path,
+    kind: &'static str,
+    device_id: Option<&str>,
+    out: &mut Vec<ExternalFile>,
+) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if out.len() >= 2000 {
+            return;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if file_type.is_dir() && device_id.is_none() {
+            scan_external_folder(&path, kind, Some(&name), out);
+        } else if file_type.is_file()
+            && let Ok(meta) = entry.metadata()
+        {
+            let id = device_id.map(str::to_owned).or_else(|| {
+                (kind == "screenshots")
+                    .then(|| name.split_once('-').map(|(id, _)| id.to_owned()))
+                    .flatten()
+            });
+            out.push(ExternalFile {
+                kind,
+                device_id: id,
+                name,
+                path: path.display().to_string(),
+                bytes: meta.len(),
+            });
         }
     }
 }
@@ -2153,6 +2347,22 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_file_scan_keeps_pc_folders_and_ignores_deeper_paths() {
+        let root = std::env::temp_dir().join(format!("cw-external-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let pc = root.join("K7M2Q9");
+        std::fs::create_dir_all(pc.join("nested")).unwrap();
+        std::fs::write(pc.join("notes.txt"), b"homework").unwrap();
+        std::fs::write(pc.join("nested").join("hidden.txt"), b"x").unwrap();
+        let mut found = Vec::new();
+        scan_external_folder(&root, "downloads", None, &mut found);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].device_id.as_deref(), Some("K7M2Q9"));
+        assert_eq!(found[0].bytes, 8);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn base64_matches_known_vectors() {

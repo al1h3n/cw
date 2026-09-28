@@ -47,7 +47,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             ai_enabled: true,
-            keep_previews: true,
+            keep_previews: false,
             theme: Theme::default(),
             custom: CustomTheme::default(),
         }
