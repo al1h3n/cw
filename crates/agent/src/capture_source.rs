@@ -964,6 +964,28 @@ impl AgentDevice for ScreenCapture {
         keep_last
     }
 
+    fn set_break_glass(&self, from: &PeerInfo, hash: String) -> bool {
+        // The break-glass files live in the data directory, which is the parent of the wallpaper-save
+        // file (all agent state is rooted there).
+        let Some(data_dir) = self.wallpaper_save.parent() else {
+            return false;
+        };
+        match crate::breakglass::store_hash(data_dir, &hash) {
+            Ok(()) => {
+                let _ = self.audit.note(
+                    net::endpoint::now_ms(),
+                    from.device_id,
+                    "breakglass-provisioned",
+                );
+                true
+            }
+            Err(err) => {
+                eprintln!("could not store break-glass hash: {err}");
+                false
+            }
+        }
+    }
+
     fn set_url_blocklist(&self, from: &PeerInfo, patterns: Vec<String>) -> (u16, String) {
         let mut patterns = patterns;
         patterns.truncate(proto::MAX_URL_BLOCKLIST);

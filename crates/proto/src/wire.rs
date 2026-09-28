@@ -848,6 +848,18 @@ pub enum Control {
         /// Recordings kept; 0 = all.
         keep_last: u16,
     },
+    /// Console → Agent: provision the **break-glass** code — an Argon2id *hash* of the emergency code
+    /// the teacher keeps (never the code itself). Typed on the PC (`cowatcher-agent unlock <code>`) it
+    /// pauses enforcement for a few minutes (D10). Provisioned while connected so it works later offline.
+    SetBreakGlass {
+        /// The Argon2id PHC hash of the break-glass code.
+        hash: String,
+    },
+    /// Agent → Console: the break-glass code was stored (`true`) — a simple acknowledgement.
+    BreakGlassSet {
+        /// True once the hash is saved on the PC.
+        stored: bool,
+    },
     /// Console → Agent: what programs can this PC start?
     ListApps,
     /// Agent → Console: the programs it offers, as `(id, name)` pairs.
@@ -1136,6 +1148,10 @@ mod tests {
             },
             Control::SetRetention { keep_last: 5 },
             Control::RetentionSet { keep_last: 5 },
+            Control::SetBreakGlass {
+                hash: "$argon2id$v=19$m=19456,t=2,p=1$abc$def".into(),
+            },
+            Control::BreakGlassSet { stored: true },
             Control::SetExam {
                 on: true,
                 message: "Exam in progress".into(),

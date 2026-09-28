@@ -25,6 +25,7 @@
 
 mod audit;
 mod blocker;
+mod breakglass;
 mod capture_source;
 mod exam_media;
 mod membership;
@@ -65,6 +66,7 @@ fn main() -> ExitCode {
         Some("wallpaper-selftest") => report(cmd_wallpaper_selftest()),
         Some("room") => report(cmd_room()),
         Some("leave") => report(cmd_leave(rest)),
+        Some("unlock") => report(cmd_unlock(rest)),
         Some("supervise") => report(cmd_supervise(rest)),
         Some("install") => report(cmd_install()),
         Some("uninstall") => report(cmd_uninstall()),
@@ -73,7 +75,7 @@ fn main() -> ExitCode {
         Some("helper") => report(block_on(cmd_helper(rest))),
         _ => {
             eprintln!(
-                "usage: cowatcher-agent <id|capture|pair|serve|sessions|room|leave|install|\
+                "usage: cowatcher-agent <id|capture|pair|serve|sessions|room|leave|unlock|install|\
                  uninstall|status|run|supervise|version>"
             );
             ExitCode::FAILURE
@@ -626,6 +628,45 @@ fn cmd_leave(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         Err(err) => Err(err.to_string()),
+    }
+}
+
+/// Break-glass: pause enforcement (the games blocklist) for a few minutes with the emergency code the
+/// teacher holds (D10). `cowatcher-agent unlock <code> [minutes]`. Every attempt is audit-logged and
+/// wrong ones are rate-limited.
+fn cmd_unlock(args: &[String]) -> Result<(), String> {
+    let Some(code) = args.first() else {
+        return Err("usage: cowatcher-agent unlock <code> [minutes]".into());
+    };
+    let minutes = args
+        .get(1)
+        .and_then(|m| m.parse::<u64>().ok())
+        .unwrap_or(breakglass::DEFAULT_PAUSE_MINUTES);
+    let now_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dir = data_dir();
+    let audit = audit::AuditLog::new(&audit_path());
+    match breakglass::redeem(&dir, code, minutes, now_s) {
+        Ok(until) => {
+            let mins = until.saturating_sub(now_s) / 60;
+            let _ = audit.note(
+                now_s * 1000,
+                proto::DeviceId::from_public_key(&[0u8; 32]),
+                "breakglass-used",
+            );
+            println!("enforcement paused for ~{mins} min (until it is re-enabled automatically)");
+            Ok(())
+        }
+        Err(err) => {
+            let _ = audit.note(
+                now_s * 1000,
+                proto::DeviceId::from_public_key(&[0u8; 32]),
+                "breakglass-refused",
+            );
+            Err(err.to_string())
+        }
     }
 }
 

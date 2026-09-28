@@ -429,6 +429,8 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
                     .collect::<Vec<_>>(),
             }))
         }
+        "break_glass_code" => ok(m.break_glass_code()?),
+        "new_break_glass_code" => ok(m.new_break_glass_code()?),
         "set_retention_global" => ok(m.set_retention_global(arg(a, "keepLast")?)?),
         "set_retention_override" => ok(m.set_retention_override(
             &arg::<String>(a, "deviceId")?,

@@ -19,6 +19,27 @@
   let open = $state(false)
   let revealed = $state(false)
   let draft = $state('')
+  // Break-glass emergency code (D10): shown only on request, revealed lazily so it is never fetched
+  // until the teacher asks. Typed on a student PC (`cowatcher-agent unlock <code>`) to pause blocking.
+  let breakGlass = $state('')
+  let bgRevealed = $state(false)
+
+  async function revealBreakGlass() {
+    try {
+      if (!breakGlass) breakGlass = await invoke<string>('break_glass_code')
+      bgRevealed = !bgRevealed
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
+  async function regenBreakGlass() {
+    try {
+      breakGlass = await invoke<string>('new_break_glass_code')
+      bgRevealed = true
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
 
   async function load() {
     try {
@@ -76,6 +97,18 @@
         </button>
       </div>
       <button class="regen" onclick={regenerate}>{t('roomNewPassword')}</button>
+
+      <p class="label bg">{t('breakGlassLabel')}</p>
+      <p class="hint">{t('breakGlassHint')}</p>
+      <div class="row">
+        {#if bgRevealed}
+          <code class="password">{breakGlass}</code>
+        {:else}
+          <code class="password hidden">••••-••••-••••</code>
+        {/if}
+        <button onclick={revealBreakGlass}>{bgRevealed ? t('roomHide') : t('roomShow')}</button>
+      </div>
+      <button class="regen" onclick={regenBreakGlass}>{t('breakGlassNew')}</button>
     </div>
   {/if}
 </span>
@@ -161,5 +194,11 @@
   .regen {
     width: 100%;
     font-size: 12px;
+  }
+
+  .label.bg {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
   }
 </style>

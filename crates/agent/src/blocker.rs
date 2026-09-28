@@ -54,10 +54,13 @@ impl Blocker {
         }));
         let stop = Arc::new(AtomicBool::new(false));
 
+        // Enforcement pauses while a break-glass unlock is in effect; the marker lives beside the rules.
+        let pause_path =
+            crate::breakglass::pause_path(rules_path.parent().unwrap_or_else(|| Path::new(".")));
         let worker = {
             let shared = Arc::clone(&shared);
             let stop = Arc::clone(&stop);
-            std::thread::spawn(move || run(&shared, &stop))
+            std::thread::spawn(move || run(&shared, &stop, &pause_path))
         };
 
         Self {
@@ -120,14 +123,31 @@ fn clean(programs: Vec<String>) -> Vec<String> {
     out
 }
 
+/// Current Unix time in seconds (for the break-glass pause window). Break-glass is an admin action, so
+/// a wall-clock window is fine here — a student moving the clock can only end the pause early, which
+/// re-enables enforcement (the safe direction).
+fn now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// The worker loop: sweep, sleep, until asked to stop. Idle (no listing) while there are no rules.
-fn run(shared: &Arc<Mutex<Shared>>, stop: &Arc<AtomicBool>) {
+fn run(shared: &Arc<Mutex<Shared>>, stop: &Arc<AtomicBool>, pause_path: &Path) {
     while !stop.load(Ordering::SeqCst) {
         let rules = {
             let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
             shared.rules.clone()
         };
-        if !rules.is_empty()
+        // A break-glass unlock pauses enforcement for its window (D10). Read the marker each sweep so
+        // the pause takes effect and expires on its own without restarting the blocker.
+        let paused = crate::breakglass::is_paused(
+            pause_path.parent().unwrap_or_else(|| Path::new(".")),
+            now_seconds(),
+        );
+        if !paused
+            && !rules.is_empty()
             && let Ok(closed) = platform::process::enforce_blocklist(&rules)
             && !closed.is_empty()
         {

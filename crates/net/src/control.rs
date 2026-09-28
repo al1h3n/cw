@@ -117,6 +117,12 @@ pub trait AgentDevice {
         keep_last
     }
 
+    /// Stores the break-glass code's Argon2id `hash` (D10). Returns whether it was saved. Default: no.
+    fn set_break_glass(&self, from: &PeerInfo, hash: String) -> bool {
+        let _ = (from, hash);
+        false
+    }
+
     /// Starts encoding this screen as H.264, returning the settings actually used and a channel of
     /// encoded packets. The Agent opens a uni-stream and pumps the channel down it.
     ///
@@ -583,6 +589,19 @@ impl ControlSession {
         write_message(&mut self.send, &Control::SetRetention { keep_last }).await?;
         match read_message::<Control>(&mut self.recv).await? {
             Control::RetentionSet { keep_last } => Ok(keep_last),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: provision the break-glass code's Argon2id hash on this PC. Returns whether stored.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn set_break_glass(&mut self, hash: String) -> Result<bool, EndpointError> {
+        write_message(&mut self.send, &Control::SetBreakGlass { hash }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::BreakGlassSet { stored } => Ok(stored),
             Control::Error(err) => Err(EndpointError::ControlRefused(err)),
             _ => Err(EndpointError::Protocol),
         }
@@ -1742,6 +1761,10 @@ impl ControlSession {
                 Control::SetRetention { keep_last } => {
                     let keep_last = source.set_retention(&self.peer, keep_last);
                     write_message(&mut self.send, &Control::RetentionSet { keep_last }).await?;
+                }
+                Control::SetBreakGlass { hash } => {
+                    let stored = source.set_break_glass(&self.peer, hash);
+                    write_message(&mut self.send, &Control::BreakGlassSet { stored }).await?;
                 }
                 Control::Perform(action) => {
                     let outcome = source.perform(&self.peer, action);

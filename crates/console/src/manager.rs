@@ -389,6 +389,9 @@ pub struct DeviceManager {
     /// Recording retention (global default + per-PC overrides), pushed per device as its effective value.
     retention: Arc<Mutex<Retention>>,
     retention_path: std::path::PathBuf,
+    /// The break-glass emergency code: the Argon2id hash (pushed to PCs) + a version to re-push on change.
+    /// The plaintext is sealed on disk (DPAPI) and only revealed to the teacher on request (D10).
+    break_glass: Arc<Mutex<BreakGlass>>,
     /// The room every invited device joins, and whose password they need to leave.
     room: Arc<Mutex<crate::room::Room>>,
     /// Where the room file lives, for renames and password changes.
@@ -423,6 +426,13 @@ impl Retention {
     }
 }
 
+/// The break-glass code state held in memory: the hash to push, and a version bumped on regenerate.
+#[derive(Default)]
+struct BreakGlass {
+    hash: String,
+    version: u64,
+}
+
 impl DeviceManager {
     /// Loads the console's identity and paired devices from `dir`.
     ///
@@ -441,6 +451,7 @@ impl DeviceManager {
         let web_patterns = load_lines(&web_blocklist_path);
         let retention_path = dir.join("retention.txt");
         let retention = load_retention(&retention_path);
+        let break_glass = load_or_create_break_glass(dir);
 
         let names = load_names(&dir.join("names.txt"));
         let devices = trust
@@ -474,6 +485,7 @@ impl DeviceManager {
             web_blocklist_path,
             retention: Arc::new(Mutex::new(retention)),
             retention_path,
+            break_glass: Arc::new(Mutex::new(break_glass)),
             room: Arc::new(Mutex::new(room)),
             data_dir: dir.to_path_buf(),
         })
@@ -1315,6 +1327,31 @@ impl DeviceManager {
         Ok(())
     }
 
+    /// Reveals the break-glass code in plain text (unsealed from disk), to show the teacher once.
+    ///
+    /// # Errors
+    /// If the sealed code cannot be read or unsealed.
+    pub fn break_glass_code(&self) -> Result<String, String> {
+        let sealed = std::fs::read(break_glass_key_path(&self.data_dir))
+            .map_err(|_| "no break-glass code set".to_string())?;
+        let plain = platform::secret::unprotect(&sealed).map_err(|e| e.to_string())?;
+        String::from_utf8(plain).map_err(|_| "the stored code is corrupt".into())
+    }
+
+    /// Generates a fresh break-glass code, re-seals it, and re-hashes it so connected PCs get the new
+    /// one. Returns the new code in plain text to show the teacher.
+    ///
+    /// # Errors
+    /// If sealing, hashing or saving fails.
+    pub fn new_break_glass_code(&self) -> Result<String, String> {
+        let code = net::RoomPassword::generate();
+        let hash = seal_break_glass(&self.data_dir, &code)?;
+        let mut bg = self.break_glass.lock().unwrap_or_else(|e| e.into_inner());
+        bg.hash = hash;
+        bg.version += 1;
+        Ok(code.as_str().to_string())
+    }
+
     /// The recording-retention policy: the global default and every per-PC override.
     #[must_use]
     pub fn retention_view(&self) -> (u16, std::collections::BTreeMap<String, u16>) {
@@ -1497,6 +1534,7 @@ impl DeviceManager {
         let mut sent_web_blocklist: u64 = 0;
         // Push the effective retention when it changes for this PC.
         let mut sent_retention: Option<u16> = None;
+        let mut sent_break_glass: u64 = 0;
         // Whether this connection has been granted control of the PC.
         let mut controlling = false;
         // The direct IP appears only once hole-punching promotes the connection off the relay, so
@@ -1549,6 +1587,17 @@ impl DeviceManager {
                     .await
                     .map_err(|e| e.to_string())?;
                 sent_retention = Some(effective_retention);
+            }
+
+            let (bg_hash, bg_version) = {
+                let bg = self.break_glass.lock().unwrap_or_else(|e| e.into_inner());
+                (bg.hash.clone(), bg.version)
+            };
+            if bg_version != sent_break_glass && !bg_hash.is_empty() {
+                if let Err(err) = session.set_break_glass(bg_hash).await {
+                    eprintln!("break-glass push failed: {err}");
+                }
+                sent_break_glass = bg_version;
             }
 
             // Control and input come first: a click must not wait behind a screen refresh.
@@ -1985,6 +2034,41 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Loads the teacher's custom PC names from `names.txt` (`id = name` per line). Missing file is fine.
+/// Where the DPAPI-sealed break-glass code is kept on the console.
+fn break_glass_key_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("breakglass.key")
+}
+/// Where the Argon2id hash of the break-glass code is cached (so it is not re-hashed every start).
+fn break_glass_hash_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("breakglass.hashed")
+}
+
+/// Seals `code` under DPAPI, hashes it, writes both, and returns the hash. Shared by first-run creation
+/// and regeneration.
+fn seal_break_glass(dir: &std::path::Path, code: &net::RoomPassword) -> Result<String, String> {
+    let sealed = platform::secret::protect(code.as_str().as_bytes()).map_err(|e| e.to_string())?;
+    let hash = code.hash().map_err(|e| e.to_string())?.as_str().to_string();
+    std::fs::write(break_glass_key_path(dir), sealed).map_err(|e| e.to_string())?;
+    std::fs::write(break_glass_hash_path(dir), &hash).map_err(|e| e.to_string())?;
+    Ok(hash)
+}
+
+/// Loads the break-glass hash, generating a fresh code on first run. A missing/corrupt state is
+/// regenerated rather than left empty, so every console always has a working break-glass code.
+fn load_or_create_break_glass(dir: &std::path::Path) -> BreakGlass {
+    if let Ok(hash) = std::fs::read_to_string(break_glass_hash_path(dir))
+        && !hash.trim().is_empty()
+        && break_glass_key_path(dir).exists()
+    {
+        return BreakGlass {
+            hash: hash.trim().to_string(),
+            version: 1,
+        };
+    }
+    let hash = seal_break_glass(dir, &net::RoomPassword::generate()).unwrap_or_default();
+    BreakGlass { hash, version: 1 }
+}
+
 /// Loads the retention policy: `global = N`, then `deviceid = N` per override, one per line.
 fn load_retention(path: &std::path::Path) -> Retention {
     let mut r = Retention::default();

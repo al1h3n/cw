@@ -9,7 +9,9 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 ///
 /// Bump it on every breaking change to message layout or meaning. Peers with different
 /// versions must refuse the session with a clear error instead of guessing.
-/// Version 25 added clock-independent recording retention (`SetRetention`/`RetentionSet`);
+/// Version 26 added the break-glass code (`SetBreakGlass`/`BreakGlassSet`) — an emergency code that
+/// pauses enforcement, provisioned as an Argon2id hash (D10);
+/// version 25 added clock-independent recording retention (`SetRetention`/`RetentionSet`);
 /// version 24 added website blocking via browser policy (`SetUrlBlocklist`/`UrlBlocklistState`);
 /// version 23 added the preloaded, synchronised play-once media exam (`PreloadMedia`/`MediaReady`/
 /// `MediaPreloaded`, `PlayMedia`, `StopMedia`, `MediaState`) — a listening exam that starts together
@@ -38,7 +40,7 @@ pub const PRODUCT_NAME: &str = "Co-watcher";
 /// added remote mouse/keyboard input; version 2 added remote actions. Each shifted the later
 /// `Control` discriminants, so a peer on an older version would decode them as the wrong message and
 /// the handshake refuses it outright.
-pub const PROTOCOL_VERSION: u32 = 25;
+pub const PROTOCOL_VERSION: u32 = 26;
 
 /// Default JPEG quality (`1..=100`) for screen thumbnails when the Console does not specify one, and
 /// what non-preview callers (diagnostics, the MCP screenshot tool) pass. 60 measured ~5–7 KB at

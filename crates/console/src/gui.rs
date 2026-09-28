@@ -1011,6 +1011,18 @@ struct RetentionOverride {
     keep_last: u16,
 }
 
+/// Reveals the break-glass emergency code (to show the teacher).
+#[tauri::command]
+fn break_glass_code(state: State<'_, AppState>) -> Result<String, String> {
+    state.manager.break_glass_code()
+}
+
+/// Generates a fresh break-glass code and returns it; connected PCs get the new hash.
+#[tauri::command]
+fn new_break_glass_code(state: State<'_, AppState>) -> Result<String, String> {
+    state.manager.new_break_glass_code()
+}
+
 /// Returns the recording-retention policy (global default + per-PC overrides).
 #[tauri::command]
 fn retention(state: State<'_, AppState>) -> RetentionView {
@@ -1505,6 +1517,8 @@ pub fn run(
             retention,
             set_retention_global,
             set_retention_override,
+            break_glass_code,
+            new_break_glass_code,
             room_info,
             rename_room,
             new_room_password,
