@@ -117,6 +117,16 @@ pub fn catalogue() -> Value {
             &["device_id", "patterns"],
         ),
         tool(
+            "set_retention",
+            "Keep only the newest keep_last recordings on a PC (0 = keep all); older ones are deleted \
+             by creation order, never by the clock.",
+            json!({
+                "device_id": device_id_prop(),
+                "keep_last": { "type": "integer", "minimum": 0, "maximum": 10000, "description": "Recordings to keep; 0 = all." }
+            }),
+            &["device_id", "keep_last"],
+        ),
+        tool(
             "perform_action",
             "Perform one power/lock action on a PC. DESTRUCTIVE actions (shutdown, reboot, log-off) \
              interrupt the student — confirm with the teacher first. Allowed actions: shutdown, \
@@ -396,6 +406,19 @@ pub async fn call(fleet: &Fleet, name: &str, args: &Value) -> Result<Vec<Value>,
             Ok(vec![json_text(
                 &json!({ "count": count, "problem": problem }),
             )])
+        }
+        "set_retention" => {
+            let keep_last = args
+                .get("keep_last")
+                .and_then(Value::as_u64)
+                .and_then(|n| u16::try_from(n).ok())
+                .ok_or("missing or out-of-range integer argument 'keep_last'")?;
+            let mut session = fleet.connect(arg_str(args, "device_id")?).await?;
+            let kept = session
+                .set_retention(keep_last)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(vec![json_text(&json!({ "keep_last": kept }))])
         }
         "perform_action" => {
             let action_name = arg_str(args, "action")?;

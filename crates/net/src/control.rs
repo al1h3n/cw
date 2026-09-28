@@ -110,6 +110,13 @@ pub trait AgentDevice {
         (0, "this device cannot block websites".to_string())
     }
 
+    /// Keeps only the newest `keep_last` recordings (0 = all), pruning by creation order. Returns the
+    /// count now in force. The default keeps none of its own (nothing to prune).
+    fn set_retention(&self, from: &PeerInfo, keep_last: u16) -> u16 {
+        let _ = (from, keep_last);
+        keep_last
+    }
+
     /// Starts encoding this screen as H.264, returning the settings actually used and a channel of
     /// encoded packets. The Agent opens a uni-stream and pumps the channel down it.
     ///
@@ -563,6 +570,19 @@ impl ControlSession {
         write_message(&mut self.send, &Control::SetUrlBlocklist { patterns }).await?;
         match read_message::<Control>(&mut self.recv).await? {
             Control::UrlBlocklistState { count, problem } => Ok((count, problem)),
+            Control::Error(err) => Err(EndpointError::ControlRefused(err)),
+            _ => Err(EndpointError::Protocol),
+        }
+    }
+
+    /// Console side: set how many recordings this PC keeps (0 = all). Returns the count applied.
+    ///
+    /// # Errors
+    /// Stream failure, or an unexpected reply.
+    pub async fn set_retention(&mut self, keep_last: u16) -> Result<u16, EndpointError> {
+        write_message(&mut self.send, &Control::SetRetention { keep_last }).await?;
+        match read_message::<Control>(&mut self.recv).await? {
+            Control::RetentionSet { keep_last } => Ok(keep_last),
             Control::Error(err) => Err(EndpointError::ControlRefused(err)),
             _ => Err(EndpointError::Protocol),
         }
@@ -1718,6 +1738,10 @@ impl ControlSession {
                         &Control::UrlBlocklistState { count, problem },
                     )
                     .await?;
+                }
+                Control::SetRetention { keep_last } => {
+                    let keep_last = source.set_retention(&self.peer, keep_last);
+                    write_message(&mut self.send, &Control::RetentionSet { keep_last }).await?;
                 }
                 Control::Perform(action) => {
                     let outcome = source.perform(&self.peer, action);

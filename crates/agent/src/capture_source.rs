@@ -48,6 +48,9 @@ pub struct ScreenCapture {
     exam_gen: Arc<AtomicU64>,
     /// Where recordings are written.
     recordings_dir: std::path::PathBuf,
+    /// How many recordings to keep (0 = all); older ones are pruned by creation order. Persisted so it
+    /// keeps applying offline.
+    retention_keep: Mutex<u16>,
     /// True while a teacher is watching and the wallpaper is blacked out (D11).
     watched: Mutex<bool>,
     /// True while *watching* has locked wallpaper changes, so we only unlock what watching locked
@@ -75,6 +78,20 @@ impl Drop for ScreenCapture {
         // Backstop: never leave a student staring at a black desktop because the Agent went away.
         let _ = platform::wallpaper::restore(&self.wallpaper_save);
     }
+}
+
+/// The file holding this PC's recording-retention setting (kept beside the recordings so it needs no
+/// extra constructor argument, and survives a reboot for offline enforcement).
+fn retention_path(recordings_dir: &Path) -> std::path::PathBuf {
+    recordings_dir.join(".retention")
+}
+
+/// Loads the saved retention count (0 = keep all) if any.
+fn load_retention(recordings_dir: &Path) -> u16 {
+    std::fs::read_to_string(retention_path(recordings_dir))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 /// Converts the agent's own recording status into the wire shape.
@@ -121,6 +138,7 @@ impl ScreenCapture {
             exam: Arc::new(Mutex::new(None)),
             exam_gen: Arc::new(AtomicU64::new(0)),
             recordings_dir: recordings_dir.to_path_buf(),
+            retention_keep: Mutex::new(load_retention(recordings_dir)),
             watched: Mutex::new(false),
             watch_locked_wp: Mutex::new(false),
             stream: Mutex::new(None),
@@ -757,6 +775,12 @@ impl AgentDevice for ScreenCapture {
         let _ = self
             .audit
             .note(net::endpoint::now_ms(), from.device_id, "record-stop");
+        // Enforce retention now that a new recording exists (clock-independent, by creation order).
+        let keep = *self
+            .retention_keep
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = crate::recording::prune(&self.recordings_dir, keep);
         let mut info = to_wire_recording(&status);
         info.active = false;
         info
@@ -922,6 +946,22 @@ impl AgentDevice for ScreenCapture {
 
     fn set_blocklist(&self, programs: Vec<String>) -> u16 {
         self.blocker.set_rules(programs)
+    }
+
+    fn set_retention(&self, from: &PeerInfo, keep_last: u16) -> u16 {
+        *self
+            .retention_keep
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = keep_last;
+        // Persist so it keeps applying after a reboot with no network (D9).
+        let _ = std::fs::write(retention_path(&self.recordings_dir), keep_last.to_string());
+        let removed = crate::recording::prune(&self.recordings_dir, keep_last);
+        let _ = self.audit.note(
+            net::endpoint::now_ms(),
+            from.device_id,
+            &format!("retention:{keep_last} pruned:{removed}"),
+        );
+        keep_last
     }
 
     fn set_url_blocklist(&self, from: &PeerInfo, patterns: Vec<String>) -> (u16, String) {

@@ -998,6 +998,51 @@ fn set_web_blocklist(state: State<'_, AppState>, patterns: Vec<String>) -> Resul
     state.manager.set_web_blocklist(patterns)
 }
 
+/// The recording-retention policy: the global default and every per-PC override.
+#[derive(serde::Serialize)]
+struct RetentionView {
+    global: u16,
+    overrides: Vec<RetentionOverride>,
+}
+
+#[derive(serde::Serialize)]
+struct RetentionOverride {
+    device_id: String,
+    keep_last: u16,
+}
+
+/// Returns the recording-retention policy (global default + per-PC overrides).
+#[tauri::command]
+fn retention(state: State<'_, AppState>) -> RetentionView {
+    let (global, overrides) = state.manager.retention_view();
+    RetentionView {
+        global,
+        overrides: overrides
+            .into_iter()
+            .map(|(device_id, keep_last)| RetentionOverride {
+                device_id,
+                keep_last,
+            })
+            .collect(),
+    }
+}
+
+/// Sets the class-wide default number of recordings kept per PC (0 = keep all).
+#[tauri::command]
+fn set_retention_global(state: State<'_, AppState>, keep_last: u16) -> Result<(), String> {
+    state.manager.set_retention_global(keep_last)
+}
+
+/// Overrides (or, with `keep_last` omitted, resets) the recordings kept on one PC.
+#[tauri::command]
+fn set_retention_override(
+    state: State<'_, AppState>,
+    device_id: String,
+    keep_last: Option<u16>,
+) -> Result<(), String> {
+    state.manager.set_retention_override(&device_id, keep_last)
+}
+
 /// Sends one action to one PC, or to every connected PC when `device_id` is absent.
 /// Returns how many PCs it was sent to; answers appear on each device's `last_action`.
 #[tauri::command]
@@ -1457,6 +1502,9 @@ pub fn run(
             set_blocklist,
             web_blocklist,
             set_web_blocklist,
+            retention,
+            set_retention_global,
+            set_retention_override,
             room_info,
             rename_room,
             new_room_password,

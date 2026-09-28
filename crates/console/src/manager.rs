@@ -62,6 +62,9 @@ pub struct DeviceView {
     pub ip: Option<String>,
     /// Whether the wallpaper is locked this session (`Some(true)`/`Some(false)`), or unknown (`None`).
     pub wallpaper_locked: Option<bool>,
+    /// This PC's recordings-kept override, if it differs from the class-wide default (`None` = uses the
+    /// global default). Lets the UI flag where a PC overrides the global and offer a reset.
+    pub retention_override: Option<u16>,
     /// What happened to the last action sent to this PC, for the UI to show.
     pub last_action: Option<ActionReport>,
 }
@@ -383,6 +386,9 @@ pub struct DeviceManager {
     /// The room-wide **website** blocklist (browser policy), pushed like the app blocklist.
     web_blocklist: Arc<Mutex<Blocklist>>,
     web_blocklist_path: std::path::PathBuf,
+    /// Recording retention (global default + per-PC overrides), pushed per device as its effective value.
+    retention: Arc<Mutex<Retention>>,
+    retention_path: std::path::PathBuf,
     /// The room every invited device joins, and whose password they need to leave.
     room: Arc<Mutex<crate::room::Room>>,
     /// Where the room file lives, for renames and password changes.
@@ -394,6 +400,27 @@ pub struct DeviceManager {
 struct Blocklist {
     programs: Vec<String>,
     version: u64,
+}
+
+/// Recording retention: a class-wide default plus per-PC overrides, and a version that bumps on any
+/// change so each device task re-sends its effective value.
+#[derive(Default)]
+struct Retention {
+    /// Class-wide default: keep this many recordings per PC (0 = keep all).
+    global: u16,
+    /// PCs whose kept-count differs from the global default (device id → keep_last).
+    overrides: std::collections::BTreeMap<String, u16>,
+    version: u64,
+}
+
+impl Retention {
+    /// The count that actually applies to `device_id` (its override, else the global default).
+    fn effective(&self, device_id: &str) -> u16 {
+        self.overrides
+            .get(device_id)
+            .copied()
+            .unwrap_or(self.global)
+    }
 }
 
 impl DeviceManager {
@@ -412,6 +439,8 @@ impl DeviceManager {
         let programs = load_lines(&blocklist_path);
         let web_blocklist_path = dir.join("web-blocklist.txt");
         let web_patterns = load_lines(&web_blocklist_path);
+        let retention_path = dir.join("retention.txt");
+        let retention = load_retention(&retention_path);
 
         let names = load_names(&dir.join("names.txt"));
         let devices = trust
@@ -443,6 +472,8 @@ impl DeviceManager {
                 version: 1,
             })),
             web_blocklist_path,
+            retention: Arc::new(Mutex::new(retention)),
+            retention_path,
             room: Arc::new(Mutex::new(room)),
             data_dir: dir.to_path_buf(),
         })
@@ -507,6 +538,12 @@ impl DeviceManager {
     /// A snapshot of every paired device for the UI.
     #[must_use]
     pub fn devices(&self) -> Vec<DeviceView> {
+        let overrides = self
+            .retention
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .overrides
+            .clone();
         let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
         devices
             .iter()
@@ -524,6 +561,7 @@ impl DeviceManager {
                 macs: state.macs.clone(),
                 ip: state.ip.clone(),
                 wallpaper_locked: state.wallpaper_locked,
+                retention_override: overrides.get(id).copied(),
                 last_action: state.last_action,
             })
             .collect()
@@ -1277,6 +1315,46 @@ impl DeviceManager {
         Ok(())
     }
 
+    /// The recording-retention policy: the global default and every per-PC override.
+    #[must_use]
+    pub fn retention_view(&self) -> (u16, std::collections::BTreeMap<String, u16>) {
+        let r = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        (r.global, r.overrides.clone())
+    }
+
+    /// Sets the class-wide default number of recordings kept per PC (0 = keep all).
+    ///
+    /// # Errors
+    /// Returns a message if the policy cannot be saved.
+    pub fn set_retention_global(&self, keep_last: u16) -> Result<(), String> {
+        let mut r = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        r.global = keep_last;
+        r.version += 1;
+        save_retention(&self.retention_path, &r)
+    }
+
+    /// Overrides (or, with `None`, resets to the global default) the recordings kept on one PC.
+    ///
+    /// # Errors
+    /// Returns a message if the policy cannot be saved.
+    pub fn set_retention_override(
+        &self,
+        device_id: &str,
+        keep_last: Option<u16>,
+    ) -> Result<(), String> {
+        let mut r = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        match keep_last {
+            Some(n) => {
+                r.overrides.insert(device_id.to_string(), n);
+            }
+            None => {
+                r.overrides.remove(device_id);
+            }
+        }
+        r.version += 1;
+        save_retention(&self.retention_path, &r)
+    }
+
     /// Wakes a paired PC that is switched off, by broadcasting a magic packet for every MAC we
     /// learned while it was last connected.
     ///
@@ -1417,6 +1495,8 @@ impl DeviceManager {
         // Send the blocklist whenever its version moves; 0 forces a send on the first pass.
         let mut sent_blocklist: u64 = 0;
         let mut sent_web_blocklist: u64 = 0;
+        // Push the effective retention when it changes for this PC.
+        let mut sent_retention: Option<u16> = None;
         // Whether this connection has been granted control of the PC.
         let mut controlling = false;
         // The direct IP appears only once hole-punching promotes the connection off the relay, so
@@ -1456,6 +1536,19 @@ impl DeviceManager {
                     eprintln!("url blocklist push failed: {err}");
                 }
                 sent_web_blocklist = url_version;
+            }
+
+            let effective_retention = self
+                .retention
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .effective(id);
+            if sent_retention != Some(effective_retention) {
+                session
+                    .set_retention(effective_retention)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                sent_retention = Some(effective_retention);
             }
 
             // Control and input come first: a click must not wait behind a screen refresh.
@@ -1892,6 +1985,37 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Loads the teacher's custom PC names from `names.txt` (`id = name` per line). Missing file is fine.
+/// Loads the retention policy: `global = N`, then `deviceid = N` per override, one per line.
+fn load_retention(path: &std::path::Path) -> Retention {
+    let mut r = Retention::default();
+    if let Ok(text) = std::fs::read_to_string(path) {
+        for line in text.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                let (key, value) = (key.trim(), value.trim());
+                let Ok(n) = value.parse::<u16>() else {
+                    continue;
+                };
+                if key == "global" {
+                    r.global = n;
+                } else if !key.is_empty() {
+                    r.overrides.insert(key.to_string(), n);
+                }
+            }
+        }
+    }
+    r.version = 1;
+    r
+}
+
+/// Saves the retention policy in the same `key = N` line format `load_retention` reads.
+fn save_retention(path: &std::path::Path, r: &Retention) -> Result<(), String> {
+    let mut out = format!("global = {}\n", r.global);
+    for (id, n) in &r.overrides {
+        out.push_str(&format!("{id} = {n}\n"));
+    }
+    std::fs::write(path, out).map_err(|e| e.to_string())
+}
+
 /// Loads a plain list file (one non-blank entry per line), for the app and website blocklists.
 fn load_lines(path: &std::path::Path) -> Vec<String> {
     std::fs::read_to_string(path)

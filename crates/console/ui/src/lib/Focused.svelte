@@ -50,6 +50,35 @@
     }
   }
 
+  // Recording retention: the class-wide default (fetched once) and this PC's override, so the UI can
+  // show "using global (N)" vs an override and offer a reset.
+  let retentionGlobal = $state(0)
+  let overrideDraft = $state<string>('')
+  invoke<{ global: number }>('retention')
+    .then((r) => (retentionGlobal = r.global))
+    .catch(() => {})
+  // Seed the input from the current override whenever it changes.
+  $effect(() => {
+    overrideDraft = device.retention_override === null ? '' : String(device.retention_override)
+  })
+
+  async function saveRetentionOverride() {
+    const trimmed = overrideDraft.trim()
+    const keepLast = trimmed === '' ? null : Math.max(0, Math.round(Number(trimmed)))
+    try {
+      await invoke('set_retention_override', { deviceId: device.device_id, keepLast })
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
+  async function resetRetentionOverride() {
+    try {
+      await invoke('set_retention_override', { deviceId: device.device_id, keepLast: null })
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
+
   async function toggleScreenLock() {
     try {
       const [locked, problem] = await invoke<[boolean, string]>('set_screen_lock', {
@@ -392,6 +421,22 @@
         <Icon name="image" />{t('screenshotButton')}
       </button>
       <RecordButton deviceId={device.device_id} {onerror} />
+      <label class="retain" title={t('retentionHint')}>
+        {t('retentionKeepShort')}
+        <input
+          type="number"
+          min="0"
+          max="9999"
+          placeholder={String(retentionGlobal)}
+          bind:value={overrideDraft}
+          onchange={saveRetentionOverride}
+        />
+        {#if device.retention_override === null}
+          <span class="tag">{t('retentionUsingGlobal', retentionGlobal)}</span>
+        {:else}
+          <button class="linklike" onclick={resetRetentionOverride}>{t('retentionReset')}</button>
+        {/if}
+      </label>
       <ActionResult report={device.last_action} />
       <ActionMenu deviceId={device.device_id} liveCount={device.status === 'live' ? 1 : 0} {onerror} />
       <button onclick={onclose}>{t('close')}</button>
@@ -661,5 +706,35 @@
   .hint {
     color: var(--muted);
     font-size: 13px;
+  }
+
+  .retain {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .retain input {
+    width: 56px;
+    padding: 4px 6px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+  }
+  .retain .tag {
+    opacity: 0.75;
+  }
+  .retain .linklike {
+    padding: 2px 6px;
+    background: transparent;
+    border: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 12px;
   }
 </style>

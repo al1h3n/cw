@@ -470,6 +470,41 @@ pub fn directory(data_dir: &Path) -> PathBuf {
     data_dir.join("recordings")
 }
 
+/// Deletes all but the newest `keep_last` recordings in `dir` (0 = keep everything), returning how
+/// many files were removed.
+///
+/// "Newest" is decided by **file name order**: recording names start with a time-ordered `RecordId`
+/// (UUIDv7), so sorting by name sorts by creation time — no wall-clock read, so a student changing the
+/// timezone cannot influence which recordings are kept (the Feature-5 "time must not matter" rule).
+pub fn prune(dir: &Path, keep_last: u16) -> usize {
+    if keep_last == 0 {
+        return 0;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("avi") || x.eq_ignore_ascii_case("mp4"))
+        })
+        .collect();
+    files.sort(); // by path, i.e. by the time-ordered id at the start of each name
+    let keep = usize::from(keep_last);
+    if files.len() <= keep {
+        return 0;
+    }
+    let mut removed = 0;
+    for path in &files[..files.len() - keep] {
+        if std::fs::remove_file(path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +515,31 @@ mod tests {
         assert!(!status.active);
         assert_eq!(status.frames, 0);
         assert!(status.problem.is_empty());
+    }
+
+    #[test]
+    fn prune_keeps_the_newest_n_by_name_order() {
+        let dir = std::env::temp_dir().join(format!("cw-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Names sort by their leading id; higher = newer.
+        for name in ["01-a.avi", "02-b.avi", "03-c.avi", "04-d.mp4"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        std::fs::write(dir.join("notes.txt"), b"keep me").unwrap();
+
+        assert_eq!(prune(&dir, 0), 0, "0 keeps everything");
+        assert_eq!(prune(&dir, 2), 2, "removes the two oldest recordings");
+        assert!(!dir.join("01-a.avi").exists());
+        assert!(!dir.join("02-b.avi").exists());
+        assert!(dir.join("03-c.avi").exists());
+        assert!(dir.join("04-d.mp4").exists());
+        assert!(
+            dir.join("notes.txt").exists(),
+            "non-recordings are untouched"
+        );
+        assert_eq!(prune(&dir, 5), 0, "keeping more than exist removes nothing");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

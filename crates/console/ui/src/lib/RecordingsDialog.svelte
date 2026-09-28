@@ -33,6 +33,21 @@
   const activeCount = $derived(rows.filter((r) => r.active).length)
   const totalRecordings = $derived(rows.reduce((n, r) => n + r.recordings.length, 0))
 
+  // Class-wide recording retention: keep only the newest N per PC (0 = all). Older ones are deleted by
+  // creation order on the Agent, never by the wall clock. Per-PC overrides live in the opened view.
+  let keepLast = $state(0)
+  invoke<{ global: number }>('retention')
+    .then((r) => (keepLast = r.global))
+    .catch(() => {})
+  async function saveRetention() {
+    try {
+      await invoke('set_retention_global', { keepLast: Math.max(0, Math.round(keepLast)) })
+      toasts.push(t('retentionSaved'), 'ok')
+    } catch (e) {
+      onerror(String(e))
+    }
+  }
+
   async function refresh() {
     try {
       rows = await invoke<Row[]>('recording_overview')
@@ -123,6 +138,14 @@
   <div class="dialog" role="dialog" aria-modal="true" aria-label={t('recordingsTitle')}>
     <h2>{t('recordingsTitle')}</h2>
     <p class="lead">{t('recordingsLead', activeCount, totalRecordings)}</p>
+
+    <div class="retention">
+      <label>
+        {t('retentionKeep')}
+        <input type="number" min="0" max="9999" bind:value={keepLast} onchange={saveRetention} />
+      </label>
+      <span class="note">{t('retentionNote')}</span>
+    </div>
 
     <div class="toolbar">
       <select bind:value={res} aria-label={t('resolution')}>
@@ -221,6 +244,33 @@
     margin: 0 0 12px;
     color: var(--muted);
     font-size: 13px;
+  }
+
+  .retention {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .retention label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .retention input {
+    width: 72px;
+    padding: 5px 8px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    font: inherit;
+  }
+  .retention .note {
+    opacity: 0.85;
   }
 
   .toolbar {

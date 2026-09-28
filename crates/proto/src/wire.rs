@@ -836,6 +836,18 @@ pub enum Control {
         /// Non-empty when the policy could not be written (e.g. needs admin/the SYSTEM service).
         problem: String,
     },
+    /// Console → Agent: keep only the newest `keep_last` recordings on this PC (0 = keep all), deleting
+    /// older ones. Enforced by **creation order** (recording file names begin with a time-ordered id),
+    /// never by the wall clock — a student changing the timezone cannot affect what is kept or deleted.
+    SetRetention {
+        /// How many recordings to keep; 0 means keep them all.
+        keep_last: u16,
+    },
+    /// Agent → Console: the retention now in force (echoes what was applied).
+    RetentionSet {
+        /// Recordings kept; 0 = all.
+        keep_last: u16,
+    },
     /// Console → Agent: what programs can this PC start?
     ListApps,
     /// Agent → Console: the programs it offers, as `(id, name)` pairs.
@@ -1122,6 +1134,8 @@ mod tests {
                 count: 2,
                 problem: String::new(),
             },
+            Control::SetRetention { keep_last: 5 },
+            Control::RetentionSet { keep_last: 5 },
             Control::SetExam {
                 on: true,
                 message: "Exam in progress".into(),

@@ -419,6 +419,21 @@ async fn dispatch(state: &WebState, cmd: &str, a: &Value) -> Result<Value, Strin
         "set_blocklist" => ok(m.set_blocklist(arg(a, "programs")?)?),
         "web_blocklist" => ok(m.web_blocklist()),
         "set_web_blocklist" => ok(m.set_web_blocklist(arg(a, "patterns")?)?),
+        "retention" => {
+            let (global, overrides) = m.retention_view();
+            ok(json!({
+                "global": global,
+                "overrides": overrides
+                    .into_iter()
+                    .map(|(device_id, keep_last)| json!({ "device_id": device_id, "keep_last": keep_last }))
+                    .collect::<Vec<_>>(),
+            }))
+        }
+        "set_retention_global" => ok(m.set_retention_global(arg(a, "keepLast")?)?),
+        "set_retention_override" => ok(m.set_retention_override(
+            &arg::<String>(a, "deviceId")?,
+            arg::<Option<u16>>(a, "keepLast")?,
+        )?),
         "room_info" => {
             let (name, password) = m.room();
             ok(json!({ "name": name, "password": password }))

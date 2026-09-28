@@ -94,6 +94,15 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "set_retention".into(),
+            description: "Set how many recordings to keep on one PC (0 = keep all); older ones are deleted by creation order, never by the clock.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "device_id": device_id, "keep_last": { "type": "integer", "minimum": 0, "maximum": 10000 } },
+                "required": ["device_id", "keep_last"]
+            }),
+        },
+        ToolSpec {
             name: "start_recording".into(),
             description: "Start recording one PC's screen (must be connected/watched).".into(),
             parameters: json!({ "type": "object", "properties": { "device_id": device_id }, "required": ["device_id"] }),
@@ -310,6 +319,15 @@ pub async fn execute(manager: &DeviceManager, name: &str, args: &Value) -> Resul
             let count = patterns.len();
             manager.set_web_blocklist(patterns)?;
             Ok(json!({ "ok": true, "count": count }))
+        }
+        "set_retention" => {
+            let keep_last = args
+                .get("keep_last")
+                .and_then(Value::as_u64)
+                .and_then(|n| u16::try_from(n).ok())
+                .ok_or("missing or out-of-range 'keep_last'")?;
+            manager.set_retention_override(arg_str(args, "device_id")?, Some(keep_last))?;
+            Ok(json!({ "ok": true, "keep_last": keep_last }))
         }
         "start_recording" => {
             let info = manager
