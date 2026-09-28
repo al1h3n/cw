@@ -6,6 +6,24 @@
 > Go-to-market: [`docs/BUSINESS.md`](docs/BUSINESS.md) ·
 > Pre-release manual checks: [`docs/TEST-CHECKLIST.md`](docs/TEST-CHECKLIST.md)
 
+**Status (2026-09-28 — website blocking, recording retention, break-glass; `PROTOCOL_VERSION` 26):**
+- **Website blocking (v24).** Room-wide URL blocklist pushed like the app blocklist; `platform::weblock`
+  writes Chrome/Edge `URLBlocklist` (HKLM) and Firefox `WebsiteFilter` (`policies.json`) — no extension,
+  needs the SYSTEM service for the machine-wide policy. Wire `SetUrlBlocklist`/`UrlBlocklistState`;
+  "Blocked websites" dialog; MCP/Surey `set_url_blocklist`. Completes brief #9's website half.
+- **Recording retention (v25) — Feature 5 + Feature 4.** Keep newest N per PC, class-wide default +
+  per-PC override + reset. Agent prunes by **file-name/creation order, never the wall clock**
+  (`recording::prune`, tested), so a student changing the timezone can't affect it. Console `Retention`
+  (global + overrides, versioned, `retention.txt`), pushed per PC as its effective value; global control
+  in Recordings dialog, per-PC override/indicator/reset in the opened view; MCP/Surey `set_retention`.
+- **Break-glass (v26) — D10, brief #25.** Console generates a random code, seals it (DPAPI) and
+  provisions its Argon2id hash to each PC (`SetBreakGlass`); `cowatcher-agent unlock <code> [minutes]`
+  pauses the blocklist for a few minutes, rate-limited (reuses the room-leave lockout) and audited
+  (`agent::breakglass`, tested). The blocker skips enforcement while a `breakglass.until` marker is
+  live. Shown/regenerated in the room card. **Not** an AI tool (it is a credential). Remaining: per-device
+  one-time codes, and pausing locks beyond the blocklist.
+- Gates green: fmt, clippy `-D warnings`, **237 tests**, vite build, `cargo deny`.
+
 **Status (2026-09-24 — feature 14: synchronised play-once media exam; `PROTOCOL_VERSION` 23):**
 - **Feature 14 (audio listening exam).** Preload an audio file to the chosen PCs (stored **privately**,
   not the shared workspace) and start it on all of them **together**, no controls, deleted after it plays

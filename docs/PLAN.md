@@ -229,10 +229,15 @@ Order = what a teacher needs first in a real lesson.
   re-asserts after Win+L. Also a lighter `SetScreenLock` that just freezes a student's own input without
   taking control (per-PC and freeze-all). Remaining: the `DisableTaskMgr`/`DisableLockWorkstation`
   registry policies (D23), the secure-desktop cluster, and the real-PC escape checklist (§11).*
-- [ ] **2.4 Unlock codes + break-glass** (D10). Terminal command `unlock` → per-device offline OTP or
+- [~] **2.4 Unlock codes + break-glass** (D10). Terminal command `unlock` → per-device offline OTP or
   the Org code. `admin` → break-glass pauses all enforcement for N minutes and notifies the Console.
   **Done when:** tests cover: correct code works offline; clock skew of ±2 min is accepted; 5 wrong
   attempts → exponential lockout; every attempt is audit-logged.
+  *Built 2026-09-28: the break-glass code (Console generates + seals with DPAPI, provisions the Argon2id
+  hash via `SetBreakGlass`; `cowatcher-agent unlock <code> [minutes]` pauses the blocklist, rate-limited
+  5→60 s, audited; `agent::breakglass` unit-tested). Remaining: **per-device offline one-time codes**,
+  pausing enforcement beyond the blocklist (live exam/screen lock), and a Console notification when a
+  code is used (currently visible only via the agent audit log).*
 - [~] **2.5 App blocking.** A process watcher (poll 1 s; ETW later) + rules: exe name, path, publisher
   signature, path heuristics (`steamapps\common`, `Epic Games`, `Riot Games`, Roblox, Minecraft).
   The default "games" list is editable. Website blocking uses **browser policies** (Chrome/Edge
@@ -245,8 +250,10 @@ Order = what a teacher needs first in a real lesson.
   reboot offline per D9), `proto::SetBlocklist`/`BlocklistState` (bounded to MAX_BLOCKLIST=256),
   room-wide list in the Console pushed to every connected PC and a Svelte editor with a starter list.
   Live: Notepad closed within 1 s, re-closed on relaunch, survived after the rule was cleared.
-  **Still planned:** website blocking via browser policy files; publisher-signature and path rules;
-  the snapshot format tests (`insta`).*
+  **Website blocking added 2026-09-28** (`platform::weblock`): a room-wide URL list applied via
+  Chrome/Edge `URLBlocklist` (HKLM) + Firefox `WebsiteFilter` (`policies.json`), no extension, needs the
+  SYSTEM service; "Blocked websites" dialog + MCP/Surey tool. **Still planned:** publisher-signature and
+  path rules; the snapshot format tests (`insta`); a real-PC check that a blocked site shows the block page.*
 - [~] **2.6 Wallpaper lock** via Windows policy keys (`Policies\System\Wallpaper` + NoChangingWallPaper).
   **Done when:** the user changes the wallpaper in Settings → it is reverted or greyed out; the policy is
   removed cleanly when disabled.

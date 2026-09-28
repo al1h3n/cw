@@ -24,7 +24,8 @@ student PC (D3).
 ## Tools
 
 `list_devices`, `device_status`, `screen_thumbnail` (returns an image), `list_apps`, `list_running`,
-`launch_app`, `close_app`, `set_blocklist`, `perform_action` (shutdown/reboot/log-off/lock-screen/
+`launch_app`, `close_app`, `set_blocklist`, `set_url_blocklist` (block websites via browser policy), `set_retention` (keep the
+newest N recordings per PC), `perform_action` (shutdown/reboot/log-off/lock-screen/
 cancel-shutdown/lock-wallpaper/unlock-wallpaper/reset-wallpaper), `set_exam` (with an optional
 `duration_seconds` auto-release), `set_wallpaper`, **`list_files` / `fetch_file` / `send_file`** (browse,
 download and upload files inside a student PC's shared workspace folder), **`list_workspace` /

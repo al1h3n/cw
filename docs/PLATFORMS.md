@@ -19,6 +19,7 @@ cross-platform in principle; only the OS glue is missing.
 | H.264 encode/decode | `media::h264` (OpenH264) | ✅ | ✅ portable¹ | ✅ portable¹ |
 | Audio capture | `media::audio` (cpal) | ✅ | ✅ portable¹ | ✅ portable¹ |
 | Audio playback (listening exam) | `platform::audio` (MCI) | ✅ | ❌ stub | ❌ stub |
+| Website blocking (browser policy) | `platform::weblock` (registry + policies.json) | ✅ | ❌ stub | ❌ stub |
 | Remote input (mouse/keyboard) | `platform::input` (SendInput) | ✅ | ❌ | ❌ |
 | Freeze student's own input (screen lock) | `platform::input` (BlockInput) | ✅ | ❌ | ❌ |
 | Viewer keyboard grab (Right-Ctrl release) | `platform::keygrab` (WH_KEYBOARD_LL) | ✅ | ❌ n/a | ❌ n/a |
